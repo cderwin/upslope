@@ -1,0 +1,185 @@
+{
+  "revision": 1,
+  "geographic_points": {
+    "cape_flattery": {
+      "name": "Cape Flattery, WA",
+      "latitude": 48.385978,
+      "longitude": -124.726914
+    },
+    "wa_ca_id_triple_point": {
+      "name": "WA-Canada-ID triple border point",
+      "latitude": 48.999193,
+      "longitude": -117.032353
+    },
+    "wa_or_id_triple_point": {
+      "name": "WA-OR-ID Triple Point",
+      "latitude": 45.99539,
+      "longitude": -116.91604
+    },
+    "snoqualmie_pass_county_line": {
+      "name": "Snoqualmie Pass County Line",
+      "latitude": 47.42445,
+      "longitude": -121.411
+    },
+    "whatcom_okanagan_ca_triple_point": {
+      "name": "Whatcom-Okanagan-CA Triple Point",
+      "latitude": 49.0003,
+      "longitude": -120.85136
+    }
+  },
+  "maptypes": {
+    "12km-domain": {
+      "images": {
+        "legacy-hour06": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "cape_flattery": {
+              "pixel_x": 334,
+              "pixel_y": 319
+            },
+            "wa_ca_id_triple_point": {
+              "pixel_x": 543,
+              "pixel_y": 294
+            },
+            "wa_or_id_triple_point": {
+              "pixel_x": 553,
+              "pixel_y": 417
+            }
+          }
+        },
+        "legacy-hour09": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "cape_flattery": {
+              "pixel_x": 333,
+              "pixel_y": 319
+            },
+            "wa_ca_id_triple_point": {
+              "pixel_x": 543,
+              "pixel_y": 294
+            },
+            "wa_or_id_triple_point": {
+              "pixel_x": 553,
+              "pixel_y": 417
+            }
+          }
+        }
+      },
+      "fit_threshold_m": 1610.0
+    },
+    "pacific-northwest": {
+      "images": {
+        "legacy-hour06": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "cape_flattery": {
+              "pixel_x": 234,
+              "pixel_y": 299
+            },
+            "wa_ca_id_triple_point": {
+              "pixel_x": 513,
+              "pixel_y": 265
+            },
+            "wa_or_id_triple_point": {
+              "pixel_x": 526,
+              "pixel_y": 429
+            }
+          }
+        }
+      },
+      "fit_threshold_m": 415.0
+    },
+    "washington": {
+      "images": {
+        "legacy-hour06": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "cape_flattery": {
+              "pixel_x": 83,
+              "pixel_y": 352
+            },
+            "wa_ca_id_triple_point": {
+              "pixel_x": 744,
+              "pixel_y": 273
+            },
+            "wa_or_id_triple_point": {
+              "pixel_x": 776,
+              "pixel_y": 661
+            }
+          }
+        },
+        "legacy-hour36": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "wa_or_id_triple_point": {
+              "pixel_x": 776,
+              "pixel_y": 661
+            },
+            "wa_ca_id_triple_point": {
+              "pixel_x": 744,
+              "pixel_y": 272
+            },
+            "cape_flattery": {
+              "pixel_x": 83,
+              "pixel_y": 353
+            }
+          }
+        }
+      },
+      "fit_threshold_m": 1170.0
+    },
+    "western-washington": {
+      "images": {
+        "legacy-hour06": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "cape_flattery": {
+              "pixel_x": 138,
+              "pixel_y": 279
+            },
+            "snoqualmie_pass_county_line": {
+              "pixel_x": 663,
+              "pixel_y": 522
+            },
+            "whatcom_okanagan_ca_triple_point": {
+              "pixel_x": 753,
+              "pixel_y": 148
+            }
+          }
+        },
+        "legacy-hour09": {
+          "width": 900,
+          "height": 900,
+          "source": null,
+          "annotations": {
+            "whatcom_okanagan_ca_triple_point": {
+              "pixel_x": 752,
+              "pixel_y": 147
+            },
+            "snoqualmie_pass_county_line": {
+              "pixel_x": 663,
+              "pixel_y": 523
+            },
+            "cape_flattery": {
+              "pixel_x": 138,
+              "pixel_y": 279
+            }
+          }
+        }
+      },
+      "fit_threshold_m": 480.0
+    }
+  }
+}
