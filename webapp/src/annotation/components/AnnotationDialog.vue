@@ -32,7 +32,7 @@ const error = ref('')
 
 const isEdit = computed(() => props.draft?.point != null)
 const isNewPoint = computed(() => selectedKey.value === '')
-const keyPreview = computed(() => (isNewPoint.value ? toKey(name.value) : selectedKey.value))
+const keyPreview = computed(() => (isNewPoint.value ? (name.value.trim() ? toKey(name.value) : '') : selectedKey.value))
 
 /** Picking a point that is already elsewhere on this image moves that annotation. */
 const movesExisting = computed(
