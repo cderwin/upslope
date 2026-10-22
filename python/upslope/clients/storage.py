@@ -35,11 +35,14 @@ class ModelRunMarker:
         model: Model name, e.g. `uwwrf`.
         initialized: Model run initialization time (UTC).
         manifest: Bucket key of the run's `manifest.json`.
+        registration_revision: Revision of the published annotations the run was georegistered with.
+            None for runs exported before annotations were versioned.
     """
 
     model: str
     initialized: datetime
     manifest: str
+    registration_revision: int | None = None
 
     @property
     def export_prefix(self) -> str:
@@ -132,23 +135,18 @@ class StorageClient:
     def _model_run_key(model: str, initialized: datetime) -> str:
         return f"model_runs/{model}/{initialized:%Y%m%dT%H%M}Z.json"
 
-    def model_run_exported(self, model: str, initialized: datetime) -> bool:
-        """Check whether a model run has already been fully exported.
+    def model_run_marker(self, model: str, initialized: datetime) -> ModelRunMarker | None:
+        """Look up the export record for a model run.
 
         Args:
             model: Model name, e.g. `uwwrf`.
             initialized: Model run initialization time (UTC).
 
         Returns:
-            True if `mark_model_run_exported` was called for this run.
+            The marker written by `mark_model_run_exported`, or None if the run was never exported.
         """
-        try:
-            self.s3.head_object(Bucket=self.bucket, Key=self._model_run_key(model, initialized))
-        except ClientError as e:
-            if _error_code(e) in _NOT_FOUND_CODES:
-                return False
-            raise
-        return True
+        stored = self.get_bytes(self._model_run_key(model, initialized))
+        return None if stored is None else _converter.loads(stored.data, ModelRunMarker)
 
     def latest_model_run(self, model: str) -> ModelRunMarker | None:
         """Find the most recently initialized model run that was fully exported.
@@ -267,7 +265,9 @@ class StorageClient:
             keys.extend(item["Key"] for item in page.get("Contents", []))
         return sorted(keys)
 
-    def mark_model_run_exported(self, model: str, initialized: datetime, manifest_key: str) -> None:
+    def mark_model_run_exported(
+        self, model: str, initialized: datetime, manifest_key: str, registration_revision: int | None = None
+    ) -> None:
         """Record that a model run has been exported, pointing at its manifest.
 
         Call this only after `export_manifest` succeeds, so a partial upload is retried.
@@ -276,9 +276,10 @@ class StorageClient:
             model: Model name, e.g. `uwwrf`.
             initialized: Model run initialization time (UTC).
             manifest_key: Bucket key of the run's manifest, as returned by `export_manifest`.
+            registration_revision: Revision of the published annotations used to georegister the run.
         """
         key = self._model_run_key(model, initialized)
-        body = _converter.dumps(ModelRunMarker(model=model, initialized=initialized, manifest=manifest_key))
+        body = _converter.dumps(ModelRunMarker(model, initialized, manifest_key, registration_revision))
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=body, ContentType="application/json")
         logger.info("marked %s run %s as exported", model, f"{initialized:%Y-%m-%d %HZ}")
 

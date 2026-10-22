@@ -57,6 +57,19 @@ def test_marker_round_trips(stubbed) -> None:
     assert storage.latest_model_run("uwwrf") == marker
 
 
+def test_model_run_marker_reads_revision(stubbed) -> None:
+    storage, stubber = stubbed
+    stubber.add_response(
+        "get_object",
+        {"Body": body(MARKER_JSON[:-1] + b', "registration_revision": 4}')},
+        {"Bucket": "b", "Key": "model_runs/uwwrf/20261021T1200Z.json"},
+    )
+    marker = storage.model_run_marker("uwwrf", datetime(2026, 10, 21, 12, tzinfo=UTC))
+    assert marker.registration_revision == 4
+    stubber.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    assert storage.model_run_marker("uwwrf", datetime(2026, 10, 21, 0, tzinfo=UTC)) is None
+
+
 def test_get_object_streams_body(stubbed) -> None:
     storage, stubber = stubbed
     stubber.add_response(

@@ -4,8 +4,8 @@ import click
 from cattrs.preconf.json import make_converter
 from tqdm import tqdm
 
-from upslope.cli import DEFAULT_GEOREGISTRATION_CONFIG, DEFAULT_WRF_CONFIG, PROJECT_BASE
-from upslope.models.uw_wrf.georegistration import Registration, RegistrationConfig
+from upslope.cli import DEFAULT_WRF_CONFIG, PROJECT_BASE, load_annotations
+from upslope.models.uw_wrf.georegistration import Registration, fit_report
 from upslope.models.uw_wrf.wrf_client import WrfClient, WrfConfig
 
 
@@ -29,9 +29,15 @@ def download(config: Path, output_path: Path) -> None:
 @click.option(
     "-o", "--output", "output_path", type=click.Path(path_type=Path), default=(PROJECT_BASE / "forecast/georegistered")
 )
-def reproject(input_path: Path, output_path: Path) -> None:
+@click.option(
+    "--snapshot",
+    type=click.Path(path_type=Path, file_okay=False, exists=True),
+    help="Read annotations from a snapshot directory (e.g. dev/georegistration) instead of storage.",
+)
+def reproject(input_path: Path, output_path: Path, snapshot: Path | None) -> None:
+    """Georegister downloaded GIFs, with the published annotations (or a snapshot's)."""
     wrf_config = WrfConfig.load(DEFAULT_WRF_CONFIG)
-    registration = Registration.build(RegistrationConfig.load(DEFAULT_GEOREGISTRATION_CONFIG))
+    registration = Registration.build(load_annotations(snapshot))
 
     for layer in tqdm(wrf_config.layers):
         for fx_hour in wrf_config.get_forecast_hours(layer.forecast_schedule):
@@ -46,11 +52,13 @@ def reproject(input_path: Path, output_path: Path) -> None:
 
 
 @click.command()
-@click.option("-c", "--config", "registration_config", type=click.Path(path_type=Path), default=DEFAULT_GEOREGISTRATION_CONFIG)
-def registration_error(registration_config: Path) -> None:
-    config = RegistrationConfig.load(registration_config)
-    registration = Registration.build(config)
-    errors = registration.compute_error(config)
-
-    converter = make_converter()
-    click.echo(converter.dumps(errors))
+@click.option(
+    "--snapshot",
+    type=click.Path(path_type=Path, file_okay=False, exists=True),
+    help="Read annotations from a snapshot directory (e.g. dev/georegistration) instead of storage.",
+)
+@click.option("--draft", is_flag=True, help="Check the draft in storage instead of the published annotations.")
+def registration_error(snapshot: Path | None, draft: bool) -> None:
+    """Print each maptype's fit error, in meters, as JSON."""
+    report = fit_report(load_annotations(snapshot, draft))
+    click.echo(make_converter().dumps(report, indent=2))

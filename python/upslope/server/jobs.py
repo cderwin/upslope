@@ -4,24 +4,24 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
-from upslope.cli import DEFAULT_GEOREGISTRATION_CONFIG, DEFAULT_WRF_CONFIG
+from upslope.cli import DEFAULT_WRF_CONFIG
+from upslope.clients.annotations import AnnotationStore
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
 from upslope.models.uw_wrf.driver import WrfDriver
-from upslope.models.uw_wrf.georegistration import Registration, RegistrationConfig
 from upslope.models.uw_wrf.wrf_client import WrfClient, WrfConfig
 
 logger = get_logger(__name__)
 
 
 def build_driver(storage: StorageClient) -> WrfDriver:
-    """Create a WrfDriver from the default configs, exporting to `storage`."""
+    """Create a WrfDriver from the default WRF config, reading annotations from and exporting to `storage`."""
     wrf_config = WrfConfig.load(DEFAULT_WRF_CONFIG)
     return WrfDriver(
         config=wrf_config,
         client=WrfClient(wrf_config),
-        registration=Registration.build(RegistrationConfig.load(DEFAULT_GEOREGISTRATION_CONFIG)),
         storage=storage,
+        annotations=AnnotationStore(storage),
     )
 
 

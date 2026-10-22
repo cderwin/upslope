@@ -13,7 +13,8 @@ from pyproj import Transformer
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger, log_duration
 from upslope.models.manifest import Frame, Manifest, ManifestLayer
-from upslope.models.uw_wrf.georegistration import Registration, RegistrationConfig
+from upslope.clients.annotations import AnnotationStore
+from upslope.models.uw_wrf.georegistration import Registration
 from upslope.models.uw_wrf.wrf_client import WrfConfig, WrfClient, LayerConfig
 
 logger = get_logger(__name__)
@@ -74,23 +75,24 @@ class WrfDriver:
     Attributes:
         config: Layers to process and how to fetch them.
         client: Client for downloading forecast images.
-        registration: Fitted transforms for georegistering images.
         storage: Destination for the exported manifest.
+        annotations: Source of the published georegistration annotations, read at the start of each run.
     """
 
     config: WrfConfig
     client: WrfClient
-    registration: Registration
     storage: StorageClient
+    annotations: AnnotationStore
 
     model: ClassVar[str] = "uwwrf"
 
-    def georegister_layer(self, layer: LayerConfig, output_directory: Path) -> None:
+    def georegister_layer(self, layer: LayerConfig, output_directory: Path, registration: Registration) -> None:
         """Georegister every downloaded GIF for a layer into a GeoTIFF.
 
         Args:
             layer: Layer to georegister.
             output_directory: Working directory; reads from `raw/` and writes to `registered/`.
+            registration: Fitted transforms to place the images with.
         """
         raw_images = (output_directory / "raw" / layer.domain / layer.variable).glob("*.gif")
         for raw_image in raw_images:
@@ -99,7 +101,7 @@ class WrfDriver:
             ).with_suffix(".tiff")
             registered_image_path.parent.mkdir(exist_ok=True, parents=True)
             logger.debug("georegistering %s", raw_image.name)
-            self.registration.georegister(raw_image, registered_image_path, layer.maptype)
+            registration.georegister(raw_image, registered_image_path, layer.maptype)
 
     def export_layer(self, layer: LayerConfig, output_directory: Path, initialized: datetime) -> ManifestLayer:
         """Convert a layer's registered GeoTIFFs to PNG frames and collect them into a manifest layer.
@@ -138,17 +140,34 @@ class WrfDriver:
     def run(self, force: bool = False) -> Manifest | None:
         """Process every configured layer in a temporary directory and export the resulting manifest.
 
+        A model run is exported again when the published annotations have changed since it was last
+        exported, so a publish takes effect at the next run of the export.
+
         Args:
-            force: Export even if the current model run was already exported.
+            force: Export even if the current model run was already exported with the current annotations.
 
         Returns:
-            The exported manifest, or None if the current model run was already exported.
+            The exported manifest, or None if there was nothing to do (already exported, or no
+            annotations published).
         """
         start_ts = datetime.now()
-        initialized = self.client.current_run_initialization()
-        if not force and self.storage.model_run_exported(self.model, initialized):
-            logger.info("model run initialized %s already exported; skipping", f"{initialized:%Y-%m-%d %HZ}")
+        published = self.annotations.load_published()
+        if published is None:
+            logger.error("no georegistration annotations have been published; skipping export")
             return None
+
+        initialized = self.client.current_run_initialization()
+        marker = self.storage.model_run_marker(self.model, initialized)
+        if not force and marker is not None and marker.registration_revision == published.revision:
+            logger.info(
+                "model run initialized %s already exported with annotations r%d; skipping",
+                f"{initialized:%Y-%m-%d %HZ}",
+                published.revision,
+            )
+            return None
+        if marker is not None:
+            logger.info("annotations changed to r%d since the last export; exporting again", published.revision)
+        registration = Registration.build(published)
 
         with TemporaryDirectory() as tmp_dir_name:
             output_directory = Path(tmp_dir_name)
@@ -160,12 +179,12 @@ class WrfDriver:
                 with log_duration(logger, f"downloaded {name}"):
                     self.client.download_layer(layer, output_directory / "raw")
                 with log_duration(logger, f"georegistered {name}"):
-                    self.georegister_layer(layer, output_directory)
+                    self.georegister_layer(layer, output_directory, registration)
                 with log_duration(logger, f"converted {name} to PNG frames"):
                     manifest_layers.append(self.export_layer(layer, output_directory, initialized))
 
             manifest = Manifest(start_ts, datetime.now(), manifest_layers)
             with log_duration(logger, "uploaded manifest"):
                 manifest_key = self.storage.export_manifest(manifest)
-            self.storage.mark_model_run_exported(self.model, initialized, manifest_key)
+            self.storage.mark_model_run_exported(self.model, initialized, manifest_key, published.revision)
             return manifest
