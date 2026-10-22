@@ -7,7 +7,7 @@ from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from dateutil.tz import tzutc
 
-from upslope.clients.storage import ModelRunMarker, StorageClient
+from upslope.clients.storage import ModelRunMarker, PreconditionFailed, StorageClient, StoredBytes
 
 MARKER_JSON = b'{"model": "uwwrf", "initialized": "2026-10-21T12:00:00+00:00", "manifest": "web_exports/20261021T130000/manifest.json"}'
 
@@ -97,3 +97,52 @@ def test_get_object_other_errors_raise(stubbed) -> None:
     stubber.add_client_error("get_object", service_error_code="AccessDenied", http_status_code=403)
     with pytest.raises(Exception, match="AccessDenied"):
         storage.get_object("k")
+
+
+def test_get_bytes_reads_content_and_etag(stubbed) -> None:
+    storage, stubber = stubbed
+    stubber.add_response("get_object", {"Body": body(b"{}"), "ETag": '"e1"'}, {"Bucket": "b", "Key": "k"})
+    assert storage.get_bytes("k") == StoredBytes(data=b"{}", etag='"e1"')
+
+
+def test_get_bytes_missing(stubbed) -> None:
+    storage, stubber = stubbed
+    stubber.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
+    assert storage.get_bytes("k") is None
+
+
+def test_put_bytes_passes_conditions(stubbed) -> None:
+    storage, stubber = stubbed
+    stubber.add_response(
+        "put_object",
+        {"ETag": '"e2"'},
+        {"Bucket": "b", "Key": "k", "Body": b"x", "ContentType": "application/json", "IfMatch": '"e1"'},
+    )
+    assert storage.put_bytes("k", b"x", "application/json", if_match='"e1"') == '"e2"'
+    stubber.add_response(
+        "put_object",
+        {"ETag": '"e3"'},
+        {"Bucket": "b", "Key": "k", "Body": b"x", "ContentType": "application/json", "IfNoneMatch": "*"},
+    )
+    assert storage.put_bytes("k", b"x", "application/json", if_none_match=True) == '"e3"'
+
+
+@pytest.mark.parametrize(("code", "status"), [("PreconditionFailed", 412), ("ConditionalRequestConflict", 409)])
+def test_put_bytes_failed_condition_raises(stubbed, code: str, status: int) -> None:
+    storage, stubber = stubbed
+    stubber.add_client_error("put_object", service_error_code=code, http_status_code=status)
+    with pytest.raises(PreconditionFailed):
+        storage.put_bytes("k", b"x", "application/json", if_match='"e1"')
+
+
+def test_list_keys_pages_and_sorts(stubbed) -> None:
+    storage, stubber = stubbed
+    stubber.add_response(
+        "list_objects_v2",
+        {"Contents": [{"Key": "p/b"}, {"Key": "p/a"}], "IsTruncated": True, "NextContinuationToken": "t"},
+        {"Bucket": "b", "Prefix": "p/"},
+    )
+    stubber.add_response(
+        "list_objects_v2", {"Contents": [{"Key": "p/c"}]}, {"Bucket": "b", "Prefix": "p/", "ContinuationToken": "t"}
+    )
+    assert storage.list_keys("p/") == ["p/a", "p/b", "p/c"]

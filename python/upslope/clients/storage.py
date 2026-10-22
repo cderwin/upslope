@@ -69,6 +69,27 @@ class StoredObject:
     not_modified: bool = False
 
 
+class PreconditionFailed(Exception):
+    """A conditional write lost: the object changed (If-Match) or already exists (If-None-Match)."""
+
+
+# S3 answers a failed condition with 412, or 409 when a concurrent conditional write wins the race
+_PRECONDITION_CODES = ("412", "PreconditionFailed", "409", "ConditionalRequestConflict")
+
+
+@define
+class StoredBytes:
+    """A small object read fully into memory.
+
+    Attributes:
+        data: The object's content.
+        etag: Entity tag (quoted, as S3 returns it), for conditional writes.
+    """
+
+    data: bytes
+    etag: str | None
+
+
 def _iter_body(body, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
     try:
         yield from body.iter_chunks(chunk_size)
@@ -180,6 +201,71 @@ class StorageClient:
             # boto uses dateutil's tzutc; normalize so callers get the standard library's UTC
             last_modified=response["LastModified"].astimezone(UTC) if response.get("LastModified") else None,
         )
+
+    def get_bytes(self, key: str) -> StoredBytes | None:
+        """Read a small object fully into memory.
+
+        Args:
+            key: Bucket key.
+
+        Returns:
+            The content and its ETag, or None if the object does not exist.
+        """
+        try:
+            response = self.s3.get_object(Bucket=self.bucket, Key=key)
+        except ClientError as e:
+            if _error_code(e) in _NOT_FOUND_CODES:
+                return None
+            raise
+        return StoredBytes(data=response["Body"].read(), etag=response.get("ETag"))
+
+    def put_bytes(
+        self,
+        key: str,
+        data: bytes,
+        content_type: str,
+        if_match: str | None = None,
+        if_none_match: bool = False,
+    ) -> str | None:
+        """Write an object, optionally only if it is unchanged or does not exist yet.
+
+        Args:
+            key: Bucket key.
+            data: Content to write.
+            content_type: Media type to store with the object.
+            if_match: Only write if the stored object still has this ETag.
+            if_none_match: Only write if no object exists at `key`.
+
+        Returns:
+            The new object's ETag. Raises PreconditionFailed if a condition does not hold.
+        """
+        kwargs = {"Bucket": self.bucket, "Key": key, "Body": data, "ContentType": content_type}
+        if if_match is not None:
+            kwargs["IfMatch"] = if_match
+        if if_none_match:
+            kwargs["IfNoneMatch"] = "*"
+        try:
+            response = self.s3.put_object(**kwargs)
+        except ClientError as e:
+            if _error_code(e) in _PRECONDITION_CODES:
+                raise PreconditionFailed(key) from e
+            raise
+        return response.get("ETag")
+
+    def list_keys(self, prefix: str) -> list[str]:
+        """List every key under a prefix, in lexicographic order.
+
+        Args:
+            prefix: Key prefix, e.g. `georegistration/history/`.
+
+        Returns:
+            The matching keys.
+        """
+        keys: list[str] = []
+        paginator = self.s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            keys.extend(item["Key"] for item in page.get("Contents", []))
+        return sorted(keys)
 
     def mark_model_run_exported(self, model: str, initialized: datetime, manifest_key: str) -> None:
         """Record that a model run has been exported, pointing at its manifest.
