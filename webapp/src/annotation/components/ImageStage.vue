@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { GeographicPoint, PixelAnnotation } from '../types'
+import type { GeographicPoint, ImageAnnotation } from '../types'
 
 const props = defineProps<{
   src: string
-  annotations: PixelAnnotation[]
+  annotations: ImageAnnotation[]
   points: Record<string, GeographicPoint>
   /** `'fit'` scales to the container; a number is a multiple of natural size. */
   zoom: 'fit' | number
@@ -13,7 +13,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   pick: [x: number, y: number]
-  edit: [index: number]
+  edit: [point: string]
   load: [width: number, height: number]
   error: []
 }>()
@@ -139,14 +139,14 @@ function onClick(event: MouseEvent) {
   if (pixel?.inside) emit('pick', pixel.x, pixel.y)
 }
 
-function markerStyle(annotation: PixelAnnotation) {
+function markerStyle(annotation: ImageAnnotation) {
   return {
     left: `${(annotation.pixel_x + 0.5) * scale.value}px`,
     top: `${(annotation.pixel_y + 0.5) * scale.value}px`,
   }
 }
 
-function describe(annotation: PixelAnnotation): string {
+function describe(annotation: ImageAnnotation): string {
   const point = props.points[annotation.point]
   const label = point
     ? `${point.name} (${point.latitude}, ${point.longitude})`
@@ -154,7 +154,7 @@ function describe(annotation: PixelAnnotation): string {
   return `${label}\npixel ${annotation.pixel_x}, ${annotation.pixel_y}`
 }
 
-function labelFor(annotation: PixelAnnotation): string {
+function labelFor(annotation: ImageAnnotation): string {
   return props.points[annotation.point]?.name ?? annotation.point
 }
 
@@ -195,13 +195,13 @@ onBeforeUnmount(() => {
       </template>
 
       <button
-        v-for="(annotation, index) in annotations"
-        :key="`${annotation.pixel_x}:${annotation.pixel_y}:${annotation.point}:${index}`"
+        v-for="annotation in annotations"
+        :key="annotation.point"
         type="button"
         class="marker"
         :style="markerStyle(annotation)"
         :title="describe(annotation)"
-        @click.stop="emit('edit', index)"
+        @click.stop="emit('edit', annotation.point)"
       >
         <span v-if="showLabels" class="label">{{ labelFor(annotation) }}</span>
       </button>
