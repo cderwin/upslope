@@ -34,7 +34,8 @@ converts the GeoTIFFs to PNGs (nodata becomes transparent), and uploads the
 frames and `manifest.json` to `web_exports/<started timestamp>/` in the S3/Tigris
 bucket. It reads storage settings from `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally,
-`AWS_REGION`.
+`AWS_REGION`. Put them in the repo-root `.env.local` (gitignored; see
+`.env.example`); `just py-export` and `just py-serve` load it.
 
 ```json
 {

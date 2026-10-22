@@ -1,8 +1,9 @@
 # Builds and tasks across python/ (uv), webapp/ (vite) and Docker.
 # `just` lists recipes.
 
-# webapp/.env.local provides VITE_MAPBOX_TOKEN for builds (optional; /map warns without it)
-set dotenv-path := "webapp/.env.local"
+# .env.local (gitignored; see .env.example) provides the S3 settings for python/
+# and VITE_MAPBOX_TOKEN for webapp builds
+set dotenv-path := ".env.local"
 
 image := "upslope:local"
 
@@ -29,13 +30,13 @@ py-sync:
 py-test *args:
     uv run pytest {{ args }}
 
-# Run the export against the S3 settings in your environment
+# Run the export against the S3 settings in .env.local
 [group('python')]
 [working-directory('python')]
 py-export *args:
     uv run upslope export-web {{ args }}
 
-# Run the server against the S3 settings in your environment
+# Run the server against the S3 settings in .env.local
 [group('python')]
 [working-directory('python')]
 py-serve *args:
