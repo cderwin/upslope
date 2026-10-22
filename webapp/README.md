@@ -1,14 +1,13 @@
 # upslope webapp
 
 Vite + Vue 3 + TypeScript front end for upslope. The georegistration
-page (a port of `georegister.html`, which in turn mirrors
-`upslope/annotation.py`) is routed under `/annotation`; the forecast map is
-under `/map`.
+page, which edits annotations through the server's admin API, is routed under
+`/annotation`; the forecast map is under `/map`.
 
 ```sh
 npm install
 npm run dev        # http://localhost:5173/map
-npm run build      # type-check, bundle, and copy the images into dist/
+npm run build      # type-check and bundle
 npm run preview    # serve the production build
 npm run typecheck
 ```
@@ -19,7 +18,7 @@ npm run typecheck
 | --------------------------------- | ------------------ | -------------------------------------------- |
 | `/`                               | `home`             | Landing page                                  |
 | `/annotation`                     | `annotation`       | Georegistration tool, first image selected    |
-| `/annotation/:domain/:image`      | `annotation-image` | Same tool, deep-linked to one image           |
+| `/annotation/:maptype/:image`     | `annotation-image` | Same tool, deep-linked to one image           |
 | `/map`                            | `map`              | Forecast map, first layer selected            |
 | `/map/:domain/:variable`          | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&terrain=1`) |
 | anything else                     | `not-found`        | 404                                           |
@@ -29,20 +28,21 @@ the URL and can be shared.
 
 ## Where the data comes from
 
-The data lives outside this package, in the repository's `data/` and
-`forecast/` trees. `plugins/dataMounts.ts` is a small Vite plugin that mounts
-directories under URL prefixes, configured in `vite.config.ts`:
+Annotations come from the server's admin API (`/admin/georegistration`; see
+`python/README.md`). The dev server proxies `/admin` to `localhost:8000`, so run
+the local stack (`just up`, admin token `upslope-local-admin`) alongside
+`npm run dev`.
+
+Forecast frames in development come from the repository's `forecast/` tree.
+`plugins/dataMounts.ts` is a small Vite plugin that mounts directories under URL
+prefixes, configured in `vite.config.ts`:
 
 | Prefix                          | Directory                         | Notes                                     |
 | ------------------------------- | --------------------------------- | ----------------------------------------- |
-| `/data/georegistration/images`  | `data/georegistration/images`     | Copied into `dist/`; listed as `virtual:georegistration-manifest` |
 | `/api/forecast`                 | `forecast/web_export`             | Served from disk only, never bundled      |
 
 Every mount is served by both `vite dev` and `vite preview`, with a
-path-traversal guard. A mount with `manifestModule` exposes its directory
-listing as a virtual module, so the annotation dropdowns are generated from
-what is actually on disk; the dev server reloads when files are added or
-removed.
+path-traversal guard.
 
 ## Forecast map
 
@@ -66,18 +66,24 @@ it, and tilts the camera; ctrl-drag or right-drag to tilt and rotate. All of a l
 frames are preloaded; playback advances one frame every 2 s and skips frames
 that are still loading. Space plays/pauses, ←/→ step.
 
-## State and the YAML format
+## Annotation page
 
-`src/annotation/store.ts` holds the working document, seeded on first load from
-the repo's `annotations.yaml` (inlined at build time) and persisted to
-`localStorage` after that. Nothing is written back to disk — use **Export
-annotations.yaml** to download the file, or **Import YAML** to load one.
+The page asks for the admin token (kept in `sessionStorage`) and loads the
+shared draft. `src/annotation/store.ts` holds the draft as the server last
+returned it: every change is a request, and the response replaces the whole
+document, so the browser never edits it locally. Destructive changes (deleting a
+point or image, discarding, restoring) send the draft revision and reload if
+someone else changed the draft first.
 
-`src/annotation/yaml.ts` serialises byte-for-byte like PyYAML's
-`yaml.dump(doc, default_flow_style=False, sort_keys=False)`, so an exported file
-can replace `annotations.yaml` directly. Its reader is a minimal
-indentation-based parser covering only the subset that file uses, not general
-YAML; if the schema grows, reach for `js-yaml` instead.
+- Click the image to annotate a pixel; click a marker to edit or remove it.
+- **Add image** promotes a forecast frame (layer and hour) from UW's latest run;
+  so does **Annotate this frame** on `/map` when a token is set.
+- The fit card shows the maptype's mean error against its threshold, which can
+  be changed there; the table shows each point's error.
+- **Publish** shows every maptype's fit, takes an optional note, and reports
+  threshold warnings. The next hourly export uses the published annotations.
+- **History** lists published versions and restores one into the draft;
+  **Discard changes** resets the draft to what is published.
 
 ## Layout
 
@@ -90,11 +96,14 @@ src/forecast/
   api.ts                       Manifest/frame URLs (VITE_FORECAST_BASE_URL)
   usePlayback.ts               Frame selection, playback, preloading
   components/                  ForecastMap (Mapbox), MapControls
+src/admin/
+  token.ts                     Admin token (sessionStorage) and prompt state
+  api.ts                       Authenticated requests; 401/403/412 handling
+  TokenDialog.vue              Token prompt
 src/annotation/
-  types.ts                     Document and dialog payload types
-  yaml.ts                      serialize / parse / normalize
-  store.ts                     Reactive document + localStorage
-  manifest.ts                  Domain/image lists and URLs
+  types.ts                     Admin API document and dialog payload types
+  api.ts                       /admin/georegistration client
+  store.ts                     The shared draft, as last returned by the server
   useBootstrapModal.ts         Bootstrap modal bound to a reactive flag
-  components/                  ImageStage, dialogs, tables
+  components/                  ImageStage, tables, annotate/promote/publish/history dialogs
 ```
