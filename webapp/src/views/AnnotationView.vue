@@ -4,7 +4,10 @@ import { useRouter } from 'vue-router'
 import { adminToken, requestToken } from '@/admin/token'
 import AnnotationDialog from '@/annotation/components/AnnotationDialog.vue'
 import AnnotationTables from '@/annotation/components/AnnotationTables.vue'
+import HistoryDialog from '@/annotation/components/HistoryDialog.vue'
 import ImageStage from '@/annotation/components/ImageStage.vue'
+import PromoteDialog from '@/annotation/components/PromoteDialog.vue'
+import PublishDialog from '@/annotation/components/PublishDialog.vue'
 import { imageUrl } from '@/annotation/api'
 import { useAnnotationStore } from '@/annotation/store'
 import type { AnnotationDraft, AnnotationResult } from '@/annotation/types'
@@ -36,6 +39,16 @@ const fit = computed(() => store.state.fit[maptype.value])
 
 const dialogOpen = ref(false)
 const draft = ref<AnnotationDraft | null>(null)
+const promoteOpen = ref(false)
+const publishOpen = ref(false)
+const historyOpen = ref(false)
+
+const thresholdInput = ref('')
+watch(
+  () => fit.value?.fit_threshold_m,
+  (meters) => (thresholdInput.value = meters == null ? '' : String(meters)),
+  { immediate: true },
+)
 
 /** Keep the URL as the single source of truth for the selection. */
 function select(nextMaptype: string, nextImage: string | undefined) {
@@ -110,6 +123,27 @@ async function onRemoveImage() {
   select(maptype.value, undefined)
 }
 
+async function onPromote(layer: { model: string; variable: string; hour: number }) {
+  const added = await store.promote(layer.model, layer.variable, layer.hour)
+  promoteOpen.value = false
+  if (added) select(added.maptype, added.image)
+}
+
+async function onDiscard() {
+  const message = 'Discard every unpublished change and reset the draft to the published annotations?'
+  if (window.confirm(message)) await store.discard()
+}
+
+async function saveThreshold() {
+  const value = thresholdInput.value.trim()
+  const meters = value === '' ? null : Number(value)
+  if (meters !== null && !(Number.isFinite(meters) && meters > 0)) {
+    thresholdInput.value = String(fit.value?.fit_threshold_m ?? '')
+    return
+  }
+  await store.setFitThreshold(maptype.value, meters)
+}
+
 function onImageLoad(width: number, height: number) {
   status.value = `${image.value} — ${width} x ${height} px`
 }
@@ -138,11 +172,34 @@ onMounted(() => {
   <div class="container-fluid px-3 px-md-4 px-xl-5 py-4">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3">
       <h1 class="h4 mb-0">Georegistration</h1>
-      <div class="d-flex flex-wrap align-items-center gap-2">
-        <span v-if="store.state.document" class="small text-body-secondary">
-          Draft r{{ store.state.document.revision }}
-        </span>
+      <div v-if="store.state.document" class="d-flex flex-wrap align-items-center gap-2">
         <span v-if="busy" class="spinner-border spinner-border-sm text-secondary" role="status"></span>
+        <span class="small text-body-secondary">
+          Draft r{{ store.state.document.revision }} · published
+          {{ store.state.publishedRevision === null ? 'none' : `r${store.state.publishedRevision}` }}
+        </span>
+        <span v-if="store.hasUnpublishedChanges.value" class="badge text-bg-warning">unpublished changes</span>
+        <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="busy" @click="promoteOpen = true">
+          Add image
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" @click="historyOpen = true">History</button>
+        <button
+          v-if="store.hasUnpublishedChanges.value && store.state.publishedRevision !== null"
+          type="button"
+          class="btn btn-sm btn-outline-danger"
+          :disabled="busy"
+          @click="onDiscard"
+        >
+          Discard changes
+        </button>
+        <button
+          type="button"
+          class="btn btn-sm btn-primary"
+          :disabled="busy || !store.hasUnpublishedChanges.value"
+          @click="publishOpen = true"
+        >
+          Publish
+        </button>
       </div>
     </div>
 
@@ -259,6 +316,26 @@ onMounted(() => {
               threshold {{ formatMeters(fit.fit_threshold_m) }}.
             </div>
             <div v-else class="small text-body-secondary">No fit yet.</div>
+            <form class="input-group input-group-sm mt-2" @submit.prevent="saveThreshold">
+              <span class="input-group-text">Warn above</span>
+              <input
+                v-model="thresholdInput"
+                type="number"
+                min="1"
+                step="any"
+                class="form-control font-monospace"
+                placeholder="no threshold"
+                aria-label="Fit threshold in meters"
+              />
+              <span class="input-group-text">m</span>
+              <button
+                type="submit"
+                class="btn btn-outline-secondary"
+                :disabled="busy || thresholdInput === String(fit?.fit_threshold_m ?? '')"
+              >
+                Set
+              </button>
+            </form>
           </div>
         </div>
 
@@ -284,5 +361,8 @@ onMounted(() => {
       @save="onSave"
       @delete="onDelete"
     />
+    <PromoteDialog v-model:open="promoteOpen" :maptype="maptype" :busy="busy" @promote="onPromote" />
+    <PublishDialog v-model:open="publishOpen" />
+    <HistoryDialog v-model:open="historyOpen" />
   </div>
 </template>
