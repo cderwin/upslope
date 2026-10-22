@@ -47,7 +47,8 @@ removed.
 ## Forecast map
 
 `/map` overlays `upslope export-web` output on a Mapbox GL map. It needs a
-token in `webapp/.env.local` (gitignored):
+token in the repo-root `.env.local` (gitignored; see `.env.example`), which
+`just` loads into the environment for `just web-dev` and `just web-build`:
 
 ```sh
 VITE_MAPBOX_TOKEN=pk....

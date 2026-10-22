@@ -1,5 +1,5 @@
-# Allowlist: only what the Dockerfile copies. Keeps secrets (python/.env.local,
-# webapp/.env.local) and local data (forecast/) out of the build context.
+# Allowlist: only what the Dockerfile copies. Keeps secrets (.env.local) and local
+# data (forecast/) out of the build context.
 *
 
 !python/pyproject.toml
