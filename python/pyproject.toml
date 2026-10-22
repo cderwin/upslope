@@ -1,32 +1,48 @@
 [project]
-name = "wrf-tools"
+name = "upslope"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "affine>=3.0.1",
     "attrs>=25.4.0",
+    "boto3>=1.43.116",
+    "botocore>=1.43.116",
     "cattrs>=25.3.0",
     "click>=8.3.0",
     "dash>=2.18.0",
+    "dash-bootstrap-components>=1.6.0",
+    "dash-bootstrap-templates>=1.2.0",
     "dash-leaflet>=1.0.0",
     "httpx>=0.28.1",
+    "litestar[standard]>=2.25.0",
     "numpy>=2.3.5",
     "pillow>=11.0.0",
     "plotly>=5.24.0",
+    "pyproj>=3.8.0",
     "pyyaml>=6.0.3",
+    "rasterio>=1.5.2",
+    "tqdm>=4.70.1",
 ]
 
 [project.scripts]
-wrf-download = "wrf_tools.wrf_client:main"
-wrf-annotate = "wrf_tools.annotation:cli"
+upslope = "upslope.cli.main:main"
 
 [tool.setuptools]
-packages = ["wrf_tools"]
+packages = ["upslope"]
 
 [build-system]
 requires = ["uv_build>=0.10.0,<0.11.0"]
 build-backend = "uv_build"
 
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
 [tool.uv.build-backend]
 module-root = ""
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

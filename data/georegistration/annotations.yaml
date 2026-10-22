@@ -1,0 +1,102 @@
+geographic_points:
+  cape_flattery:
+    short_name: cape_flattery
+    text_name: Cape Flattery, WA
+    latitude: 48.385978
+    longitude: -124.726914
+  wa_ca_id_triple_point:
+    short_name: wa_ca_id_triple_point
+    text_name: WA-Canada-ID triple border point
+    latitude: 48.999193
+    longitude: -117.032353
+  wa_or_id_triple_point:
+    short_name: wa_or_id_triple_point
+    text_name: WA-OR-ID Triple Point
+    latitude: 45.99539
+    longitude: -116.91604
+  snoqualmie_pass_county_line:
+    short_name: snoqualmie_pass_county_line
+    text_name: Snoqualmie Pass County Line
+    latitude: 47.42445
+    longitude: -121.411
+  whatcom_okanagan_ca_triple_point:
+    short_name: whatcom_okanagan_ca_triple_point
+    text_name: Whatcom-Okanagan-CA Triple Point
+    latitude: 49.0003
+    longitude: -120.85136
+domains:
+  12km-domain:
+    hour06.gif:
+    - pixel_x: 334
+      pixel_y: 319
+      geographic_point: cape_flattery
+    - pixel_x: 543
+      pixel_y: 294
+      geographic_point: wa_ca_id_triple_point
+    - pixel_x: 553
+      pixel_y: 417
+      geographic_point: wa_or_id_triple_point
+    hour09.gif:
+    - pixel_x: 333
+      pixel_y: 319
+      geographic_point: cape_flattery
+    - pixel_x: 543
+      pixel_y: 294
+      geographic_point: wa_ca_id_triple_point
+    - pixel_x: 553
+      pixel_y: 417
+      geographic_point: wa_or_id_triple_point
+  pacific-northwest:
+    hour06.gif:
+    - pixel_x: 234
+      pixel_y: 299
+      geographic_point: cape_flattery
+    - pixel_x: 513
+      pixel_y: 265
+      geographic_point: wa_ca_id_triple_point
+    - pixel_x: 526
+      pixel_y: 429
+      geographic_point: wa_or_id_triple_point
+  washington:
+    hour06.gif:
+    - pixel_x: 83
+      pixel_y: 352
+      geographic_point: cape_flattery
+    - pixel_x: 744
+      pixel_y: 273
+      geographic_point: wa_ca_id_triple_point
+    - pixel_x: 776
+      pixel_y: 661
+      geographic_point: wa_or_id_triple_point
+    hour36.gif:
+    - pixel_x: 776
+      pixel_y: 661
+      geographic_point: wa_or_id_triple_point
+    - pixel_x: 744
+      pixel_y: 272
+      geographic_point: wa_ca_id_triple_point
+    - pixel_x: 83
+      pixel_y: 353
+      geographic_point: cape_flattery
+  western-washington:
+    hour06.gif:
+    - pixel_x: 138
+      pixel_y: 279
+      geographic_point: cape_flattery
+    - pixel_x: 663
+      pixel_y: 522
+      geographic_point: snoqualmie_pass_county_line
+    - pixel_x: 753
+      pixel_y: 148
+      geographic_point: whatcom_okanagan_ca_triple_point
+    hour09.gif:
+    - pixel_x: 752
+      pixel_y: 147
+      geographic_point: whatcom_okanagan_ca_triple_point
+    - pixel_x: 663
+      pixel_y: 523
+      geographic_point: snoqualmie_pass_county_line
+    - pixel_x: 138
+      pixel_y: 279
+      geographic_point: cape_flattery
+

@@ -1,0 +1,96 @@
+"""Litestar app: healthcheck, forecast proxy, webapp frontend, and the hourly WRF export."""
+
+import asyncio
+import os
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
+from pathlib import Path
+
+from litestar import Litestar, get
+from litestar.exceptions import HTTPException
+from litestar.types import Scope
+
+from upslope.cli import PROJECT_BASE
+from upslope.clients.storage import StorageClient
+from upslope.logging import configure_logging, get_logger
+from upslope.models.uw_wrf.driver import WrfDriver
+from upslope.server.forecast import ForecastController, LatestRun
+from upslope.server.frontend import create_frontend_router
+from upslope.server.jobs import build_driver, run_hourly
+
+logger = get_logger(__name__)
+
+DEFAULT_WEBAPP_DIST = PROJECT_BASE / "webapp/dist"
+
+
+async def log_server_error(exc: Exception, scope: Scope) -> None:
+    """Log unhandled errors with a traceback (logging_config=None turns off Litestar's own)."""
+    if isinstance(exc, HTTPException) and exc.status_code < 500:
+        return
+    logger.error("error handling %s %s", scope.get("method", ""), scope.get("path", ""), exc_info=exc)
+
+
+@get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+def create_app(
+    storage: StorageClient | None = None,
+    webapp_dist: Path | None = None,
+    run_jobs: bool = True,
+    export_on_startup: bool = False,
+) -> Litestar:
+    """Build the app.
+
+    Args:
+        storage: Storage to read exports from and export to. Built from the environment at startup if omitted.
+        webapp_dist: Built webapp to serve at `/`. Defaults to `$UPSLOPE_WEBAPP_DIST` or `<repo>/webapp/dist`.
+        run_jobs: Run the hourly WRF export. Disable for tests.
+        export_on_startup: Also run the export once as soon as the app starts (in the background,
+            so the server is up meanwhile). Ignored if `run_jobs` is False.
+    """
+    configure_logging()
+
+    if webapp_dist is None:
+        webapp_dist = Path(os.environ.get("UPSLOPE_WEBAPP_DIST", DEFAULT_WEBAPP_DIST))
+
+    @asynccontextmanager
+    async def lifespan(app: Litestar) -> AsyncIterator[None]:
+        # build up front so missing config or credentials fail at startup, not on first use
+        app.state.storage = storage or StorageClient.build()
+        latest_run = app.state.latest_run = LatestRun(app.state.storage, WrfDriver.model)
+        try:
+            await latest_run.refresh()
+        except Exception:
+            logger.exception("could not look up the latest run at startup; will retry on request")
+
+        task = None
+        if run_jobs:
+            driver = build_driver(app.state.storage)
+            task = asyncio.create_task(
+                run_hourly(driver, on_export=latest_run.refresh, run_immediately=export_on_startup)
+            )
+        try:
+            yield
+        finally:
+            if task is not None:
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+
+    route_handlers = [health, ForecastController]
+    if (webapp_dist / "index.html").is_file():
+        route_handlers.append(create_frontend_router(webapp_dist, reserved_prefixes=("fx", "health")))
+    else:
+        logger.warning("no built webapp at %s; not serving the frontend (run `npm run build` in webapp/)", webapp_dist)
+
+    # logging_config=None: keep the format from upslope.logging instead of Litestar's default
+    # openapi_config=None: no /schema docs pages, which would also shadow webapp routes
+    return Litestar(
+        route_handlers=route_handlers,
+        lifespan=[lifespan],
+        after_exception=[log_server_error],
+        logging_config=None,
+        openapi_config=None,
+    )

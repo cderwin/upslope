@@ -1,0 +1,19 @@
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  min-height: 100vh;
+}
+
+/* Let full-bleed views (the map) fill whatever height the navbar leaves. */
+#app {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+#app > main {
+  position: relative;
+  flex: 1 1 auto;
+}

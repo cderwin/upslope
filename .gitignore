@@ -16,3 +16,6 @@ wheels/
 .pyright.json
 
 .DS_Store
+
+/forecast/
+.env.local

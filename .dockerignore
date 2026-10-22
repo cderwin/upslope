@@ -1,0 +1,21 @@
+# Allowlist: only what the Dockerfile copies. Keeps secrets (python/.env.local,
+# webapp/.env.local) and local data (forecast/) out of the build context.
+*
+
+!python/pyproject.toml
+!python/uv.lock
+!python/README.md
+!python/upslope/
+
+!data/wrf_codes.yaml
+!data/georegistration/annotations.yaml
+!data/georegistration/images/
+
+!webapp/
+
+# re-exclude inside the allowed directories
+**/__pycache__
+**/.DS_Store
+webapp/node_modules
+webapp/dist
+webapp/*.local

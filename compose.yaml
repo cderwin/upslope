@@ -1,0 +1,65 @@
+# Local end-to-end stack: MinIO as the S3 backend, plus the upslope server, which exports
+# the current WRF run at startup and then hourly.
+#   just up      # build and start, then open http://localhost:8000/map
+#   just reset   # stop and wipe MinIO's data
+#
+# Local-only credentials; nothing here is used in production.
+
+x-s3-env: &s3-env
+  AWS_ACCESS_KEY_ID: upslope
+  AWS_SECRET_ACCESS_KEY: upslope-local-secret
+  AWS_REGION: us-east-1
+  AWS_ENDPOINT_URL_S3: http://minio:9000
+  # StorageClient uses virtual-host-style addressing (as Tigris requires), so this bucket
+  # name must match the `upslope-storage.minio` network alias below.
+  BUCKET_NAME: upslope-storage
+
+services:
+  minio:
+    # Community build of MinIO; official MinIO images are no longer published.
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: upslope
+      MINIO_ROOT_PASSWORD: upslope-local-secret
+      # serve <bucket>.minio:9000 as virtual-host-style requests
+      MINIO_DOMAIN: minio
+    networks:
+      default:
+        aliases:
+          - upslope-storage.minio
+    ports:
+      - "9001:9001" # web console, log in with the root user above
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  minio-init:
+    image: pgsty/mc:RELEASE.2026-10-18T00-00-00Z
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - mc alias set local http://minio:9000 upslope upslope-local-secret && mc mb --ignore-existing local/upslope-storage
+
+  server:
+    build:
+      context: .
+      args:
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
+    image: upslope:local
+    command: ["upslope", "serve", "--export-on-startup"]
+    environment: *s3-env
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "8000:8000"
+
+volumes:
+  minio-data:
