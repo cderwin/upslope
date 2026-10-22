@@ -11,7 +11,7 @@ from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 from litestar.types import Scope
 
-from upslope.annotation_service import AnnotationService
+from upslope.annotation_service import AnnotationError, AnnotationService
 from upslope.cli import DEFAULT_WRF_CONFIG, PROJECT_BASE
 from upslope.clients.annotations import AnnotationStore
 from upslope.clients.storage import StorageClient
@@ -31,6 +31,8 @@ DEFAULT_WEBAPP_DIST = PROJECT_BASE / "webapp/dist"
 async def log_server_error(exc: Exception, scope: Scope) -> None:
     """Log unhandled errors with a traceback (logging_config=None turns off Litestar's own)."""
     if isinstance(exc, HTTPException) and exc.status_code < 500:
+        return
+    if isinstance(exc, AnnotationError):  # reported to the client as a 4xx/502 by the admin API
         return
     logger.error("error handling %s %s", scope.get("method", ""), scope.get("path", ""), exc_info=exc)
 

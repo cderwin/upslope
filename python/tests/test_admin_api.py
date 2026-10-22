@@ -188,3 +188,11 @@ def test_sources_and_promote(client: TestClient, memory_storage) -> None:
     with patch("upslope.annotation_service.AnnotationService.promote", side_effect=UpstreamError("UW down")):
         assert client.post(f"{BASE}/draft/images", json=body, headers=AUTH).status_code == 502
     assert client.post(f"{BASE}/draft/images", json={**body, "hour": "6"}, headers=AUTH).status_code == 422
+
+
+def test_handled_errors_are_not_logged_as_server_errors(client: TestClient, caplog) -> None:
+    import logging
+
+    with caplog.at_level(logging.ERROR, logger="upslope.server.app"):
+        assert client.delete(f"{BASE}/draft/points/nope", headers=AUTH).status_code == 404
+    assert not caplog.records
