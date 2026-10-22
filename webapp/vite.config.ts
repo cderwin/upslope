@@ -34,5 +34,7 @@ export default defineConfig({
   server: {
     port: 5173,
     open: '/map',
+    // The admin API comes from a running upslope server, e.g. the local stack (`just up`).
+    proxy: { '/admin': 'http://localhost:8000' },
   },
 })

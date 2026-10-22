@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
+import TokenDialog from '@/admin/TokenDialog.vue'
 
 onMounted(() => {
   // Follow the OS theme; Bootstrap 5.3 restyles itself from this attribute.
@@ -29,4 +30,5 @@ onMounted(() => {
   <main>
     <RouterView />
   </main>
+  <TokenDialog />
 </template>
