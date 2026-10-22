@@ -21,7 +21,15 @@ from litestar.handlers import BaseRouteHandler
 from litestar.params import FromPath, JSONBody
 from litestar.response import Stream
 
-from upslope.annotation_service import AnnotationError, AnnotationService, Conflict, DraftState, Invalid, NotFound
+from upslope.annotation_service import (
+    AnnotationError,
+    AnnotationService,
+    Conflict,
+    DraftState,
+    Invalid,
+    NotFound,
+    UpstreamError,
+)
 from upslope.models.uw_wrf.georegistration_document import converter
 
 # Images never change at a given URL, but sit behind auth, so only the browser may cache them.
@@ -51,6 +59,8 @@ def annotation_error_handler(_: Request, error: AnnotationError) -> Response:
     elif isinstance(error, Invalid):
         status = 422
         content["problems"] = error.problems
+    elif isinstance(error, UpstreamError):
+        status = 502
     else:
         status = 400
     return Response(content=content, status_code=status)
@@ -181,6 +191,17 @@ class AdminGeoregistrationController(Controller):
     async def set_fit_threshold(self, request: Request, state: State, maptype: FromPath[str], data: JSONBody[Any]) -> Response:
         meters = _number(data, "meters", required=False)
         return draft_response(await _service(state).set_fit_threshold(maptype, meters, expected_revision(request)))
+
+    @get("/sources")
+    async def sources(self, state: State) -> list[dict[str, Any]]:
+        return converter.unstructure(_service(state).sources())
+
+    @post("/draft/images")
+    async def promote(self, request: Request, state: State, data: JSONBody[Any]) -> Response:
+        result = await _service(state).promote(
+            _field(data, "model", str), _field(data, "variable", str), _integer(data, "hour"), expected_revision(request)
+        )
+        return draft_response(result.draft, status_code=201, maptype=result.maptype, image=result.image)
 
     @get("/images/{maptype:str}/{image:str}")
     async def image(self, request: Request, state: State, maptype: FromPath[str], image: FromPath[str]) -> Response:

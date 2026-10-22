@@ -173,3 +173,18 @@ def test_admin_paths_not_served_as_frontend(store, memory_storage, tmp_path: Pat
     with TestClient(create_app(storage=memory_storage, webapp_dist=tmp_path, run_jobs=False, admin_token="secret")) as client:
         assert client.get("/admin/nope", headers=AUTH).status_code == 404
         assert client.get("/annotation").text == "<html>app</html>"
+
+
+def test_sources_and_promote(client: TestClient, memory_storage) -> None:
+    sources = client.get(f"{BASE}/sources", headers=AUTH).json()
+    assert {"model", "variable", "maptype", "hours"} <= sources[0].keys()
+
+    from unittest.mock import patch
+
+    from upslope.annotation_service import UpstreamError
+
+    source = next(s for s in sources if s["maptype"] == "washington")
+    body = {"model": source["model"], "variable": source["variable"], "hour": source["hours"][0]}
+    with patch("upslope.annotation_service.AnnotationService.promote", side_effect=UpstreamError("UW down")):
+        assert client.post(f"{BASE}/draft/images", json=body, headers=AUTH).status_code == 502
+    assert client.post(f"{BASE}/draft/images", json={**body, "hour": "6"}, headers=AUTH).status_code == 422

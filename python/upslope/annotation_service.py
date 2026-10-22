@@ -6,10 +6,15 @@ conditional on the stored draft being unchanged, so a write from another process
 """
 
 import asyncio
+import io
 import math
 import re
 from collections.abc import Callable
+from datetime import UTC, datetime
 from typing import TypeVar
+
+import httpx
+from PIL import Image, UnidentifiedImageError
 
 from attrs import define
 
@@ -17,13 +22,17 @@ from upslope.clients.annotations import AnnotationStore, HistoryEntry, HistorySu
 from upslope.clients.storage import PreconditionFailed, StoredObject
 from upslope.logging import get_logger
 from upslope.models.uw_wrf.georegistration import MaptypeFit, fit_report
+from upslope.models.uw_wrf.driver import WrfDriver
 from upslope.models.uw_wrf.georegistration_document import (
+    AnnotatedImage,
     AnnotationDocument,
     GeographicPoint,
+    ImageSource,
+    MaptypeAnnotations,
     PixelAnnotation,
     is_valid_key,
 )
-from upslope.models.uw_wrf.wrf_client import WrfConfig
+from upslope.models.uw_wrf.wrf_client import LayerConfig, WrfClient, WrfConfig
 
 logger = get_logger(__name__)
 
@@ -46,6 +55,10 @@ class Invalid(AnnotationError):
         self.problems = problems or []
 
 
+class UpstreamError(AnnotationError):
+    """The forecast image could not be downloaded from UW."""
+
+
 class Conflict(AnnotationError):
     """The draft changed since the revision the client based its request on."""
 
@@ -65,6 +78,38 @@ class DraftState:
 
     document: AnnotationDocument
     published_revision: int | None
+
+
+@define
+class PromotableLayer:
+    """A configured forecast layer whose frames can be promoted for annotation.
+
+    Attributes:
+        model: Manifest model name, e.g. `uwwrf_4km` (as in the forecast map's URLs).
+        variable: Forecast variable.
+        maptype: Maptype the layer's images belong to.
+        hours: Forecast hours available.
+    """
+
+    model: str
+    variable: str
+    maptype: str
+    hours: list[int]
+
+
+@define
+class PromoteResult:
+    """Outcome of promoting a forecast frame.
+
+    Attributes:
+        draft: The draft with the image added.
+        maptype: The image's maptype.
+        image: The new (or already present) image ID.
+    """
+
+    draft: DraftState
+    maptype: str
+    image: str
 
 
 @define
@@ -113,11 +158,13 @@ class AnnotationService:
     Args:
         store: Where the annotations live.
         wrf_config: Configured layers; publishing requires every layer's maptype to be fitted.
+        wrf_client: Client for downloading frames to promote. Built from `wrf_config` if omitted.
     """
 
-    def __init__(self, store: AnnotationStore, wrf_config: WrfConfig) -> None:
+    def __init__(self, store: AnnotationStore, wrf_config: WrfConfig, wrf_client: WrfClient | None = None) -> None:
         self.store = store
         self.wrf_config = wrf_config
+        self.wrf_client = wrf_client or WrfClient(wrf_config)
         self._lock = asyncio.Lock()
         self._published_revision: int | None = None
 
@@ -345,6 +392,85 @@ class AnnotationService:
         entry = await self.history_entry(history_id)
         state, _ = await self._mutate(self._replace_contents(entry.document), expected_revision)
         return state
+
+    # --- promoting forecast frames
+
+    def sources(self) -> list[PromotableLayer]:
+        """Configured layers that frames can be promoted from."""
+        return [
+            PromotableLayer(
+                f"{WrfDriver.model}_{layer.domain}",
+                layer.variable,
+                layer.maptype,
+                self.wrf_config.get_forecast_hours(layer.forecast_schedule),
+            )
+            for layer in self.wrf_config.layers
+        ]
+
+    def _find_layer(self, model: str, variable: str) -> LayerConfig:
+        for layer in self.wrf_config.layers:
+            if f"{WrfDriver.model}_{layer.domain}" == model and layer.variable == variable:
+                return layer
+        raise NotFound(f"no configured layer {model}/{variable}")
+
+    async def promote(self, model: str, variable: str, hour: int, expected_revision: int | None = None) -> PromoteResult:
+        """Download a forecast frame from UW's latest run and add it to the draft for annotation.
+
+        Args:
+            model: Manifest model name, e.g. `uwwrf_4km`.
+            variable: Forecast variable.
+            hour: Forecast hour; must be in the layer's schedule.
+            expected_revision: Apply only if the draft is still at this revision.
+
+        Returns:
+            The new draft and the image's maptype and ID. If the same frame of the same run was
+            promoted before, the existing image is returned and the draft is unchanged.
+        """
+        layer = self._find_layer(model, variable)
+        if hour not in self.wrf_config.get_forecast_hours(layer.forecast_schedule):
+            raise Invalid(f"hour {hour} is not in the {model}/{variable} forecast schedule")
+
+        def download() -> tuple[datetime, bytes, tuple[int, int]]:
+            try:
+                initialized = self.wrf_client.current_run_initialization()
+                data = self.wrf_client.download_image(layer, hour)
+            except httpx.HTTPError as e:
+                raise UpstreamError(f"could not download the frame from UW: {e}") from e
+            try:
+                with Image.open(io.BytesIO(data)) as image:
+                    if image.format != "GIF":
+                        raise UpstreamError(f"UW returned a {image.format} image, not a GIF")
+                    return initialized, data, image.size
+            except UnidentifiedImageError as e:
+                raise UpstreamError("UW did not return an image") from e
+
+        initialized, data, (width, height) = await asyncio.to_thread(download)
+        maptype = layer.maptype
+        image_id = f"{layer.domain}-{variable}-h{hour:02d}-{initialized:%Y%m%dT%H}Z"
+        await asyncio.to_thread(self.store.put_image, maptype, image_id, data)
+
+        class AlreadyPresent(Exception):
+            pass
+
+        def change(document: AnnotationDocument) -> None:
+            annotations = document.maptypes.setdefault(maptype, MaptypeAnnotations())
+            if image_id in annotations.images:
+                raise AlreadyPresent
+            for other_id, other in annotations.images.items():
+                if (other.width, other.height) != (width, height):
+                    raise Invalid(
+                        f"the frame is {width}x{height}, but {maptype} image {other_id} is {other.width}x{other.height}; "
+                        "a maptype's images must share one pixel grid"
+                    )
+            source = ImageSource(model, variable, hour, initialized, datetime.now(UTC))
+            annotations.images[image_id] = AnnotatedImage(width=width, height=height, source=source)
+
+        try:
+            state, _ = await self._mutate(change, expected_revision)
+        except AlreadyPresent:
+            state = await self.draft()
+        logger.info("promoted %s/%s hour %d to %s/%s", model, variable, hour, maptype, image_id)
+        return PromoteResult(state, maptype, image_id)
 
     # --- publishing
 

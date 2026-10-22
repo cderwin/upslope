@@ -145,6 +145,20 @@ class WrfClient:
         variable_code = self.config.get_variable_code(variable)
         return f"{self.base_url}/timeindep/images_{domain_code}/{maptype_code}{variable_code}.{hour:02d}.0000.gif"
 
+    def download_image(self, layer: LayerConfig, hour: int) -> bytes:
+        """Download one forecast hour of a layer from the latest run.
+
+        Args:
+            layer: Layer to download.
+            hour: Forecast hour.
+
+        Returns:
+            The GIF's bytes. Raises httpx.HTTPError if the download fails.
+        """
+        response = self._client.get(self.build_url(layer.domain, layer.variable, hour, layer.maptype))
+        _ = response.raise_for_status()
+        return response.content
+
     def download_layer(self, layer: LayerConfig, output_path: Path) -> None:
         """Download a layer's GIF for each forecast hour, skipping files already on disk.
 

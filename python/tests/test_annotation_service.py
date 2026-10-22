@@ -1,11 +1,16 @@
 """AnnotationService: editing the shared draft, conflicts, and publishing."""
 
 import asyncio
-from unittest.mock import patch
+import io
+from datetime import UTC, datetime
+from unittest.mock import MagicMock, patch
+
+import httpx
+from PIL import Image
 
 import pytest
 
-from upslope.annotation_service import AnnotationService, Conflict, Invalid, NotFound, to_key
+from upslope.annotation_service import AnnotationService, Conflict, Invalid, NotFound, UpstreamError, to_key
 from upslope.cli import DEFAULT_WRF_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
@@ -213,3 +218,67 @@ def test_image_lookup(service: AnnotationService, store: AnnotationStore) -> Non
 def test_fit_reports_draft(service: AnnotationService) -> None:
     report = run(service.fit())
     assert report[WA].mean_error_m == pytest.approx(779, abs=1)
+
+
+# --- promoting forecast frames
+
+
+def gif_bytes(size: tuple[int, int]) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("P", size).save(buffer, format="GIF")
+    return buffer.getvalue()
+
+
+@pytest.fixture
+def wrf_client() -> MagicMock:
+    client = MagicMock()
+    client.current_run_initialization.return_value = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    client.download_image.return_value = (DEV_GEOREGISTRATION / "images/washington/legacy-hour06.gif").read_bytes()
+    return client
+
+
+@pytest.fixture
+def promoting(store: AnnotationStore, wrf_client: MagicMock) -> AnnotationService:
+    return AnnotationService(store, WrfConfig.load(DEFAULT_WRF_CONFIG), wrf_client)
+
+
+def test_sources_list_configured_layers(service: AnnotationService) -> None:
+    sources = {(s.model, s.variable): s for s in service.sources()}
+    source = sources[("uwwrf_4km", "surface-temp")]
+    assert source.maptype == WA and source.hours
+
+
+def test_promote_adds_image(promoting: AnnotationService, store: AnnotationStore, wrf_client: MagicMock) -> None:
+    source = next(s for s in promoting.sources() if s.maptype == WA)
+    hour = source.hours[0]
+    result = run(promoting.promote(source.model, source.variable, hour))
+
+    assert result.maptype == WA
+    assert result.image == f"4km-{source.variable}-h{hour:02d}-20261021T12Z"
+    image = result.draft.document.maptypes[WA].images[result.image]
+    assert (image.source.model, image.source.hour, image.annotations) == (source.model, hour, {})
+    assert store.read_image(WA, result.image) == wrf_client.download_image.return_value
+
+    # promoting the same frame of the same run again changes nothing
+    again = run(promoting.promote(source.model, source.variable, hour))
+    assert again.image == result.image and again.draft.document.revision == result.draft.document.revision
+
+
+def test_promote_validates(promoting: AnnotationService, wrf_client: MagicMock) -> None:
+    source = next(s for s in promoting.sources() if s.maptype == WA)
+    with pytest.raises(NotFound):
+        run(promoting.promote("uwwrf_99km", source.variable, source.hours[0]))
+    with pytest.raises(Invalid, match="schedule"):
+        run(promoting.promote(source.model, source.variable, 7))
+
+    wrf_client.download_image.return_value = gif_bytes((10, 10))
+    with pytest.raises(Invalid, match="pixel grid"):
+        run(promoting.promote(source.model, source.variable, source.hours[0]))
+
+    wrf_client.download_image.return_value = b"<html>not found</html>"
+    with pytest.raises(UpstreamError):
+        run(promoting.promote(source.model, source.variable, source.hours[0]))
+
+    wrf_client.download_image.side_effect = httpx.ConnectError("down")
+    with pytest.raises(UpstreamError, match="down"):
+        run(promoting.promote(source.model, source.variable, source.hours[0]))
