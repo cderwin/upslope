@@ -6,6 +6,8 @@ import MapControls from '@/forecast/components/MapControls.vue'
 import { FORECAST_BASE_URL, fetchManifest, layerKey } from '@/forecast/api'
 import type { ForecastManifest } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
+import { adminToken } from '@/admin/token'
+import { useAnnotationStore } from '@/annotation/store'
 
 /** Route params, so the selected layer is a shareable URL under /map. */
 const props = defineProps<{ model?: string; variable?: string }>()
@@ -57,6 +59,20 @@ watch([layer, () => frame.value?.hour, opacity, terrain], ([current, hour, alpha
   })
 })
 
+// Admins can send the current frame to the annotation page.
+const annotations = useAnnotationStore()
+const annotateError = ref('')
+
+async function annotateFrame() {
+  const current = layer.value
+  const hour = frame.value?.hour
+  if (!current || hour === undefined) return
+  annotateError.value = ''
+  const added = await annotations.promote(current.model, current.variable, hour)
+  if (added) void router.push({ name: 'annotation-image', params: { maptype: added.maptype, image: added.image } })
+  else annotateError.value = annotations.state.error || 'Could not add the frame.'
+}
+
 function selectLayer(key: string) {
   const next = layers.value.find((l) => layerKey(l) === key)
   if (!next) return
@@ -98,7 +114,7 @@ onBeforeUnmount(() => {
   <div class="map-view">
     <div v-if="!token" class="container py-4">
       <div class="alert alert-warning">
-        Set <code>VITE_MAPBOX_TOKEN</code> in <code>webapp/.env.local</code> and restart the dev server to use the map.
+        Set <code>VITE_MAPBOX_TOKEN</code> in the repo-root <code>.env.local</code> and restart the dev server to use the map.
       </div>
     </div>
     <div v-else-if="error" class="container py-4">
@@ -123,7 +139,21 @@ onBeforeUnmount(() => {
         :load-progress="loadProgress"
         @select-layer="selectLayer"
         @step="step"
-      />
+      >
+        <div v-if="adminToken.token">
+          <button
+            type="button"
+            class="btn btn-sm btn-outline-secondary w-100"
+            :disabled="annotations.state.busy"
+            title="Download this frame from UW's latest run and open it on the annotation page"
+            @click="annotateFrame"
+          >
+            <span v-if="annotations.state.busy" class="spinner-border spinner-border-sm me-1"></span>
+            Annotate this frame
+          </button>
+          <div v-if="annotateError" class="small text-danger mt-1">{{ annotateError }}</div>
+        </div>
+      </MapControls>
     </template>
     <div v-else class="d-flex h-100 align-items-center justify-content-center text-body-secondary">
       Loading forecast…
