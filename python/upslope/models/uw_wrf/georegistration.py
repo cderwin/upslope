@@ -7,11 +7,12 @@ import numpy as np
 import rasterio
 from affine import Affine
 from attrs import define
-from cattrs.preconf.pyyaml import make_converter
 from rasterio.errors import NotGeoreferencedWarning
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 
 from pyproj import Geod, Transformer
+
+from upslope.models.uw_wrf.georegistration_document import AnnotationDocument, GeographicPoint, PixelAnnotation
 
 
 # The UW WRF grids' native projection (WPS namelist: map_proj='lambert', truelat1=30, truelat2=60,
@@ -30,85 +31,113 @@ _to_geographic = Transformer.from_crs(WRF_LAMBERT_CRS, "EPSG:4326", always_xy=Tr
 _geod = Geod(ellps="WGS84")
 
 
+def to_projected(point: GeographicPoint) -> tuple[float, float]:
+    """Project a landmark into the WRF Lambert CRS.
+
+    Returns:
+        The point's (x, y) in meters.
+    """
+    x, y = _to_projected.transform(point.longitude, point.latitude)
+    return x, y
+
+
+def fit_transform(control_points: list[tuple[PixelAnnotation, GeographicPoint]]) -> Affine:
+    """Fit a pixel -> Lambert transform from control points.
+
+    The plots are drawn on the WRF grid, so the transform is axis-aligned: a scale and offset per
+    axis, with no rotation or shear. Least squares needs two control points; three or more leave
+    residuals that measure the fit.
+
+    Args:
+        control_points: (annotation, landmark) pairs. Raises ValueError if there are fewer than two.
+
+    Returns:
+        The transform from corner-based (col, row) to WRF Lambert meters.
+    """
+    if len(control_points) < 2:
+        raise ValueError("needs at least two control points")
+    pixels = np.array([annotation.pixel_center() for annotation, _ in control_points])
+    projected = np.array([to_projected(point) for _, point in control_points])
+    scale_x, offset_x = np.polyfit(pixels[:, 0], projected[:, 0], 1)
+    scale_y, offset_y = np.polyfit(pixels[:, 1], projected[:, 1], 1)
+    return Affine(scale_x, 0.0, offset_x, 0.0, scale_y, offset_y)
+
+
+def placement_error(transform: Affine, annotation: PixelAnnotation, point: GeographicPoint) -> float:
+    """Distance, in meters on the ellipsoid, between where a transform places an annotation and its landmark."""
+    projected_x, projected_y = transform @ annotation.pixel_center()
+    projected_lon, projected_lat = _to_geographic.transform(projected_x, projected_y)
+    _, _, error = _geod.inv(projected_lon, projected_lat, point.longitude, point.latitude)
+    return float(error)
+
+
 @define
-class GeographicPoint:
-    short_name: str
-    text_name: str
-    latitude: float
-    longitude: float
-
-    def to_projected(self) -> tuple[float, float]:
-        """Project this point into the WRF Lambert CRS.
-
-        Returns:
-            The point's (x, y) in meters.
-        """
-        x, y = _to_projected.transform(self.longitude, self.latitude)
-        return x, y
-
-
-@define
-class ControlPoint:
-    geographic_point: str
-    pixel_x: int
-    pixel_y: int
-
-    def pixel_center(self) -> tuple[float, float]:
-        """Get the center of the annotated pixel.
-
-        Returns:
-            The (col, row) of the pixel center, in corner-based pixel coordinates.
-        """
-        # Annotations record the (floored) pixel index; transforms address pixel corners.
-        return self.pixel_x + 0.5, self.pixel_y + 0.5
-
-
-@define
-class RegistrationConfig:
-    """Control points used to fit each domain's pixel-to-map transform.
+class MaptypeFit:
+    """How well a maptype's annotations fit its transform.
 
     Attributes:
-        geographic_points: Known landmarks, keyed by short name.
-        domains: Per domain, the control points annotated on each image.
+        control_points: Number of usable annotations.
+        mean_error_m: Mean placement error in meters, or None if there are too few points to fit.
+        fit_threshold_m: The maptype's warning threshold, if set.
+        over_threshold: True if the mean error exceeds the threshold.
+        image_errors: Mean error per image ID.
+        point_errors: Mean error per point key.
+        error: Why no transform could be fitted, if so.
     """
 
-    geographic_points: dict[str, GeographicPoint]
-    domains: dict[str, dict[str, list[ControlPoint]]]
-
-    def get_control_points(self, domain: str) -> list[ControlPoint]:
-        """Collect a domain's control points across all of its images.
-
-        Args:
-            domain: Domain name.
-
-        Returns:
-            All control points for the domain, or an empty list if it is unknown.
-        """
-        all_control_points: list[ControlPoint] = []
-        for image, control_points in self.domains.get(domain, {}).items():
-            all_control_points += control_points
-
-        return all_control_points
-
-    @classmethod
-    def load(cls, registration_config: Path) -> Self:
-        """Load the config from a YAML file.
-
-        Args:
-            registration_config: Path to the YAML config file.
-
-        Returns:
-            The parsed RegistrationConfig.
-        """
-        converter = make_converter()
-        return converter.loads(registration_config.read_text(), cls)
-
-
-@define
-class DomainError:
-    domain_error: float
+    control_points: int
+    mean_error_m: float | None
+    fit_threshold_m: float | None
+    over_threshold: bool
     image_errors: dict[str, float]
     point_errors: dict[str, float]
+    error: str | None = None
+
+
+def fit_report(document: AnnotationDocument) -> dict[str, MaptypeFit]:
+    """Fit every maptype in a document and measure each annotation's placement error.
+
+    Unlike `Registration.build`, maptypes with too few points are reported rather than raising.
+
+    Args:
+        document: Annotations to check.
+
+    Returns:
+        Per maptype, the fit summary.
+    """
+    report: dict[str, MaptypeFit] = {}
+    for maptype, annotations in document.maptypes.items():
+        control_points = document.control_points(maptype)
+        threshold = annotations.fit_threshold_m
+        try:
+            transform = fit_transform(control_points)
+        except ValueError as e:
+            report[maptype] = MaptypeFit(len(control_points), None, threshold, False, {}, {}, error=str(e))
+            continue
+
+        all_errors: list[float] = []
+        image_errors: dict[str, list[float]] = defaultdict(list)
+        point_errors: dict[str, list[float]] = defaultdict(list)
+        for image_id, image in annotations.images.items():
+            for key, annotation in image.annotations.items():
+                point = document.geographic_points.get(key)
+                if point is None:
+                    continue
+                error = placement_error(transform, annotation, point)
+                all_errors.append(error)
+                image_errors[image_id].append(error)
+                point_errors[key].append(error)
+
+        mean_error = float(np.mean(all_errors))
+        report[maptype] = MaptypeFit(
+            control_points=len(control_points),
+            mean_error_m=mean_error,
+            fit_threshold_m=threshold,
+            over_threshold=threshold is not None and mean_error > threshold,
+            image_errors={image: float(np.mean(errors)) for image, errors in image_errors.items()},
+            point_errors={point: float(np.mean(errors)) for point, errors in point_errors.items()},
+        )
+    return report
 
 
 def unused_palette_index(data: np.ndarray) -> int:
@@ -195,66 +224,20 @@ class Registration:
             if cmap is not None:
                 dst.write_colormap(1, cmap)  # keeps the GIF's palette so colors render correctly
 
-    def compute_error(self, config: RegistrationConfig) -> dict[str, DomainError]:
-        """Measure how far the fitted transforms place each control point from its true location.
-
-        Args:
-            config: Control points to check.
-
-        Returns:
-            Per domain, mean errors in meters overall, per image, and per geographic point.
-        """
-        total_errors: dict[str, DomainError] = {}
-        for domain, images in config.domains.items():
-            domain_errors: list[float] = []
-            image_errors: dict[str, list[float]] = defaultdict(list)
-            point_errors: dict[str, list[float]] = defaultdict(list)
-            for image, control_points in images.items():
-                for control_point in control_points:
-                    # Measure on the ellipsoid so errors are true meters regardless of projection scale.
-                    projected_x, projected_y = self.domain_transforms[domain] * control_point.pixel_center()
-                    projected_lon, projected_lat = _to_geographic.transform(projected_x, projected_y)
-                    groundtruth = config.geographic_points[control_point.geographic_point]
-                    _, _, error = _geod.inv(projected_lon, projected_lat, groundtruth.longitude, groundtruth.latitude)
-
-                    domain_errors.append(error)
-                    image_errors[image].append(error)
-                    point_errors[control_point.geographic_point].append(error)
-
-            total_errors[domain] = DomainError(
-                domain_error=np.mean(domain_errors).tolist(),
-                image_errors={image: np.mean(errors).tolist() for image, errors in image_errors.items()},
-                point_errors={point: np.mean(errors).tolist() for point, errors in point_errors.items()},
-            )
-
-        return total_errors
-
     @classmethod
-    def build(cls, config: RegistrationConfig) -> Self:
-        """Fit each map type's pixel -> Lambert transform.
-
-        The plots are drawn on the WRF grid, so the transform is axis-aligned: a scale and offset per
-        axis, with no rotation or shear. Least squares needs two control points; three or more leave
-        residuals that measure the fit.
+    def build(cls, document: AnnotationDocument) -> Self:
+        """Fit each maptype's pixel -> Lambert transform.
 
         Args:
-            config: Control points to fit. Raises ValueError if a domain has fewer than two.
+            document: Annotations to fit. Raises ValueError if a maptype has fewer than two control points.
 
         Returns:
-            A Registration with one transform per domain.
+            A Registration with one transform per maptype.
         """
         transforms: dict[str, Affine] = {}
-        for domain, images in config.domains.items():
-            control_points = [control_point for points in images.values() for control_point in points]
-            if len(control_points) < 2:
-                raise ValueError(f"map type `{domain}` needs at least two control points")
-
-            pixels = np.array([control_point.pixel_center() for control_point in control_points])
-            projected = np.array(
-                [config.geographic_points[control_point.geographic_point].to_projected() for control_point in control_points]
-            )
-            scale_x, offset_x = np.polyfit(pixels[:, 0], projected[:, 0], 1)
-            scale_y, offset_y = np.polyfit(pixels[:, 1], projected[:, 1], 1)
-            transforms[domain] = Affine(scale_x, 0.0, offset_x, 0.0, scale_y, offset_y)
-
+        for maptype in document.maptypes:
+            try:
+                transforms[maptype] = fit_transform(document.control_points(maptype))
+            except ValueError as e:
+                raise ValueError(f"map type `{maptype}`: {e}") from e
         return cls(domain_transforms=transforms)

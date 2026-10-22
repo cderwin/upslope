@@ -1,4 +1,4 @@
-"""Litestar app: healthcheck, forecast proxy, webapp frontend, and the hourly WRF export."""
+"""Litestar app: healthcheck, forecast proxy, admin API, webapp frontend, and the hourly WRF export."""
 
 import asyncio
 import os
@@ -7,13 +7,18 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from litestar import Litestar, get
+from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 from litestar.types import Scope
 
-from upslope.cli import PROJECT_BASE
+from upslope.annotation_service import AnnotationError, AnnotationService
+from upslope.cli import DEFAULT_WRF_CONFIG, PROJECT_BASE
+from upslope.clients.annotations import AnnotationStore
 from upslope.clients.storage import StorageClient
 from upslope.logging import configure_logging, get_logger
 from upslope.models.uw_wrf.driver import WrfDriver
+from upslope.models.uw_wrf.wrf_client import WrfConfig
+from upslope.server.admin import AdminGeoregistrationController
 from upslope.server.forecast import ForecastController, LatestRun
 from upslope.server.frontend import create_frontend_router
 from upslope.server.jobs import build_driver, run_hourly
@@ -26,6 +31,8 @@ DEFAULT_WEBAPP_DIST = PROJECT_BASE / "webapp/dist"
 async def log_server_error(exc: Exception, scope: Scope) -> None:
     """Log unhandled errors with a traceback (logging_config=None turns off Litestar's own)."""
     if isinstance(exc, HTTPException) and exc.status_code < 500:
+        return
+    if isinstance(exc, AnnotationError):  # reported to the client as a 4xx/502 by the admin API
         return
     logger.error("error handling %s %s", scope.get("method", ""), scope.get("path", ""), exc_info=exc)
 
@@ -40,6 +47,7 @@ def create_app(
     webapp_dist: Path | None = None,
     run_jobs: bool = True,
     export_on_startup: bool = False,
+    admin_token: str | None = None,
 ) -> Litestar:
     """Build the app.
 
@@ -49,8 +57,14 @@ def create_app(
         run_jobs: Run the hourly WRF export. Disable for tests.
         export_on_startup: Also run the export once as soon as the app starts (in the background,
             so the server is up meanwhile). Ignored if `run_jobs` is False.
+        admin_token: Bearer token for the admin API. Defaults to `$ADMIN_TOKEN`; empty disables the API.
     """
     configure_logging()
+
+    if admin_token is None:
+        admin_token = os.environ.get("ADMIN_TOKEN", "")
+    if not admin_token:
+        logger.warning("ADMIN_TOKEN is not set; the admin API (/admin) is disabled")
 
     if webapp_dist is None:
         webapp_dist = Path(os.environ.get("UPSLOPE_WEBAPP_DIST", DEFAULT_WEBAPP_DIST))
@@ -59,6 +73,7 @@ def create_app(
     async def lifespan(app: Litestar) -> AsyncIterator[None]:
         # build up front so missing config or credentials fail at startup, not on first use
         app.state.storage = storage or StorageClient.build()
+        app.state.annotations = AnnotationService(AnnotationStore(app.state.storage), WrfConfig.load(DEFAULT_WRF_CONFIG))
         latest_run = app.state.latest_run = LatestRun(app.state.storage, WrfDriver.model)
         try:
             await latest_run.refresh()
@@ -79,9 +94,9 @@ def create_app(
                 with suppress(asyncio.CancelledError):
                     await task
 
-    route_handlers = [health, ForecastController]
+    route_handlers = [health, ForecastController, AdminGeoregistrationController]
     if (webapp_dist / "index.html").is_file():
-        route_handlers.append(create_frontend_router(webapp_dist, reserved_prefixes=("fx", "health")))
+        route_handlers.append(create_frontend_router(webapp_dist, reserved_prefixes=("fx", "health", "admin")))
     else:
         logger.warning("no built webapp at %s; not serving the frontend (run `npm run build` in webapp/)", webapp_dist)
 
@@ -90,6 +105,7 @@ def create_app(
     return Litestar(
         route_handlers=route_handlers,
         lifespan=[lifespan],
+        state=State({"admin_token": admin_token}),
         after_exception=[log_server_error],
         logging_config=None,
         openapi_config=None,

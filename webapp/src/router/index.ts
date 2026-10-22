@@ -8,14 +8,14 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/HomeView.vue'),
   },
   {
-    // The annotation tool lives under /annotation; the optional domain/image
+    // The annotation tool lives under /annotation; the optional maptype/image
     // segments make a selected image a shareable link.
     path: '/annotation',
     name: 'annotation',
     component: AnnotationView,
   },
   {
-    path: '/annotation/:domain/:image',
+    path: '/annotation/:maptype/:image',
     name: 'annotation-image',
     component: AnnotationView,
     props: true,

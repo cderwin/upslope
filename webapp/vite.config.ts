@@ -10,14 +10,6 @@ export default defineConfig({
     vue(),
     dataMounts([
       {
-        // Georegistration GIFs for /annotation: listed at build time and copied into dist/.
-        prefix: '/data/georegistration/images',
-        dir: repoPath('data/georegistration/images'),
-        extensions: ['.gif', '.png', '.jpg', '.jpeg'],
-        copyOnBuild: true,
-        manifestModule: 'virtual:georegistration-manifest',
-      },
-      {
         // `upslope export-web` output for /map. Served from disk only, never bundled:
         // it stands in for the forecast API (see VITE_FORECAST_BASE_URL).
         prefix: '/api/forecast',
@@ -34,5 +26,7 @@ export default defineConfig({
   server: {
     port: 5173,
     open: '/map',
+    // The admin API comes from a running upslope server, e.g. the local stack (`just up`).
+    proxy: { '/admin': 'http://localhost:8000' },
   },
 })

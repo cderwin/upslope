@@ -97,6 +97,8 @@ const hourLabel = computed(() => {
         </div>
       </div>
 
+      <slot />
+
       <div
         v-if="loadProgress < 1"
         class="progress"

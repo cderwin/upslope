@@ -9,19 +9,27 @@ import rasterio
 from click.testing import CliRunner
 from PIL import Image
 
-from upslope.cli import DEFAULT_GEOREGISTRATION_CONFIG, DEFAULT_WRF_CONFIG, PROJECT_BASE
+from upslope.cli import DEFAULT_WRF_CONFIG, DEV_GEOREGISTRATION
+from upslope.clients.annotations import read_snapshot, snapshot_image_path
+from upslope.clients.storage import ModelRunMarker
 from upslope.cli.main import main
 from upslope.models.uw_wrf.driver import WrfDriver
-from upslope.models.uw_wrf.georegistration import OUTPUT_CRS, Registration, RegistrationConfig
+from upslope.models.uw_wrf.georegistration import OUTPUT_CRS, Registration, fit_report
+from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 from upslope.models.uw_wrf.wrf_client import CodeConfig, ForecastScheduleConfig, LayerConfig, WrfClient, WrfConfig
 
-SAMPLE_GIF = PROJECT_BASE / "data/georegistration/images/washington/hour06.gif"
+SAMPLE_GIF = snapshot_image_path(DEV_GEOREGISTRATION, "washington", "legacy-hour06")
 INITIALIZED = datetime(2026, 10, 21, 12, tzinfo=UTC)
 
 
 @pytest.fixture(scope="module")
-def registration() -> Registration:
-    return Registration.build(RegistrationConfig.load(DEFAULT_GEOREGISTRATION_CONFIG))
+def document() -> AnnotationDocument:
+    return read_snapshot(DEV_GEOREGISTRATION)
+
+
+@pytest.fixture(scope="module")
+def registration(document: AnnotationDocument) -> Registration:
+    return Registration.build(document)
 
 
 # --- config
@@ -91,7 +99,7 @@ def test_export_layer_builds_manifest_layer(registration: Registration, tmp_path
     tiff.parent.mkdir(parents=True)
     registration.georegister(SAMPLE_GIF, tiff, "washington")
 
-    driver = WrfDriver(config=config, client=WrfClient(config), registration=registration, storage=MagicMock())
+    driver = WrfDriver(config=config, client=WrfClient(config), storage=MagicMock(), annotations=MagicMock())
     manifest_layer = driver.export_layer(layer, tmp_path, INITIALIZED)
 
     assert (manifest_layer.model, manifest_layer.variable, manifest_layer.initialized) == ("uwwrf_4km", "surface-temp", INITIALIZED)
@@ -111,7 +119,7 @@ def test_export_layer_missing_frame_raises(registration: Registration, tmp_path:
         domain_codes=[], maptype_codes=[], variable_codes=[],
         forecast_schedules=[ForecastScheduleConfig("test", [6])], layers=[layer],
     )
-    driver = WrfDriver(config=config, client=WrfClient(config), registration=registration, storage=MagicMock())
+    driver = WrfDriver(config=config, client=WrfClient(config), storage=MagicMock(), annotations=MagicMock())
     with pytest.raises(RuntimeError, match="does not exist"):
         driver.export_layer(layer, tmp_path, INITIALIZED)
 
@@ -119,15 +127,62 @@ def test_export_layer_missing_frame_raises(registration: Registration, tmp_path:
 # --- driver and CLI
 
 
-def test_run_skips_already_exported_model_run() -> None:
-    client, storage = MagicMock(), MagicMock()
+def make_driver(document: AnnotationDocument | None, marker: ModelRunMarker | None) -> tuple[WrfDriver, MagicMock, MagicMock]:
+    client, storage, annotations = MagicMock(), MagicMock(), MagicMock()
     client.current_run_initialization.return_value = INITIALIZED
-    storage.model_run_exported.return_value = True
-    driver = WrfDriver(config=MagicMock(layers=[MagicMock()]), client=client, registration=MagicMock(), storage=storage)
+    storage.model_run_marker.return_value = marker
+    annotations.load_published.return_value = document
+    driver = WrfDriver(config=MagicMock(layers=[]), client=client, storage=storage, annotations=annotations)
+    return driver, client, storage
 
+
+def exported_with(revision: int | None) -> ModelRunMarker:
+    return ModelRunMarker("uwwrf", INITIALIZED, "web_exports/x/manifest.json", revision)
+
+
+def test_run_skips_run_exported_with_current_annotations(document: AnnotationDocument) -> None:
+    driver, client, storage = make_driver(document, exported_with(document.revision))
     assert driver.run() is None
-    client.download_layer.assert_not_called()
     storage.export_manifest.assert_not_called()
+
+
+@pytest.mark.parametrize("previous", [None, 0])
+def test_run_reexports_when_annotations_changed(document: AnnotationDocument, previous: int | None) -> None:
+    """A publish (new revision) re-exports a run already exported with older annotations."""
+    driver, client, storage = make_driver(document, exported_with(previous))
+    storage.export_manifest.return_value = "web_exports/y/manifest.json"
+    assert driver.run() is not None
+    storage.mark_model_run_exported.assert_called_once_with("uwwrf", INITIALIZED, "web_exports/y/manifest.json", document.revision)
+
+
+def test_run_skips_without_published_annotations() -> None:
+    driver, client, storage = make_driver(None, None)
+    assert driver.run() is None
+    client.current_run_initialization.assert_not_called()
+    storage.export_manifest.assert_not_called()
+
+
+def test_fit_report_matches_snapshot_thresholds(document: AnnotationDocument) -> None:
+    """The snapshot's thresholds are 1.5x its fit errors, so nothing is over threshold."""
+    report = fit_report(document)
+    assert set(report) == set(document.maptypes)
+    for maptype, fit in report.items():
+        assert fit.error is None and fit.mean_error_m is not None
+        assert not fit.over_threshold
+        assert fit.fit_threshold_m == pytest.approx(fit.mean_error_m * 1.5, abs=5)
+    assert report["washington"].mean_error_m == pytest.approx(779, abs=1)
+
+
+def test_fit_report_flags_too_few_points(document: AnnotationDocument) -> None:
+    sparse = AnnotationDocument.from_json(document.to_json())
+    images = sparse.maptypes["washington"].images
+    for image in images.values():
+        image.annotations = dict(list(image.annotations.items())[:1])
+    del images["legacy-hour36"]
+    fit = fit_report(sparse)["washington"]
+    assert fit.mean_error_m is None and "two control points" in fit.error
+    with pytest.raises(ValueError, match="washington"):
+        Registration.build(sparse)
 
 
 def test_cli_registers_commands() -> None:

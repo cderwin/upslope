@@ -8,14 +8,15 @@ const props = defineProps<{
   open: boolean
   draft: AnnotationDraft | null
   points: [string, GeographicPoint][]
-  /** The point key an edited annotation currently references. */
-  initialPointKey: string | null
+  /** Points already annotated on this image; picking one moves its annotation here. */
+  annotatedPoints: string[]
+  busy: boolean
 }>()
 
 const emit = defineEmits<{
   'update:open': [value: boolean]
   save: [result: AnnotationResult]
-  delete: [index: number]
+  delete: [point: string]
 }>()
 
 const element = ref<HTMLElement | null>(null)
@@ -25,13 +26,21 @@ const pixelX = ref(0)
 const pixelY = ref(0)
 const selectedKey = ref('')
 const name = ref('')
-const key = ref('')
 const latitude = ref('')
 const longitude = ref('')
 const error = ref('')
 
-const isEdit = computed(() => props.draft?.index != null)
+const isEdit = computed(() => props.draft?.point != null)
 const isNewPoint = computed(() => selectedKey.value === '')
+const keyPreview = computed(() => (isNewPoint.value ? (name.value.trim() ? toKey(name.value) : '') : selectedKey.value))
+
+/** Picking a point that is already elsewhere on this image moves that annotation. */
+const movesExisting = computed(
+  () =>
+    !isNewPoint.value &&
+    selectedKey.value !== props.draft?.point &&
+    props.annotatedPoints.includes(selectedKey.value),
+)
 
 watch(
   () => props.draft,
@@ -40,42 +49,16 @@ watch(
     error.value = ''
     pixelX.value = draft.pixel_x
     pixelY.value = draft.pixel_y
-    selectedKey.value = props.initialPointKey ?? ''
-    if (!selectedKey.value) {
-      name.value = ''
-      key.value = ''
-      latitude.value = ''
-      longitude.value = ''
-    } else {
-      fillFromSelected()
-    }
+    selectedKey.value = draft.point ?? ''
+    fillFromSelected()
   },
 )
 
 function fillFromSelected() {
   const found = props.points.find(([k]) => k === selectedKey.value)
-  if (!found) return
-  const [k, point] = found
-  key.value = k
-  name.value = point.name
-  latitude.value = String(point.latitude)
-  longitude.value = String(point.longitude)
-}
-
-function onSelectPoint() {
-  error.value = ''
-  if (isNewPoint.value) {
-    name.value = ''
-    key.value = ''
-    latitude.value = ''
-    longitude.value = ''
-  } else {
-    fillFromSelected()
-  }
-}
-
-function onNameInput() {
-  if (isNewPoint.value) key.value = toKey(name.value)
+  name.value = found?.[1].name ?? ''
+  latitude.value = found ? String(found[1].latitude) : ''
+  longitude.value = found ? String(found[1].longitude) : ''
 }
 
 function submit() {
@@ -103,10 +86,11 @@ function submit() {
   }
 
   emit('save', {
-    index: props.draft?.index ?? null,
-    annotation: { pixel_x: x, pixel_y: y, point: selectedKey.value || toKey(key.value || trimmedName) },
-    existingKey: selectedKey.value || null,
+    previousPoint: props.draft?.point ?? null,
+    pointKey: selectedKey.value || null,
     point: { name: trimmedName, latitude: lat, longitude: lon },
+    pixel_x: x,
+    pixel_y: y,
   })
 }
 </script>
@@ -136,42 +120,30 @@ function submit() {
 
           <div class="mb-3">
             <label class="form-label mb-1" for="field-point">Geographic point</label>
-            <select id="field-point" v-model="selectedKey" class="form-select" @change="onSelectPoint">
+            <select id="field-point" v-model="selectedKey" class="form-select" @change="fillFromSelected">
               <option value="">— new point —</option>
               <option v-for="[pointKey, point] in points" :key="pointKey" :value="pointKey">
                 {{ point.name }} ({{ point.latitude }}, {{ point.longitude }})
               </option>
             </select>
+            <div v-if="movesExisting" class="form-text text-warning-emphasis">
+              This point is already on this image; saving moves it here.
+            </div>
           </div>
 
           <div class="mb-2">
             <label class="form-label mb-1" for="field-name">Name</label>
-            <input
-              id="field-name"
-              v-model="name"
-              type="text"
-              class="form-control"
-              placeholder="Cape Flattery, WA"
-              required
-              @input="onNameInput"
-            />
+            <input id="field-name" v-model="name" type="text" class="form-control" placeholder="Cape Flattery, WA" required />
           </div>
 
           <div class="mb-2">
             <label class="form-label mb-1" for="field-key">Key</label>
-            <input
-              id="field-key"
-              v-model="key"
-              type="text"
-              class="form-control font-monospace"
-              placeholder="cape_flattery"
-              :readonly="!isNewPoint"
-            />
+            <input id="field-key" :value="keyPreview" type="text" class="form-control font-monospace" readonly />
             <div class="form-text">
               {{
                 isNewPoint
-                  ? 'YAML key under geographic_points. Auto-filled from the name.'
-                  : 'Existing key; edits here update this point everywhere it is used.'
+                  ? 'Generated from the name when saved (a suffix is added if it is taken).'
+                  : 'Changing the name or location updates this point everywhere it is used.'
               }}
             </div>
           </div>
@@ -195,15 +167,14 @@ function submit() {
             v-if="isEdit"
             type="button"
             class="btn btn-outline-danger"
-            @click="emit('delete', props.draft!.index!)"
+            :disabled="busy"
+            @click="emit('delete', props.draft!.point!)"
           >
-            Delete
+            Remove from image
           </button>
           <div class="ms-auto d-flex gap-2">
-            <button type="button" class="btn btn-secondary" @click="emit('update:open', false)">
-              Cancel
-            </button>
-            <button type="submit" class="btn btn-primary">Save</button>
+            <button type="button" class="btn btn-secondary" @click="emit('update:open', false)">Cancel</button>
+            <button type="submit" class="btn btn-primary" :disabled="busy">Save</button>
           </div>
         </div>
       </form>

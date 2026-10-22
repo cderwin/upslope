@@ -1,7 +1,8 @@
-# Local end-to-end stack: MinIO as the S3 backend, plus the upslope server, which exports
-# the current WRF run at startup and then hourly.
+# Local end-to-end stack: MinIO as the S3 backend, seeded with the repo's annotation snapshot
+# (dev/georegistration), plus the upslope server, which exports the current WRF run at startup
+# and then hourly.
 #   just up      # build and start, then open http://localhost:8000/map
-#   just reset   # stop and wipe MinIO's data
+#   just reset   # stop and wipe MinIO's data (the next `up` seeds the snapshot again)
 #
 # Local-only credentials; nothing here is used in production.
 
@@ -47,16 +48,31 @@ services:
     command:
       - mc alias set local http://minio:9000 upslope upslope-local-secret && mc mb --ignore-existing local/upslope-storage
 
-  server:
-    build:
+  # Uploads dev/georegistration as the draft and published annotations; skips if MinIO already has a draft.
+  georegistration-seed:
+    build: &upslope-build
       context: .
       args:
         VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
     image: upslope:local
-    command: ["upslope", "serve", "--export-on-startup"]
+    command: ["upslope", "georegistration", "upload", "/seed"]
     environment: *s3-env
+    volumes:
+      - ./dev/georegistration:/seed:ro
     depends_on:
       minio-init:
+        condition: service_completed_successfully
+
+  server:
+    build: *upslope-build
+    image: upslope:local
+    command: ["upslope", "serve", "--export-on-startup"]
+    environment:
+      <<: *s3-env
+      # token for /admin and the annotation page; set ADMIN_TOKEN in .env.local to override
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-upslope-local-admin}
+    depends_on:
+      georegistration-seed:
         condition: service_completed_successfully
     ports:
       - "8000:8000"

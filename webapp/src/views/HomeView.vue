@@ -12,8 +12,8 @@ import { RouterLink } from 'vue-router'
         <div class="card-body">
           <h2 class="h5 card-title">Georegistration</h2>
           <p class="card-text">
-            Tie pixels in a WRF output image to geographic coordinates, and export them in the
-            <code>annotations.yaml</code> format the Python tooling reads.
+            Tie pixels in WRF forecast images to geographic coordinates, and publish them for the
+            forecast export. Needs the admin token.
           </p>
           <RouterLink class="btn btn-primary" :to="{ name: 'annotation' }">Open /annotation</RouterLink>
         </div>

@@ -11,8 +11,16 @@ export function useBootstrapModal(
   onHidden: () => void,
 ) {
   const instance = ref<Modal | null>(null)
+  /** Set while a hide we started is animating, so its `hidden` event isn't taken as a dismissal. */
+  let hidingForState = false
 
   function handleHidden() {
+    if (hidingForState) {
+      hidingForState = false
+      // `open` flipped back on mid-animation, when Bootstrap ignores show(); show it now.
+      if (open.value) instance.value?.show()
+      return
+    }
     if (open.value) onHidden()
   }
 
@@ -31,7 +39,10 @@ export function useBootstrapModal(
 
   watch(open, (isOpen) => {
     if (isOpen) instance.value?.show()
-    else instance.value?.hide()
+    else if (element.value?.classList.contains('show')) {
+      hidingForState = true
+      instance.value?.hide()
+    }
   })
 
   return { hide: () => instance.value?.hide() }
