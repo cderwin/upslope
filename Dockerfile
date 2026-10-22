@@ -11,9 +11,6 @@ WORKDIR /app/webapp
 COPY webapp/package.json webapp/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
 COPY webapp/ ./
-# the annotation tool bundles the control points and copies the images into dist/
-COPY data/georegistration/annotations.yaml /app/data/georegistration/annotations.yaml
-COPY data/georegistration/images /app/data/georegistration/images
 # Public Mapbox token; Vite inlines it into the JS bundle. Without it /map shows a warning.
 ARG VITE_MAPBOX_TOKEN=""
 RUN VITE_MAPBOX_TOKEN="$VITE_MAPBOX_TOKEN" npm run build
@@ -47,7 +44,6 @@ RUN useradd --create-home --uid 1000 upslope
 WORKDIR /app
 COPY --from=python /app/python /app/python
 COPY --chmod=644 data/wrf_codes.yaml /app/data/wrf_codes.yaml
-COPY --chmod=644 data/georegistration/annotations.yaml /app/data/georegistration/annotations.yaml
 COPY --from=webapp /app/webapp/dist /app/webapp/dist
 ENV PATH="/app/python/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
