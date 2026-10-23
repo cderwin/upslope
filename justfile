@@ -91,7 +91,7 @@ reset:
 
 # --- deploy
 
-# Deploy to Fly.io (one machine, so the hourly export runs once)
+# Deploy to Fly.io by hand (merging to main deploys via GitHub Actions; one machine, so the hourly export runs once)
 [group('deploy')]
 deploy:
     fly deploy --ha=false --build-arg VITE_MAPBOX_TOKEN="${VITE_MAPBOX_TOKEN:-}"

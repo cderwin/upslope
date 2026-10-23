@@ -112,5 +112,20 @@ in-process lock.
 ```sh
 fly storage create                # once: provisions Tigris and sets the AWS_* secrets
 fly secrets set ADMIN_TOKEN=...   # once
-just deploy
 ```
+
+**Merging to `main` deploys.** GitHub Actions (`.github/workflows/`) runs:
+
+| Workflow | When | What |
+| --- | --- | --- |
+| `ci.yml` | Every pull request | Backend tests and webapp typecheck (same as `just test`) |
+| `deploy.yml` | Push to `main`, or run by hand from the Actions tab | `ci.yml`, then `flyctl deploy --remote-only --ha=false` |
+
+Deploys run one at a time and are never cancelled midway. They need two
+repository secrets (Settings → Secrets and variables → Actions):
+
+- `FLY_API_TOKEN`: a deploy token scoped to the app, from `fly tokens create deploy -a upslope`
+- `VITE_MAPBOX_TOKEN`: the public Mapbox token, baked into the webapp at build time
+
+To deploy by hand from your machine (for example if Actions is down), run
+`just deploy`, which uses `VITE_MAPBOX_TOKEN` from `.env.local`.
