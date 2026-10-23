@@ -3,9 +3,10 @@ import AnnotationView from '@/views/AnnotationView.vue'
 
 const routes: RouteRecordRaw[] = [
   {
+    // The map is the app; there's no separate landing page.
     path: '/',
     name: 'home',
-    component: () => import('@/views/HomeView.vue'),
+    redirect: { name: 'map' },
   },
   {
     // The annotation tool lives under /annotation; the optional maptype/image
@@ -32,6 +33,11 @@ const routes: RouteRecordRaw[] = [
     name: 'map-layer',
     component: () => import('@/views/MapView.vue'),
     props: true,
+  },
+  {
+    path: '/about',
+    name: 'about',
+    component: () => import('@/views/AboutView.vue'),
   },
   {
     path: '/:pathMatch(.*)*',

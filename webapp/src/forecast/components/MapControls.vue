@@ -17,9 +17,43 @@ const opacity = defineModel<number>('opacity', { required: true })
 const playing = defineModel<boolean>('playing', { required: true })
 const terrain = defineModel<boolean>('terrain', { required: true })
 
-const hourLabel = computed(() => {
+// The forecast covers the Pacific Northwest, so times read in Pacific time wherever the viewer is.
+const validFormat = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'America/Los_Angeles',
+  weekday: 'short',
+  month: 'short',
+  day: 'numeric',
+  hour: 'numeric',
+  timeZoneName: 'short',
+})
+const runFormat = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'UTC',
+  month: 'short',
+  day: 'numeric',
+  hour: '2-digit',
+  hourCycle: 'h23',
+})
+
+const initialized = computed(() => new Date(props.layer.initialized))
+
+const offsetLabel = computed(() => {
   const hour = props.hours[index.value]
-  return hour === undefined ? '—' : `+${String(hour).padStart(2, '0')}h`
+  return hour === undefined ? '' : `+${String(hour).padStart(2, '0')}h`
+})
+
+const validLabel = computed(() => {
+  const hour = props.hours[index.value]
+  const start = initialized.value.getTime()
+  if (hour === undefined || Number.isNaN(start)) return offsetLabel.value || '—'
+  return validFormat.format(new Date(start + hour * 3_600_000))
+})
+
+/** e.g. `Oct 22 06Z`, the convention for model run times. */
+const runLabel = computed(() => {
+  if (Number.isNaN(initialized.value.getTime())) return ''
+  const parts = runFormat.formatToParts(initialized.value)
+  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? ''
+  return `${part('month')} ${part('day')} ${part('hour')}Z`
 })
 </script>
 
@@ -63,10 +97,14 @@ const hourLabel = computed(() => {
       </div>
 
       <div>
-        <label class="form-label small mb-1 d-flex justify-content-between" for="forecast-hour">
-          <span>Forecast hour</span>
-          <span class="fw-semibold font-monospace">{{ hourLabel }}</span>
+        <label class="form-label small mb-1 d-flex justify-content-between align-items-baseline" for="forecast-hour">
+          <span>Valid time</span>
+          <span>
+            <span class="fw-semibold">{{ validLabel }}</span>
+            <span v-if="offsetLabel" class="text-body-secondary font-monospace ms-1">{{ offsetLabel }}</span>
+          </span>
         </label>
+        <div v-if="runLabel" class="small text-body-secondary">Model run {{ runLabel }}</div>
         <input
           id="forecast-hour"
           v-model.number="index"

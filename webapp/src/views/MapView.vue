@@ -8,6 +8,7 @@ import type { ForecastManifest } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
 import { adminToken } from '@/admin/token'
 import { useAnnotationStore } from '@/annotation/store'
+import { settings } from '@/settings/settings'
 
 /** Route params, so the selected layer is a shareable URL under /map. */
 const props = defineProps<{ model?: string; variable?: string }>()
@@ -27,7 +28,10 @@ const layer = computed(
     layers.value.find((l) => l.model === props.model && l.variable === props.variable) ?? layers.value[0],
 )
 
-const { index, frames, frame, url, playing, loadProgress, seekHour, step } = usePlayback(layer)
+const { index, frames, frame, url, playing, loadProgress, seekHour, step } = usePlayback(
+  layer,
+  computed(() => settings.frameIntervalMs),
+)
 const hours = computed(() => frames.value.map((f) => f.hour))
 
 function queryNumber(name: string): number | undefined {

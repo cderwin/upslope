@@ -2,15 +2,13 @@ import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
 import { frameUrl } from './api'
 import type { ForecastLayer } from './types'
 
-export const FRAME_INTERVAL_MS = 2000
-
 /**
  * Frame selection, looping playback and preloading for one forecast layer.
  *
  * Frames are preloaded when the layer changes; playback skips frames that are
  * not decoded yet rather than stalling on them.
  */
-export function usePlayback(layer: Ref<ForecastLayer | undefined>, intervalMs = FRAME_INTERVAL_MS) {
+export function usePlayback(layer: Ref<ForecastLayer | undefined>, intervalMs: Readonly<Ref<number>>) {
   const index = ref(0)
   const playing = ref(false)
   const loaded = ref(new Set<number>())
@@ -69,9 +67,10 @@ export function usePlayback(layer: Ref<ForecastLayer | undefined>, intervalMs = 
   }
 
   let timer: ReturnType<typeof setInterval> | undefined
-  watch(playing, (isPlaying) => {
+  // Restart the timer when the speed changes mid-playback.
+  watch([playing, intervalMs], ([isPlaying, ms]) => {
     clearInterval(timer)
-    if (isPlaying) timer = setInterval(advance, intervalMs)
+    if (isPlaying) timer = setInterval(advance, ms)
   })
   onScopeDispose(() => clearInterval(timer))
 

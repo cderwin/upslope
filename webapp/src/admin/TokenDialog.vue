@@ -30,7 +30,7 @@ function submit() {
             That token was rejected. Check it and try again.
           </div>
           <p class="small text-body-secondary">
-            Editing annotations needs the server's <code>ADMIN_TOKEN</code>. It is kept for this tab only.
+            Editing annotations needs the server's <code>ADMIN_TOKEN</code>. It is kept in this browser until you log out in Settings.
           </p>
           <label class="form-label mb-1" for="field-token">Token</label>
           <input id="field-token" v-model="value" type="password" class="form-control font-monospace" autocomplete="off" required />

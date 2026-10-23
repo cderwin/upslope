@@ -1,7 +1,8 @@
 import { reactive, readonly } from 'vue'
 
 /**
- * The admin API's bearer token, kept for this browser tab only (sessionStorage).
+ * The admin API's bearer token, kept in localStorage so a login lasts across
+ * tabs and restarts until the user logs out from Settings.
  *
  * When a request is refused, `request()` opens the token prompt with the reason;
  * `TokenDialog` reads this state and calls `setToken` with what the user enters.
@@ -13,7 +14,13 @@ export type PromptReason = 'missing' | 'rejected'
 
 function readStored(): string {
   try {
-    return sessionStorage.getItem(STORAGE_KEY) ?? ''
+    const stored = localStorage.getItem(STORAGE_KEY)
+    if (stored !== null) return stored
+    // Earlier builds kept the token per tab; carry it over once.
+    const legacy = sessionStorage.getItem(STORAGE_KEY)
+    sessionStorage.removeItem(STORAGE_KEY)
+    if (legacy) localStorage.setItem(STORAGE_KEY, legacy)
+    return legacy ?? ''
   } catch {
     return ''
   }
@@ -33,7 +40,7 @@ export function setToken(token: string): void {
   state.prompt = null
   state.version++
   try {
-    sessionStorage.setItem(STORAGE_KEY, state.token)
+    localStorage.setItem(STORAGE_KEY, state.token)
   } catch {
     // Not persisted; the token still works for this page.
   }
@@ -42,7 +49,7 @@ export function setToken(token: string): void {
 export function clearToken(): void {
   state.token = ''
   try {
-    sessionStorage.removeItem(STORAGE_KEY)
+    localStorage.removeItem(STORAGE_KEY)
   } catch {
     // Nothing stored.
   }

@@ -2,7 +2,7 @@
 
 Vite + Vue 3 + TypeScript front end for upslope. The georegistration
 page, which edits annotations through the server's admin API, is routed under
-`/annotation`; the forecast map is under `/map`.
+`/annotation`; the forecast map is under `/map`, and `/` redirects there.
 
 ```sh
 npm install
@@ -16,15 +16,21 @@ npm run typecheck
 
 | Path                              | Name               | Purpose                                      |
 | --------------------------------- | ------------------ | -------------------------------------------- |
-| `/`                               | `home`             | Landing page                                  |
+| `/`                               | `home`             | Redirects to `/map`                           |
 | `/annotation`                     | `annotation`       | Georegistration tool, first image selected    |
 | `/annotation/:maptype/:image`     | `annotation-image` | Same tool, deep-linked to one image           |
 | `/map`                            | `map`              | Forecast map, first layer selected            |
 | `/map/:domain/:variable`          | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&terrain=1`) |
+| `/about`                          | `about`            | Project description and credits               |
 | anything else                     | `not-found`        | 404                                           |
 
 The dropdowns drive the router, so the current selection is always reflected in
 the URL and can be shared.
+
+The **Annotation** nav link appears only while an admin token is stored; the
+page itself still works by URL and asks for the token. The gear button in the
+navbar opens **Settings** (`src/settings/`): log in or out (store or clear the
+token) and set the playback speed. Settings are kept in `localStorage`.
 
 ## Where the data comes from
 
@@ -63,12 +69,16 @@ four corner coordinates, beneath the basemap's labels, with a Mercator
 projection to match the EPSG:3857 registration. The **3D terrain** switch adds
 Mapbox's terrain DEM (1.5× exaggeration), drapes the basemap and forecast over
 it, and tilts the camera; ctrl-drag or right-drag to tilt and rotate. All of a layer's
-frames are preloaded; playback advances one frame every 2 s and skips frames
-that are still loading. Space plays/pauses, ←/→ step.
+frames are preloaded; playback advances one frame every 2 s by default
+(0.25–4 s, set in Settings) and skips frames that are still loading. Space
+plays/pauses, ←/→ step. The controls show each frame's valid time (the layer's
+`initialized` time plus the frame's hour) in Pacific time, with the offset and
+the run time (UTC) alongside.
 
 ## Annotation page
 
-The page asks for the admin token (kept in `sessionStorage`) and loads the
+The page asks for the admin token (kept in `localStorage` until you log out in
+Settings) and loads the
 shared draft. `src/annotation/store.ts` holds the draft as the server last
 returned it: every change is a request, and the response replaces the whole
 document, so the browser never edits it locally. Destructive changes (deleting a
@@ -97,9 +107,12 @@ src/forecast/
   usePlayback.ts               Frame selection, playback, preloading
   components/                  ForecastMap (Mapbox), MapControls
 src/admin/
-  token.ts                     Admin token (sessionStorage) and prompt state
+  token.ts                     Admin token (localStorage) and prompt state
   api.ts                       Authenticated requests; 401/403/412 handling
   TokenDialog.vue              Token prompt
+src/settings/
+  settings.ts                  Viewer preferences (localStorage)
+  SettingsDialog.vue           Login/logout and playback speed
 src/annotation/
   types.ts                     Admin API document and dialog payload types
   api.ts                       /admin/georegistration client
