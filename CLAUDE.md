@@ -28,7 +28,8 @@ cd python && uv add <pkg>     # add a dependency (updates pyproject.toml and uv.
 
 `just py-export` / `just py-serve` / `just deploy` talk to real storage or
 production. Don't run them unless asked. `just up` runs everything locally
-against MinIO and is safe.
+against MinIO and is safe. Merging a PR to `main` deploys to production
+(`.github/workflows/deploy.yml`), so don't merge without being asked.
 
 ## Backend map
 
