@@ -25,7 +25,7 @@ variable_codes:
   - name: model-snow
     code: msnow3
   - name: snow
-    code: snow3  # i don't know the difference between 'model snow' and 'snow', but i really wish i did [using snow for 4km, since it doesn't have 3hr model snow)
+    code: snow3
   - name: snow-and-precip
     code: rsnow3
   - name: 24-hour-precip
@@ -36,105 +36,77 @@ variable_codes:
     code: wssfc
   - name: integrated-cloud
     code: intcld
+  - name: freezing-level
+    code: fzlc
+  - name: freezing-level-terrain
+    code: fzlt
+  - name: accumulated-snowfall
+    code: snowacc
+  - name: longwave
+    code: olr
 
 forecast_schedules:
   - name: 84-every-3
     hours: [6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84]
   - name: 72-every-3
     hours: [6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72]
+  - name: 120-every-3
+    hours: [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84, 87, 90, 93, 96, 99, 102, 105, 108, 111, 114, 117, 120]
+  # 3-hour accumulations: hour 0 is always empty and UW doesn't publish hour 3
+  - name: 120-every-3-from-6
+    hours: [6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84, 87, 90, 93, 96, 99, 102, 105, 108, 111, 114, 117, 120]
   - name: 180-every-3
     hours: [6, 9, 12, 15, 18, 21, 24, 27, 30, 33, 36, 39, 42, 45, 48, 51, 54, 57, 60, 63, 66, 69, 72, 75, 78, 81, 84, 87, 90, 93, 96, 99, 102, 105, 108, 111, 114, 117, 120, 123, 126, 129, 132, 135, 138, 141, 144, 147, 150, 153, 156, 159, 162, 165, 168, 171, 174, 177, 180]
   - name: 180-every-12
     hours: [24, 36, 48, 60, 72, 84, 96, 108, 120, 132, 144, 156, 168, 180]
 
 layers:
-  - domain: 12km
-    variable: 24-hour-precip
-    forecast_schedule: 180-every-12
-    maptype: 12km-domain
-
-  - domain: 12km
-    variable: 3-hour-precip
-    forecast_schedule: 180-every-3
-    maptype: 12km-domain
-
-  - domain: 12km
-    variable: surface-temp
-    forecast_schedule: 180-every-12
-    maptype: 12km-domain
-
-  - domain: 12km
-    variable: 10m-wind-speed
-    forecast_schedule: 180-every-12
-    maptype: 12km-domain
-
-  - domain: 12km
-    variable: integrated-cloud
-    forecast_schedule: 180-every-3
-    maptype: 12km-domain
-
-  - domain: 12km
-    variable: model-snow
-    forecast_schedule: 84-every-3
-    maptype: 12km-domain
-
-  - domain: 4km
-    variable: 3-hour-precip
-    forecast_schedule: 84-every-3
-    maptype: washington
-
-  - domain: 4km
-    variable: snow-and-precip
-    forecast_schedule: 84-every-3
-    maptype: pacific-northwest
-
   - domain: 4km
     variable: surface-temp
-    forecast_schedule: 84-every-3
+    forecast_schedule: 120-every-3
     maptype: washington
 
   - domain: 4km
     variable: 10m-wind-speed
-    forecast_schedule: 84-every-3
+    forecast_schedule: 120-every-3
     maptype: washington
 
   - domain: 4km
     variable: integrated-cloud
-    forecast_schedule: 84-every-3
+    forecast_schedule: 120-every-3
     maptype: pacific-northwest
+
+  - domain: 4km
+    variable: longwave
+    forecast_schedule: 120-every-3
+    maptype: pacific-northwest
+
+  - domain: 4km
+    variable: 3-hour-precip
+    forecast_schedule: 120-every-3-from-6
+    maptype: washington
 
   - domain: 4km
     variable: snow
-    forecast_schedule: 84-every-3
+    forecast_schedule: 120-every-3-from-6
     maptype: washington
 
-  - domain: 1.33km
-    variable: 3-hour-precip
-    forecast_schedule: 72-every-3
-    maptype: western-washington
-
-  - domain: 1.33km
+  - domain: 4km
     variable: model-snow
-    forecast_schedule: 72-every-3
-    maptype: western-washington
-
-  - domain: 1.33km
-    variable: snow-and-precip
-    forecast_schedule: 72-every-3
-    maptype: western-washington
-
-  - domain: 1.33km
-    variable: surface-temp
-    forecast_schedule: 72-every-3
-    maptype: western-washington
-
-  - domain: 1.33km
-    variable: 10m-wind-speed
-    forecast_schedule: 72-every-3
-    maptype: western-washington
-
-  - domain: 1.33km
-    variable: integrated-cloud
-    forecast_schedule: 72-every-3
+    forecast_schedule: 120-every-3-from-6
     maptype: pacific-northwest
 
+  - domain: 4km
+    variable: accumulated-snowfall
+    forecast_schedule: 120-every-3
+    maptype: pacific-northwest
+
+  - domain: 4km
+    variable: freezing-level-terrain
+    forecast_schedule: 120-every-3
+    maptype: pacific-northwest
+
+  - domain: 4km
+    variable: freezing-level
+    forecast_schedule: 120-every-3
+    maptype: pacific-northwest
