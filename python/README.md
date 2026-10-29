@@ -98,6 +98,17 @@ bucket. It reads storage settings from `AWS_ACCESS_KEY_ID`,
 `AWS_REGION`. Put them in the repo-root `.env.local` (gitignored; see
 `.env.example`); `just py-export` and `just py-serve` load it.
 
+The export downloads the newest model run UW has finished publishing, from the
+run's own directory (`wrfrt/data/<YYYYMMDDHH>/`; UW's `timeindep/` copy is
+overwritten in place mid-run and mixes two runs). A run counts as finished once
+the last scheduled hour of every configured layer exists. Each exported run gets
+a marker in `model_runs/uwwrf/<YYYYMMDDTHHMM>Z.json` recording its manifest, the
+published annotation revision and a fingerprint of the layer config
+(`WrfConfig.fingerprint()`). A run is exported again when either has changed, so
+a publish, or a deploy that changes `data/wrf_codes.yaml`, takes effect at the
+next export; production also exports at startup (`serve --export-on-startup`).
+The server serves the newest run's export.
+
 ```json
 {
   "started": "2026-10-21T10:58:34",

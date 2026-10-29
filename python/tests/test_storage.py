@@ -1,5 +1,6 @@
 import io
 from datetime import UTC, datetime
+from unittest.mock import MagicMock
 
 import boto3
 import pytest
@@ -66,6 +67,7 @@ def test_model_run_marker_reads_revision(stubbed) -> None:
     )
     marker = storage.model_run_marker("uwwrf", datetime(2026, 10, 21, 12, tzinfo=UTC))
     assert marker.registration_revision == 4
+    assert marker.config_fingerprint is None
     stubber.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
     assert storage.model_run_marker("uwwrf", datetime(2026, 10, 21, 0, tzinfo=UTC)) is None
 
@@ -159,3 +161,15 @@ def test_list_keys_pages_and_sorts(stubbed) -> None:
         "list_objects_v2", {"Contents": [{"Key": "p/c"}]}, {"Bucket": "b", "Prefix": "p/", "ContinuationToken": "t"}
     )
     assert storage.list_keys("p/") == ["p/a", "p/b", "p/c"]
+
+
+def test_marker_records_config_fingerprint() -> None:
+    s3 = MagicMock()
+    storage = StorageClient(s3=s3, bucket="b")
+    initialized = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    storage.mark_model_run_exported("uwwrf", initialized, "web_exports/x/manifest.json", 4, "abc123")
+    written = s3.put_object.call_args.kwargs["Body"]
+
+    s3.get_object.return_value = {"Body": body(written.encode())}
+    marker = storage.model_run_marker("uwwrf", initialized)
+    assert marker == ModelRunMarker("uwwrf", initialized, "web_exports/x/manifest.json", 4, "abc123")

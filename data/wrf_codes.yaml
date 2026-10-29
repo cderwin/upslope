@@ -44,6 +44,8 @@ variable_codes:
     code: snowacc
   - name: longwave
     code: olr
+  - name: snow-depth
+    code: snodep
 
 forecast_schedules:
   - name: 84-every-3
@@ -108,5 +110,10 @@ layers:
 
   - domain: 4km
     variable: freezing-level
+    forecast_schedule: 120-every-3
+    maptype: pacific-northwest
+
+  - domain: 4km
+    variable: snow-depth
     forecast_schedule: 120-every-3
     maptype: pacific-northwest

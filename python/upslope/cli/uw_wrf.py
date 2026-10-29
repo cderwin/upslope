@@ -17,9 +17,13 @@ from upslope.models.uw_wrf.wrf_client import WrfClient, WrfConfig
 def download(config: Path, output_path: Path) -> None:
     wrf_config = WrfConfig.load(config)
     wrf_client = WrfClient(wrf_config)
+    initialized = wrf_client.latest_complete_run()
+    if initialized is None:
+        raise click.ClickException("UW has no complete model run to download")
+    click.echo(f"Downloading model run initialized {initialized:%Y-%m-%d %HZ}")
     for i, layer in enumerate(wrf_config.layers):
         click.echo(f"Downloading layer {i + 1} of {len(wrf_config.layers)}")
-        wrf_client.download_layer(layer, output_path)
+        wrf_client.download_layer(layer, output_path, initialized)
 
 
 @click.command()
