@@ -3,17 +3,20 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ForecastMap from '@/forecast/components/ForecastMap.vue'
 import MapControls from '@/forecast/components/MapControls.vue'
+import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import {
   FORECAST_BASE_URL,
+  IN_PROGRESS,
   fetchRunManifest,
   fetchStatus,
   layerKey,
   runLayers,
   runParam,
+  runLabel,
   runPathFromParam,
   selectRun,
 } from '@/forecast/api'
-import type { ForecastLayer, RunRef } from '@/forecast/types'
+import type { ForecastLayer, ForecastStatus, RunRef } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
 import { adminToken } from '@/admin/token'
 import { useAnnotationStore } from '@/annotation/store'
@@ -23,6 +26,8 @@ import { settings } from '@/settings/settings'
 const props = defineProps<{ model?: string; layer?: string }>()
 
 const DEFAULT_OPACITY = 0.7
+/** How often a preview of the in-progress run looks for new frames. */
+const PREVIEW_REFRESH_MS = 3 * 60_000
 
 const route = useRoute()
 const router = useRouter()
@@ -32,9 +37,31 @@ const layers = ref<ForecastLayer[]>([])
 const error = ref('')
 /** Retained runs, when `?run=` names one that isn't available. */
 const availableRuns = ref<RunRef[]>([])
+const status = ref<ForecastStatus | null>(null)
+const statusOpen = ref(false)
 
-/** `?run=`: a run other than the latest, e.g. `2026-10-29T00Z`. */
+/** `?run=`: a run other than the latest, e.g. `2026-10-29T00Z`, or `in-progress` to preview the newest run. */
 const runQuery = computed(() => (typeof route.query.run === 'string' ? route.query.run : undefined))
+const previewing = computed(() => runQuery.value === IN_PROGRESS)
+
+/** Status button color: blue while a run is coming in, amber if a layer is stuck, red on errors. */
+const statusTone = computed(() => {
+  const runs = (status.value?.models ?? []).map((model) => model.in_progress).filter((run) => run !== null)
+  const states = runs.flatMap((run) => run.layers.map((layer) => layer.state))
+  if (states.includes('error')) return 'danger'
+  if (states.includes('stalled')) return 'warning'
+  if (runs.some((run) => !run.complete)) return 'info'
+  return 'success'
+})
+
+/** The banner for a preview: which run, and how far along. */
+const previewLabel = computed(() => {
+  const current = layer.value
+  if (!previewing.value || !current) return ''
+  const total = current.hours.length
+  const done = current.frames.length
+  return `Previewing the ${runLabel(current.initialized)} run${done < total ? `, still coming in (${done} of ${total} frames of this layer)` : ''}.`
+})
 
 const layer = computed(
   () => layers.value.find((l) => l.model === props.model && l.id === props.layer) ?? layers.value[0],
@@ -106,7 +133,7 @@ function showLatest() {
 
 let abort = new AbortController()
 
-/** Load each model's latest run, or the run `?run=` names. */
+/** Load each model's latest run, or the run `?run=` names. A refresh keeps showing the map meanwhile. */
 async function load() {
   abort.abort()
   abort = new AbortController()
@@ -118,17 +145,20 @@ async function load() {
     if (runQuery.value !== undefined && runPath === null) {
       throw new Error(`"${runQuery.value}" is not a model run; use a time like 2026-10-29T00Z.`)
     }
-    const status = await fetchStatus(signal)
-    const selected = status.models.flatMap((model) => {
+    const current = await fetchStatus(signal)
+    status.value = current
+    const selected = current.models.flatMap((model) => {
       const run = selectRun(model, runPath)
       return run ? [{ model, run }] : []
     })
     const manifests = await Promise.all(selected.map(({ model, run }) => fetchRunManifest(model.id, run, signal)))
-    const next = manifests.flatMap((manifest, i) => runLayers(manifest, selected[i].run, selected[i].model.latest))
+    const next = manifests.flatMap((manifest, i) => runLayers(manifest, selected[i].run, selected[i].model))
     if (signal.aborted) return
     layers.value = next
-    if (!next.length && runPath !== null) {
-      availableRuns.value = status.models.flatMap((model) => model.runs)
+    if (!next.length && runPath === IN_PROGRESS) {
+      error.value = 'No model run is in progress with any frames yet.'
+    } else if (!next.length && runPath !== null) {
+      availableRuns.value = current.models.flatMap((model) => model.runs)
       error.value = `No forecast is available for the ${runQuery.value} run. Runs are kept for a week.`
     } else if (!next.length) {
       error.value = 'No forecast has been exported yet.'
@@ -139,6 +169,17 @@ async function load() {
 }
 
 watch(runQuery, () => void load())
+
+// A preview picks up new frames as the run comes in.
+let previewTimer: number | undefined
+watch(
+  previewing,
+  (on) => {
+    window.clearInterval(previewTimer)
+    if (on) previewTimer = window.setInterval(() => void load(), PREVIEW_REFRESH_MS)
+  },
+  { immediate: true },
+)
 
 function onKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null
@@ -156,6 +197,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
+  window.clearInterval(previewTimer)
   window.removeEventListener('keydown', onKeydown)
   abort.abort()
 })
@@ -182,6 +224,16 @@ onBeforeUnmount(() => {
           </template>
           <a href="#" @click.prevent="showLatest">Show the latest run</a>
         </div>
+        <div v-if="status" class="small mt-1">
+          <RouterLink
+            v-if="!previewing && status.models.some((model) => model.in_progress)"
+            :to="{ query: { ...route.query, run: IN_PROGRESS } }"
+          >
+            Preview the run in progress
+          </RouterLink>
+          <span v-if="!previewing && status.models.some((model) => model.in_progress)"> · </span>
+          <a href="#" @click.prevent="statusOpen = true">Model run status</a>
+        </div>
         <small v-else>
           Forecast data comes from <code>{{ FORECAST_BASE_URL }}/status</code>. In development, run the local
           stack (<code>just up</code>), which the dev server proxies <code>/fx</code> to.
@@ -189,8 +241,12 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <template v-else-if="layer && url">
-      <div v-if="!layer.latest" class="run-banner alert alert-warning py-1 px-2 mb-0 small shadow-sm">
-        Showing an older model run.
+      <div v-if="previewing" class="run-banner alert alert-info py-1 px-2 mb-0 small shadow-sm">
+        {{ previewLabel }}
+        <a href="#" class="alert-link" @click.prevent="showLatest">Show the latest complete run</a>
+      </div>
+      <div v-else-if="!layer.latest" class="run-banner alert alert-warning py-1 px-2 mb-0 small shadow-sm">
+        Showing {{ layer.inProgress ? 'a run that is still coming in' : 'an older model run' }}.
         <a href="#" class="alert-link" @click.prevent="showLatest">Show the latest</a>
       </div>
       <ForecastMap :token="token" :layer="layer" :url="url" :opacity="opacity" :terrain="terrain" />
@@ -206,6 +262,15 @@ onBeforeUnmount(() => {
         @select-layer="selectLayer"
         @step="step"
       >
+        <button
+          type="button"
+          class="btn btn-sm btn-outline-secondary w-100 d-flex align-items-center justify-content-center gap-2"
+          title="Latest and in-progress model runs"
+          @click="statusOpen = true"
+        >
+          <span class="status-dot" :class="`bg-${statusTone}`" aria-hidden="true"></span>
+          Model runs
+        </button>
         <div v-if="adminToken.token">
           <button
             type="button"
@@ -224,6 +289,7 @@ onBeforeUnmount(() => {
     <div v-else class="d-flex h-100 align-items-center justify-content-center text-body-secondary">
       Loading forecast…
     </div>
+    <RunStatusDialog v-model:open="statusOpen" :initial="status" @loaded="status = $event" />
   </div>
 </template>
 
@@ -231,6 +297,13 @@ onBeforeUnmount(() => {
 .map-view {
   position: absolute;
   inset: 0;
+}
+
+.status-dot {
+  display: inline-block;
+  width: 0.6rem;
+  height: 0.6rem;
+  border-radius: 50%;
 }
 
 .run-banner {

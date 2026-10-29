@@ -8,9 +8,9 @@ from litestar.testing import TestClient
 from upslope.clients.forecasts import ForecastStore
 from upslope.clients.storage import StoredObject
 from upslope.models.config import HourRange, LayerConfig, ModelConfig, ModelsConfig
-from upslope.models.manifest import RunManifest, RunPointer
+from upslope.models.manifest import InProgress, LayerProgress, RunManifest, RunPointer
 from upslope.server.app import create_app
-from upslope.server.forecast import StatusCache
+from upslope.server.forecast import STALL_AFTER, StatusCache, in_progress_status
 
 INITIALIZED = datetime(2026, 10, 21, 12, tzinfo=UTC)
 LAYER = LayerConfig("surface-temp", "Surface temperature", "https://x/{init:%Y%m%d%H}/{hour:02d}.gif", HourRange(last=3), "washington")
@@ -69,12 +69,13 @@ def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
                 "id": "uwwrf_4km",
                 "name": "UW WRF 4km",
                 "latest": {"initialized": "2026-10-21T12:00:00+00:00", "path": "2026/10/21/1200Z"},
+                "in_progress": None,
                 "runs": [
                     {"initialized": "2026-10-21T12:00:00+00:00", "path": "2026/10/21/1200Z"},
                     {"initialized": "2026-10-21T00:00:00+00:00", "path": "2026/10/21/0000Z"},
                 ],
             },
-            {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "runs": []},
+            {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "in_progress": None, "runs": []},
         ]
     }
 
@@ -107,7 +108,11 @@ def test_status_cache_concurrent_stale_requests_share_one_lookup(memory_storage)
         reads += 1
         return original(model)
 
-    cache._store = type("Counting", (), {"read_latest": staticmethod(counting_read_latest), "list_runs": store.list_runs})()
+    cache._store = type(
+        "Counting",
+        (),
+        {"read_latest": staticmethod(counting_read_latest), "list_runs": store.list_runs, "read_in_progress": store.read_in_progress},
+    )()
 
     async def scenario() -> None:
         await asyncio.gather(*(cache.get() for _ in range(10)))
@@ -126,10 +131,61 @@ def test_status_cache_serves_cached_status_when_refresh_fails(memory_storage) ->
         def fail(model: str) -> None:
             raise RuntimeError("s3 down")
 
-        cache._store = type("Broken", (), {"read_latest": staticmethod(fail), "list_runs": staticmethod(fail)})()
+        cache._store = type(
+            "Broken", (), {"read_latest": staticmethod(fail), "list_runs": staticmethod(fail), "read_in_progress": staticmethod(fail)}
+        )()
         assert (await cache.get()).models[0].latest.initialized == INITIALIZED
 
     asyncio.run(scenario())
+
+
+def test_status_includes_in_progress_run(client: TestClient, storage) -> None:
+    run = INITIALIZED + timedelta(hours=12)
+    checked = run + timedelta(hours=2)
+    ForecastStore(storage).write_in_progress(
+        InProgress("uwwrf_4km", run, "2026/10/22/0000Z", checked, [LayerProgress("surface-temp", 3, 0, checked)])
+    )
+    export_run(storage, initialized=run, latest=False)
+    # a fresh app, since the fixture's has already cached the status
+    with TestClient(create_app(storage=storage, webapp_dist=Path("/nonexistent"), run_jobs=False, config=CONFIG)) as fresh:
+        status = fresh.get("/fx/status").json()["models"][0]
+    assert status["latest"]["path"] == "2026/10/21/1200Z"
+    assert status["runs"][0]["path"] == "2026/10/22/0000Z"
+    progress = status["in_progress"]
+    assert (progress["path"], progress["complete"]) == ("2026/10/22/0000Z", False)
+    assert progress["layers"][0]["id"] == "surface-temp" and progress["layers"][0]["name"] == "Surface temperature"
+    assert (progress["layers"][0]["available_hour"], progress["layers"][0]["last_hour"]) == (0, 3)
+
+
+NOW = datetime(2026, 10, 22, 6, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("layer", "state"),
+    [
+        (LayerProgress("surface-temp", 3, 3, NOW - timedelta(hours=5)), "complete"),
+        (LayerProgress("surface-temp", 3, 0, NOW - timedelta(minutes=20)), "waiting"),
+        (LayerProgress("surface-temp", 3, 0, NOW - STALL_AFTER - timedelta(minutes=1)), "stalled"),
+        (LayerProgress("surface-temp", 3, 0, NOW, "hour 3: HTTP 503", NOW), "error"),
+        # no frames yet: measured from when the run's first frame arrived (the other layer's)
+        (LayerProgress("surface-temp", 3, None, None), "stalled"),
+    ],
+)
+def test_layer_states(layer: LayerProgress, state: str) -> None:
+    other = LayerProgress("snow", 6, 3, NOW - timedelta(hours=3))
+    model = ModelConfig("m", "M", [0], [LAYER, LayerConfig("snow", "Snow", LAYER.url, HourRange(first=3, last=6), "washington")])
+    status = in_progress_status(model, InProgress("m", NOW, "p", NOW, [layer, other]), NOW)
+    assert status.layers[0].state == state
+    assert status.layers[1].state == "stalled"
+    assert not status.complete
+
+
+def test_layer_states_for_new_and_finished_runs() -> None:
+    model = ModelConfig("m", "M", [0], [LAYER])
+    # a layer added to the config since the last check is waiting
+    assert in_progress_status(model, InProgress("m", NOW, "p", NOW, []), NOW).layers[0].state == "waiting"
+    done = in_progress_status(model, InProgress("m", NOW, "p", NOW, [LayerProgress("surface-temp", 3, 3, NOW)]), NOW)
+    assert done.complete and done.layers[0].name == "Surface temperature"
 
 
 # --- forecast data
@@ -254,14 +310,17 @@ def test_missing_dist_still_serves_api(tmp_path: Path, storage) -> None:
 # --- hourly job
 
 
-def test_seconds_until_next_hour() -> None:
-    from upslope.server.jobs import seconds_until_next_hour
+def test_seconds_until_next() -> None:
+    from upslope.server.jobs import seconds_until_next
 
-    assert seconds_until_next_hour(datetime(2026, 10, 21, 13, 59, 30)) == 30
-    assert seconds_until_next_hour(datetime(2026, 10, 21, 14, 0, 0)) == 3600
+    quarter = timedelta(minutes=15)
+    assert seconds_until_next(datetime(2026, 10, 21, 13, 59, 30), quarter) == 30
+    assert seconds_until_next(datetime(2026, 10, 21, 14, 0, 0), quarter) == 900
+    assert seconds_until_next(datetime(2026, 10, 21, 14, 7, 0), quarter) == 480
+    assert seconds_until_next(datetime(2026, 10, 21, 13, 59, 30), timedelta(hours=1)) == 30
 
 
-def test_run_hourly_runs_immediately_when_asked() -> None:
+def test_run_periodically_runs_immediately_when_asked() -> None:
     from unittest.mock import MagicMock, patch
 
     from upslope.server import jobs
@@ -273,10 +332,10 @@ def test_run_hourly_runs_immediately_when_asked() -> None:
         raise asyncio.CancelledError
 
     with patch.object(jobs.asyncio, "sleep", stop_on_sleep), pytest.raises(asyncio.CancelledError):
-        asyncio.run(jobs.run_hourly(driver, run_immediately=True))
+        asyncio.run(jobs.run_periodically(driver, run_immediately=True))
     assert driver.run.call_count == 1
 
     driver.reset_mock()
     with patch.object(jobs.asyncio, "sleep", stop_on_sleep), pytest.raises(asyncio.CancelledError):
-        asyncio.run(jobs.run_hourly(driver))
+        asyncio.run(jobs.run_periodically(driver))
     assert driver.run.call_count == 0

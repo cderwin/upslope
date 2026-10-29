@@ -36,9 +36,9 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | Path | Role |
 | --- | --- |
 | `cli/` | Click commands; `cli/main.py` registers them. `cli/__init__.py` holds repo paths (`PROJECT_BASE`, `DEFAULT_MODELS_CONFIG`, `DEV_GEOREGISTRATION`) |
-| `server/app.py` | `create_app()`: Litestar app, lifespan, hourly job wiring |
+| `server/app.py` | `create_app()`: Litestar app, lifespan, export job wiring |
 | `server/admin.py` | Admin API controller; maps `AnnotationError` subclasses to HTTP status codes |
-| `server/forecast.py`, `server/frontend.py`, `server/jobs.py` | Forecast API (`/fx/status`, `/fx/data`), webapp serving, hourly export loop |
+| `server/forecast.py`, `server/frontend.py`, `server/jobs.py` | Forecast API (`/fx/status`, `/fx/data`), webapp serving, periodic export loop |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris; conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
@@ -77,7 +77,7 @@ Match the surrounding code. Specifically:
   is blocking: call it through `asyncio.to_thread` from async code, as
   `annotation_service.py` and `server/jobs.py` do.
 - **Single machine.** Annotation edits are serialized by an in-process
-  `asyncio.Lock`, and the hourly export runs inside the server. Fly runs exactly
+  `asyncio.Lock`, and the periodic export runs inside the server. Fly runs exactly
   one machine (`--ha=false`). Don't add designs that assume multiple workers.
 - **Conditional writes.** Draft saves use ETag `If-Match` / `If-None-Match` so a
   concurrent writer is never silently overwritten. Every draft change increments

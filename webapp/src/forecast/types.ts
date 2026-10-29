@@ -11,12 +11,39 @@ export interface RunRef {
   path: string
 }
 
+export type LayerState = 'complete' | 'waiting' | 'stalled' | 'error'
+
+/** How far a layer of the in-progress run has got (python `LayerStatus`). */
+export interface LayerStatus {
+  id: string
+  name: string
+  /** `waiting` for the next hour; `stalled` if none has arrived for a while; `error` if the last try failed. */
+  state: LayerState
+  /** Newest hour exported, or null before the first. */
+  available_hour: number | null
+  last_hour: number
+  progressed_at: string | null
+  error: string | null
+}
+
+/** The newest run that has started publishing (python `InProgressStatus`). */
+export interface InProgressStatus {
+  initialized: string
+  path: string
+  /** When the server last checked it for new hours. */
+  checked_at: string
+  complete: boolean
+  layers: LayerStatus[]
+}
+
 /** python `ModelStatus`. */
 export interface ModelStatus {
   id: string
   name: string
   /** Newest complete run, if any has been exported. */
   latest: RunRef | null
+  /** Newest run that has started, and how far it has got. */
+  in_progress: InProgressStatus | null
   /** Retained runs with a manifest, newest first. */
   runs: RunRef[]
 }
@@ -80,6 +107,8 @@ export interface ForecastLayer {
   initialized: string
   /** Whether the run is the model's latest complete run. */
   latest: boolean
+  /** Whether the run is the model's in-progress run (which may also be complete). */
+  inProgress: boolean
   /** `[width, height]` in pixels. */
   dimensions: [number, number]
   /** Image corners: top-left, top-right, bottom-right, bottom-left (Mapbox order). */

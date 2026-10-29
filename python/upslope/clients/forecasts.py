@@ -2,12 +2,14 @@
 
 ```
 forecasts/<model>/latest.json                         newest complete run (RunPointer)
+forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>.png   frames, named by valid time
 ```
 
-A run's frames are uploaded before the manifest that lists them, and the manifest before `latest.json`
-points at the run, so a reader that follows the pointers never finds a missing file.
+A run's manifest is rewritten as its frames arrive. Frames are uploaded before the manifest that lists them,
+and a run is complete before `latest.json` points at it, so a reader that follows the pointers never finds a
+missing file.
 """
 
 import re
@@ -18,12 +20,13 @@ from attrs import define
 
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
-from upslope.models.manifest import RunManifest, RunPointer, run_path
+from upslope.models.manifest import InProgress, RunManifest, RunPointer, run_path
 
 logger = get_logger(__name__)
 
 PREFIX = "forecasts"
 LATEST = "latest.json"
+IN_PROGRESS = "in-progress.json"
 MANIFEST = "manifest.json"
 
 # Prefixes of the storage layout before forecasts/; only `delete_legacy` touches them
@@ -87,6 +90,15 @@ class ForecastStore:
         self.storage.put_bytes(f"{self.model_prefix(pointer.model)}/{LATEST}", pointer.to_json(), "application/json")
         logger.info("%s latest run is now %s", pointer.model, pointer.path)
 
+    def read_in_progress(self, model: str) -> InProgress | None:
+        """The model's newest started run and its progress, or None if no run has started."""
+        stored = self.storage.get_bytes(f"{self.model_prefix(model)}/{IN_PROGRESS}")
+        return None if stored is None else InProgress.from_json(stored.data)
+
+    def write_in_progress(self, progress: InProgress) -> None:
+        """Write `in-progress.json`. Write the run's manifest first."""
+        self.storage.put_bytes(f"{self.model_prefix(progress.model)}/{IN_PROGRESS}", progress.to_json(), "application/json")
+
     def list_runs(self, model: str) -> list[datetime]:
         """Initialization times of the model's runs that have a manifest, newest first."""
         prefix = f"{self.model_prefix(model)}/"
@@ -114,7 +126,7 @@ class ForecastStore:
         doomed: dict[datetime, list[str]] = {}
         for key in self.storage.list_keys(prefix):
             parts = key.removeprefix(prefix).split("/")
-            if len(parts) < 5:  # latest.json and other model-level files
+            if len(parts) < 5:  # latest.json, in-progress.json and other model-level files
                 continue
             initialized = parse_run_path("/".join(parts[:4]))
             if initialized is not None and initialized < cutoff and initialized not in keep:

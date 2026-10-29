@@ -200,7 +200,7 @@ def test_export_frame_uploads_a_placed_png(registration: Registration, memory_st
     driver = ForecastDriver(config=ModelsConfig([model]), client=client, store=ForecastStore(memory_storage), annotations=MagicMock())
 
     run_layer = driver.new_layer(layer)
-    frame = driver.export_frame(model, layer, run_layer, INITIALIZED, 6, registration, tmp_path)
+    frame = driver.export_frame(model, layer, run_layer, INITIALIZED, 6, lambda: registration, tmp_path)
 
     assert (frame.hour, frame.valid, frame.path) == (6, INITIALIZED + timedelta(hours=6), "surface-temp/2026-10-21T1800.png")
     assert run_layer.frames == [frame]
@@ -290,19 +290,35 @@ def test_download_layer_reads_the_runs_directory(tmp_path: Path) -> None:
 
 
 class FakeUpstream:
-    """Serves the sample GIF for every image URL of `available` runs, and records the downloads."""
+    """Serves the sample GIF for every image of `available` runs, and of `partial` runs up to an hour.
 
-    def __init__(self, *available: datetime, fail: str | None = None) -> None:
-        self.available = {f"{run:%Y%m%d%H}" for run in available}
+    Records the downloads. Requests whose path contains `fail` time out; `status` overrides the response.
+    """
+
+    def __init__(
+        self, *available: datetime, partial: dict[datetime, int] | None = None, fail: str | None = None, status: int | None = None
+    ) -> None:
+        self.published = {f"{run:%Y%m%d%H}": 999 for run in available} | {
+            f"{run:%Y%m%d%H}": hour for run, hour in (partial or {}).items()
+        }
         self.fail = fail
+        self.status = status
         self.downloads: list[str] = []
         self.gif = SAMPLE_GIF.read_bytes()
 
+    def publish(self, run: datetime, through: int) -> None:
+        self.published[f"{run:%Y%m%d%H}"] = through
+
     def handler(self, request: httpx.Request) -> httpx.Response:
         path = request.url.path.removeprefix("/wrfrt/data/")
-        if self.fail and self.fail in path and request.method == "GET":
-            raise httpx.ConnectTimeout("timed out")
-        if path.split("/")[0] not in self.available:
+        if self.fail and self.fail in path:
+            if self.status:
+                return httpx.Response(self.status)
+            if request.method == "GET":
+                raise httpx.ConnectTimeout("timed out")
+        run, _, name = path.partition("/")
+        hour = int(name.split(".")[-3])
+        if hour > self.published.get(run, -1):
             return httpx.Response(404)
         if request.method == "GET":
             self.downloads.append(path)
@@ -372,7 +388,8 @@ def test_run_skips_a_run_exported_with_current_annotations_and_config(memory_sto
 
     assert driver.run() == []
     assert upstream.downloads == []
-    assert len(memory_storage.puts) == puts
+    # only the record of the check itself
+    assert memory_storage.puts[puts:] == ["forecasts/uwwrf_4km/in-progress.json"]
 
 
 def test_run_reexports_every_layer_when_annotations_change(memory_storage, published, document) -> None:
@@ -431,23 +448,22 @@ def test_run_failed_download_leaves_the_published_run_alone(memory_storage, publ
     older = INITIALIZED - timedelta(hours=12)
     make_export_driver(memory_storage, FakeUpstream(older), now=older + timedelta(hours=6)).run()
 
-    driver = make_export_driver(memory_storage, FakeUpstream(INITIALIZED, older, fail="wa_pcp3.06"))
-    with pytest.raises(ExportFailed):
-        driver.run()
+    make_export_driver(memory_storage, FakeUpstream(INITIALIZED, older, fail="wa_pcp3.06")).run()
     store = ForecastStore(memory_storage)
-    assert store.read_manifest("uwwrf_4km", INITIALIZED) is None
+    assert not store.read_manifest("uwwrf_4km", INITIALIZED).complete
     assert store.read_latest("uwwrf_4km").initialized == older
 
 
-def test_run_never_moves_latest_backwards(memory_storage, published) -> None:
+def test_run_ignores_runs_older_than_the_latest(memory_storage, published) -> None:
     store = ForecastStore(memory_storage)
     make_export_driver(memory_storage, FakeUpstream(INITIALIZED)).run()
 
-    # the newest run disappears upstream (or a deploy exports an older one with a new config)
+    # an older run upstream (here, the only one left) is never exported, and latest.json never moves back
     older = INITIALIZED - timedelta(hours=12)
-    changed = make_model(evolve(EXPORT_MODEL.layers[0], name="Temperature"), EXPORT_MODEL.layers[1])
-    make_export_driver(memory_storage, FakeUpstream(older), changed).run()
-    assert store.read_manifest("uwwrf_4km", older) is not None
+    upstream = FakeUpstream(older)
+    make_export_driver(memory_storage, upstream).run()
+    assert upstream.downloads == []
+    assert store.read_manifest("uwwrf_4km", older) is None
     assert store.read_latest("uwwrf_4km").initialized == INITIALIZED
 
 
@@ -461,12 +477,135 @@ def test_run_prunes_runs_past_retention(memory_storage, published) -> None:
 def test_run_exports_each_model_and_continues_past_failures(memory_storage, published) -> None:
     other = make_model(make_layer(hours=HourRange(last=0)), model_id="uwwrf_12km")
     broken = make_model(make_layer("snow", "wa_snow3", HourRange(last=0)), model_id="broken")
-    upstream = FakeUpstream(INITIALIZED, fail="wa_snow3")
+    # an outage checking for the broken model's runs fails that model only
+    upstream = FakeUpstream(INITIALIZED, fail="wa_snow3", status=503)
     driver = make_export_driver(memory_storage, upstream, EXPORT_MODEL, broken, other)
     with pytest.raises(ExportFailed) as failure:
         driver.run()
     assert failure.value.models == ["broken"]
     assert [manifest.model for manifest in failure.value.manifests] == ["uwwrf_4km", "uwwrf_12km"]
+
+
+# --- in-progress runs
+
+NEXT = INITIALIZED + timedelta(hours=12)
+
+
+def test_partial_run_is_exported_as_it_publishes(memory_storage, published) -> None:
+    """The newer run's published hours are exported; latest.json stays on the complete run until it finishes."""
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED, partial={NEXT: 3})
+    driver = make_export_driver(memory_storage, upstream, now=NEXT + timedelta(hours=3))
+    driver.run()
+
+    partial = store.read_manifest("uwwrf_4km", NEXT)
+    assert [(layer.id, [f.hour for f in layer.frames]) for layer in partial.layers] == [("surface-temp", [0, 3]), ("3-hour-precip", [3])]
+    assert not partial.complete
+    assert store.read_latest("uwwrf_4km").initialized == INITIALIZED
+    progress = store.read_in_progress("uwwrf_4km")
+    assert (progress.initialized, progress.path, progress.complete) == (NEXT, "2026/10/22/0000Z", False)
+    assert [(layer.id, layer.available_hour, layer.last_hour, layer.error) for layer in progress.layers] == [
+        ("surface-temp", 3, 3, None), ("3-hour-precip", 3, 6, None),
+    ]
+
+    # the next check downloads only the new hour, and the run becomes the latest
+    upstream.downloads.clear()
+    upstream.publish(NEXT, 999)
+    driver.run()
+    assert upstream.downloads == ["2026102200/images_d3/wa_pcp3.06.0000.gif"]
+    assert store.read_manifest("uwwrf_4km", NEXT).complete
+    assert store.read_latest("uwwrf_4km").initialized == NEXT
+    assert store.read_in_progress("uwwrf_4km").complete
+
+
+def test_resume_ignores_frame_order(memory_storage, published) -> None:
+    """A manifest whose frames aren't in hour order resumes from its highest hour, without re-downloading."""
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED, partial={NEXT: 3})
+    driver = make_export_driver(memory_storage, upstream, now=NEXT + timedelta(hours=3))
+    driver.run()
+    manifest = store.read_manifest("uwwrf_4km", NEXT)
+    manifest.layers[0].frames.reverse()
+    store.write_manifest(manifest)
+
+    upstream.downloads.clear()
+    upstream.publish(NEXT, 999)
+    driver.run()
+    assert upstream.downloads == ["2026102200/images_d3/wa_pcp3.06.0000.gif"]
+    assert store.read_in_progress("uwwrf_4km").layer("surface-temp").available_hour == 3
+    assert store.read_latest("uwwrf_4km").initialized == NEXT
+
+
+def test_run_not_started_writes_nothing(memory_storage, published) -> None:
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED)
+    driver = make_export_driver(memory_storage, upstream, now=NEXT + timedelta(hours=1))
+    driver.run()
+    assert store.read_manifest("uwwrf_4km", NEXT) is None
+    assert store.list_runs("uwwrf_4km") == [INITIALIZED]
+    # in-progress.json shows the newest run that has started, here the complete one
+    assert store.read_in_progress("uwwrf_4km").initialized == INITIALIZED
+
+
+def test_progress_time_is_kept_until_a_layer_advances(memory_storage, published) -> None:
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED, partial={NEXT: 0})
+    first = NEXT + timedelta(hours=1)
+    make_export_driver(memory_storage, upstream, now=first).run()
+    later = first + timedelta(minutes=15)
+    make_export_driver(memory_storage, upstream, now=later).run()
+    progress = store.read_in_progress("uwwrf_4km")
+    assert progress.checked_at == later
+    assert progress.layer("surface-temp").progressed_at == first
+    assert progress.layer("3-hour-precip").progressed_at is None  # starts at hour 3
+
+
+@pytest.mark.parametrize(("status", "error"), [(None, "ConnectTimeout: timed out"), (503, "HTTP 503")])
+def test_upstream_errors_are_recorded_and_retried(memory_storage, published, status: int | None, error: str) -> None:
+    """Only a 404 means "not published yet"; other failures stop the layer for this check and are retried."""
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED, partial={NEXT: 0})
+    driver = make_export_driver(memory_storage, upstream, now=NEXT + timedelta(hours=6))
+    driver.run()
+    upstream.publish(NEXT, 6)
+    upstream.fail, upstream.status = "2026102200/images_d3/wa_tsfc.03", status
+    assert driver.run()  # the other layer still exports; the model doesn't fail
+
+    layer = store.read_in_progress("uwwrf_4km").layer("surface-temp")
+    assert (layer.available_hour, layer.error) == (0, f"hour 3: {error}")
+    assert [f.hour for f in store.read_manifest("uwwrf_4km", NEXT).layer("surface-temp").frames] == [0]
+
+    upstream.fail = upstream.status = None
+    driver.run()
+    layer = store.read_in_progress("uwwrf_4km").layer("surface-temp")
+    assert (layer.available_hour, layer.error) == (3, None)
+    assert store.read_latest("uwwrf_4km").initialized == NEXT
+
+
+def test_annotation_publish_mid_run_starts_layers_over(memory_storage, published, document) -> None:
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED, partial={NEXT: 3})
+    driver = make_export_driver(memory_storage, upstream, now=NEXT + timedelta(hours=3))
+    driver.run()
+    upstream.downloads.clear()
+
+    published.publish(evolve(document, revision=document.revision + 1))
+    driver.run()
+    # the latest run and the in-progress one are both redone with the new annotations
+    assert len([d for d in upstream.downloads if d.startswith("2026102200")]) == 3
+    assert len([d for d in upstream.downloads if d.startswith("2026102112")]) == 4
+    assert store.read_manifest("uwwrf_4km", NEXT).registration_revision == document.revision + 1
+
+
+def test_prune_keeps_the_in_progress_run(memory_storage, published) -> None:
+    """A model stuck mid-run keeps the run being shown as in progress, however old."""
+    old = INITIALIZED - timedelta(days=10)
+    make_export_driver(memory_storage, FakeUpstream(old - timedelta(hours=12), partial={old: 0}), now=old + timedelta(hours=6)).run()
+    store = ForecastStore(memory_storage)
+    assert store.read_in_progress("uwwrf_4km").initialized == old
+    # much later, nothing new is published; both the latest and in-progress runs are kept
+    make_export_driver(memory_storage, FakeUpstream(), now=old + timedelta(days=9)).run()
+    assert store.list_runs("uwwrf_4km") == [old, old - timedelta(hours=12)]
 
 
 def test_run_skips_without_a_complete_run(memory_storage, published) -> None:
