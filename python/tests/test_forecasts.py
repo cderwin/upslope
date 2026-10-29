@@ -69,6 +69,13 @@ def test_manifest_json_shape(store: ForecastStore, memory_storage, tmp_path: Pat
     assert layer["frames"][1] == {"hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300.png"}
 
 
+def test_layer_complete_ignores_frame_order() -> None:
+    layer = manifest(hours=[3, 0]).layers[0]
+    assert [frame.hour for frame in layer.frames] == [3, 0]
+    assert layer.complete
+    assert not manifest(hours=[3]).layers[0].complete
+
+
 def test_run_paths() -> None:
     assert run_path(datetime(2026, 1, 2, 12, tzinfo=UTC)) == "2026/01/02/1200Z"
     assert parse_run_path("2026/01/02/1200Z") == datetime(2026, 1, 2, 12, tzinfo=UTC)
