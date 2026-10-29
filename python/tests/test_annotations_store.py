@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from upslope.cli import DEFAULT_WRF_CONFIG, DEV_GEOREGISTRATION
+from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot
 from upslope.clients.storage import PreconditionFailed
 from upslope.models.uw_wrf.georegistration_document import (
@@ -15,7 +15,7 @@ from upslope.models.uw_wrf.georegistration_document import (
     PixelAnnotation,
     is_valid_key,
 )
-from upslope.models.uw_wrf.wrf_client import WrfConfig
+from upslope.models.config import ModelsConfig
 
 
 def small_document() -> AnnotationDocument:
@@ -92,7 +92,7 @@ def test_dev_snapshot_is_complete() -> None:
     """The repo snapshot loads, references only known points, and covers every configured maptype."""
     document = read_snapshot(DEV_GEOREGISTRATION)
     assert not document.dangling_references()
-    maptypes = {layer.maptype for layer in WrfConfig.load(DEFAULT_WRF_CONFIG).layers}
+    maptypes = ModelsConfig.load(DEFAULT_MODELS_CONFIG).maptypes
     assert maptypes <= document.maptypes.keys()
     for maptype in maptypes:
         assert len(document.control_points(maptype)) >= 2

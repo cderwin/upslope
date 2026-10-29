@@ -1,4 +1,4 @@
-"""Litestar app: healthcheck, forecast proxy, admin API, webapp frontend, and the hourly WRF export."""
+"""Litestar app: healthcheck, forecast proxy, admin API, webapp frontend, and the hourly forecast export."""
 
 import asyncio
 import os
@@ -12,12 +12,11 @@ from litestar.exceptions import HTTPException
 from litestar.types import Scope
 
 from upslope.annotation_service import AnnotationError, AnnotationService
-from upslope.cli import DEFAULT_WRF_CONFIG, PROJECT_BASE
+from upslope.cli import DEFAULT_MODELS_CONFIG, PROJECT_BASE
 from upslope.clients.annotations import AnnotationStore
 from upslope.clients.storage import StorageClient
 from upslope.logging import configure_logging, get_logger
-from upslope.models.uw_wrf.driver import WrfDriver
-from upslope.models.uw_wrf.wrf_client import WrfConfig
+from upslope.models.config import ModelsConfig
 from upslope.server.admin import AdminGeoregistrationController
 from upslope.server.forecast import ForecastController, LatestRun
 from upslope.server.frontend import create_frontend_router
@@ -54,7 +53,7 @@ def create_app(
     Args:
         storage: Storage to read exports from and export to. Built from the environment at startup if omitted.
         webapp_dist: Built webapp to serve at `/`. Defaults to `$UPSLOPE_WEBAPP_DIST` or `<repo>/webapp/dist`.
-        run_jobs: Run the hourly WRF export. Disable for tests.
+        run_jobs: Run the hourly forecast export. Disable for tests.
         export_on_startup: Also run the export once as soon as the app starts (in the background,
             so the server is up meanwhile). Ignored if `run_jobs` is False.
         admin_token: Bearer token for the admin API. Defaults to `$ADMIN_TOKEN`; empty disables the API.
@@ -72,9 +71,11 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: Litestar) -> AsyncIterator[None]:
         # build up front so missing config or credentials fail at startup, not on first use
+        config = ModelsConfig.load(DEFAULT_MODELS_CONFIG)
         app.state.storage = storage or StorageClient.build()
-        app.state.annotations = AnnotationService(AnnotationStore(app.state.storage), WrfConfig.load(DEFAULT_WRF_CONFIG))
-        latest_run = app.state.latest_run = LatestRun(app.state.storage, WrfDriver.model)
+        app.state.annotations = AnnotationService(AnnotationStore(app.state.storage), config)
+        # the webapp reads one manifest, so serve the first model's runs
+        latest_run = app.state.latest_run = LatestRun(app.state.storage, config.models[0].id)
         try:
             await latest_run.refresh()
         except Exception:
@@ -82,7 +83,7 @@ def create_app(
 
         task = None
         if run_jobs:
-            driver = build_driver(app.state.storage)
+            driver = build_driver(config, app.state.storage)
             task = asyncio.create_task(
                 run_hourly(driver, on_export=latest_run.refresh, run_immediately=export_on_startup)
             )

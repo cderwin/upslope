@@ -1,28 +1,22 @@
-"""Scheduled background work: the hourly WRF export."""
+"""Scheduled background work: the hourly forecast export."""
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
-from upslope.cli import DEFAULT_WRF_CONFIG
 from upslope.clients.annotations import AnnotationStore
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
-from upslope.models.uw_wrf.driver import WrfDriver
-from upslope.models.uw_wrf.wrf_client import WrfClient, WrfConfig
+from upslope.models.config import ModelsConfig
+from upslope.models.driver import ExportFailed, ForecastDriver
+from upslope.models.image_client import ImageClient
 
 logger = get_logger(__name__)
 
 
-def build_driver(storage: StorageClient) -> WrfDriver:
-    """Create a WrfDriver from the default WRF config, reading annotations from and exporting to `storage`."""
-    wrf_config = WrfConfig.load(DEFAULT_WRF_CONFIG)
-    return WrfDriver(
-        config=wrf_config,
-        client=WrfClient(wrf_config),
-        storage=storage,
-        annotations=AnnotationStore(storage),
-    )
+def build_driver(config: ModelsConfig, storage: StorageClient) -> ForecastDriver:
+    """Create the export driver, reading annotations from and exporting to `storage`."""
+    return ForecastDriver(config=config, client=ImageClient(), storage=storage, annotations=AnnotationStore(storage))
 
 
 def seconds_until_next_hour(now: datetime) -> float:
@@ -32,7 +26,7 @@ def seconds_until_next_hour(now: datetime) -> float:
 
 
 async def run_hourly(
-    driver: WrfDriver,
+    driver: ForecastDriver,
     on_export: Callable[[], Awaitable[None]] | None = None,
     run_immediately: bool = False,
 ) -> None:
@@ -43,24 +37,32 @@ async def run_hourly(
 
     Args:
         driver: Driver to run.
-        on_export: Called after a run that exported a new manifest.
+        on_export: Called after a run that exported at least one new manifest.
         run_immediately: Also run once right away, before waiting for the first top of the hour.
     """
     skip_wait = run_immediately
     while True:
         if skip_wait:
             skip_wait = False
-            logger.info("starting startup WRF export")
+            logger.info("starting startup forecast export")
         else:
             await asyncio.sleep(seconds_until_next_hour(datetime.now()))
-            logger.info("starting scheduled WRF export")
+            logger.info("starting scheduled forecast export")
         try:
             # the driver is blocking (HTTP, rasterio, S3), so keep it off the event loop
-            manifest = await asyncio.to_thread(driver.run)
-            if manifest is None:
-                continue
-            logger.info("WRF export finished with %d layers", len(manifest.layers))
-            if on_export is not None:
-                await on_export()
+            manifests = await asyncio.to_thread(driver.run)
+        except ExportFailed as e:
+            # each model's failure was logged by the driver; the others may still have exported
+            logger.error("scheduled forecast export failed for %s", ", ".join(e.models))
+            manifests = e.manifests
         except Exception:
-            logger.exception("scheduled WRF export failed")
+            logger.exception("scheduled forecast export failed")
+            continue
+        if not manifests:
+            continue
+        logger.info("forecast export finished: %d model(s) exported", len(manifests))
+        if on_export is not None:
+            try:
+                await on_export()
+            except Exception:
+                logger.exception("after-export hook failed")
