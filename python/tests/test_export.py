@@ -4,6 +4,8 @@ from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import io
+
 import httpx
 import pytest
 import rasterio
@@ -12,12 +14,13 @@ from click.testing import CliRunner
 from PIL import Image
 
 from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
-from upslope.clients.annotations import read_snapshot, snapshot_image_path
-from upslope.clients.storage import ModelRunMarker
+from upslope.clients.annotations import AnnotationStore, read_snapshot, snapshot_image_path
+from upslope.clients.forecasts import ForecastStore
 from upslope.cli.main import main
 from upslope.models.config import ConfigError, HourRange, LayerConfig, ModelConfig, ModelsConfig
 from upslope.models.driver import ExportFailed, ForecastDriver
 from upslope.models.image_client import ImageClient
+from upslope.models.manifest import RunPointer
 from upslope.models.uw_wrf.georegistration import OUTPUT_CRS, Registration, fit_report
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 
@@ -188,35 +191,28 @@ def test_georegister_unknown_domain_raises(registration: Registration, tmp_path:
         registration.georegister(SAMPLE_GIF, tmp_path / "out.tiff", "atlantis")
 
 
-def test_export_layer_builds_manifest_layer(registration: Registration, tmp_path: Path) -> None:
-    """Registered GeoTIFF -> transparent paletted PNG frame + manifest layer placed over Washington."""
+def test_export_frame_uploads_a_placed_png(registration: Registration, memory_storage, tmp_path: Path) -> None:
+    """Downloaded GIF -> transparent paletted PNG named by valid time, in a layer placed over Washington."""
     layer = make_layer(hours=HourRange(first=6, last=6))
     model = make_model(layer)
-    tiff = tmp_path / "registered/surface-temp/hour06.tiff"
-    tiff.parent.mkdir(parents=True)
-    registration.georegister(SAMPLE_GIF, tiff, "washington")
+    client = MagicMock()
+    client.download_image.return_value = SAMPLE_GIF.read_bytes()
+    driver = ForecastDriver(config=ModelsConfig([model]), client=client, store=ForecastStore(memory_storage), annotations=MagicMock())
 
-    driver = ForecastDriver(config=ModelsConfig([model]), client=ImageClient(), storage=MagicMock(), annotations=MagicMock())
-    manifest_layer = driver.export_layer(model, layer, tmp_path, INITIALIZED)
+    run_layer = driver.new_layer(layer)
+    frame = driver.export_frame(model, layer, run_layer, INITIALIZED, 6, registration, tmp_path)
 
-    # the same model/variable names as before layers had ids, so map links keep working
-    assert (manifest_layer.model, manifest_layer.variable, manifest_layer.initialized) == ("uwwrf_4km", "surface-temp", INITIALIZED)
-    assert [frame.hour for frame in manifest_layer.frames] == [6]
-    for lon, lat in manifest_layer.coordinates:
+    assert (frame.hour, frame.valid, frame.path) == (6, INITIALIZED + timedelta(hours=6), "surface-temp/2026-10-21T1800.png")
+    assert run_layer.frames == [frame]
+    for lon, lat in run_layer.coordinates:
         assert -130 < lon < -110 and 40 < lat < 52
-
-    with Image.open(manifest_layer.frames[0].path) as png:
+    data, content_type = memory_storage.objects["forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1800.png"]
+    assert content_type == "image/png"
+    with Image.open(io.BytesIO(data)) as png:
         assert png.mode == "P"
         assert "transparency" in png.info
-        assert png.size == manifest_layer.dimensions
-
-
-def test_export_layer_missing_frame_raises(tmp_path: Path) -> None:
-    layer = make_layer(hours=HourRange(first=6, last=6))
-    model = make_model(layer)
-    driver = ForecastDriver(config=ModelsConfig([model]), client=ImageClient(), storage=MagicMock(), annotations=MagicMock())
-    with pytest.raises(RuntimeError, match="does not exist"):
-        driver.export_layer(model, layer, tmp_path, INITIALIZED)
+        assert png.size == tuple(run_layer.dimensions)
+    assert list(tmp_path.rglob("*.*")) == []  # scratch files are removed as it goes
 
 
 # --- model run detection
@@ -290,127 +286,199 @@ def test_download_layer_reads_the_runs_directory(tmp_path: Path) -> None:
     assert requested == []
 
 
-# --- driver and CLI
+# --- driver
 
 
-def make_driver(
-    document: AnnotationDocument | None, marker: ModelRunMarker | None, *models: ModelConfig
-) -> tuple[ForecastDriver, MagicMock, MagicMock]:
-    client, storage, annotations = MagicMock(), MagicMock(), MagicMock()
-    client.latest_complete_run.return_value = INITIALIZED
-    storage.model_run_marker.return_value = marker
-    annotations.load_published.return_value = document
-    config = ModelsConfig(list(models) or [RUN_MODEL])
-    driver = ForecastDriver(config=config, client=client, storage=storage, annotations=annotations)
-    return driver, client, storage
+class FakeUpstream:
+    """Serves the sample GIF for every image URL of `available` runs, and records the downloads."""
+
+    def __init__(self, *available: datetime, fail: str | None = None) -> None:
+        self.available = {f"{run:%Y%m%d%H}" for run in available}
+        self.fail = fail
+        self.downloads: list[str] = []
+        self.gif = SAMPLE_GIF.read_bytes()
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        path = request.url.path.removeprefix("/wrfrt/data/")
+        if self.fail and self.fail in path and request.method == "GET":
+            raise httpx.ConnectTimeout("timed out")
+        if path.split("/")[0] not in self.available:
+            return httpx.Response(404)
+        if request.method == "GET":
+            self.downloads.append(path)
+        return httpx.Response(200, content=self.gif)
+
+    def client(self) -> ImageClient:
+        return ImageClient(httpx.Client(transport=httpx.MockTransport(self.handler)))
 
 
-def exported_with(revision: int | None, fingerprint: str | None = RUN_MODEL.fingerprint()) -> ModelRunMarker:
-    return ModelRunMarker("uwwrf_4km", INITIALIZED, "web_exports/x/manifest.json", revision, fingerprint)
-
-
-def stub_export(driver: ForecastDriver, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, datetime]]:
-    """Replace the slow download/georegister/convert step with one that records what it exported."""
-    exported: list[tuple[str, datetime]] = []
-
-    def export_run(self, model, initialized, registration, revision):
-        exported.append((model.id, initialized))
-        self.storage.mark_model_run_exported(model.id, initialized, "web_exports/y/manifest.json", revision, model.fingerprint())
-        return MagicMock(layers=[])
-
-    monkeypatch.setattr(ForecastDriver, "export_run", export_run)
-    return exported
-
-
-def test_run_skips_run_exported_with_current_annotations_and_config(document: AnnotationDocument, monkeypatch: pytest.MonkeyPatch) -> None:
-    driver, client, storage = make_driver(document, exported_with(document.revision))
-    exported = stub_export(driver, monkeypatch)
-    assert driver.run() == []
-    storage.model_run_marker.assert_called_once_with("uwwrf_4km", INITIALIZED)
-    assert exported == []
-
-
-@pytest.mark.parametrize(
-    ("revision", "fingerprint"),
-    [
-        (None, RUN_MODEL.fingerprint()),  # never exported
-        (0, RUN_MODEL.fingerprint()),  # annotations published since
-        ("current", "an-older-config"),  # layers changed since, e.g. by a deploy
-        ("current", None),  # exported before fingerprints were recorded
-    ],
+EXPORT_MODEL = make_model(
+    make_layer("surface-temp", "wa_tsfc", HourRange(last=3)),
+    make_layer("3-hour-precip", "wa_pcp3", HourRange(first=3, last=6)),
 )
-def test_run_reexports_when_annotations_or_config_changed(
-    document: AnnotationDocument, monkeypatch: pytest.MonkeyPatch, revision: int | str | None, fingerprint: str | None
-) -> None:
-    marker = None if revision is None else exported_with(document.revision if revision == "current" else revision, fingerprint)
-    driver, client, storage = make_driver(document, marker)
-    exported = stub_export(driver, monkeypatch)
-    assert len(driver.run()) == 1
-    assert exported == [("uwwrf_4km", INITIALIZED)]
-    storage.mark_model_run_exported.assert_called_once_with(
-        "uwwrf_4km", INITIALIZED, "web_exports/y/manifest.json", document.revision, RUN_MODEL.fingerprint()
+NOW = INITIALIZED + timedelta(hours=18)
+
+
+@pytest.fixture
+def published(memory_storage, document: AnnotationDocument) -> AnnotationStore:
+    store = AnnotationStore(memory_storage)
+    store.publish(document)
+    return store
+
+
+def make_export_driver(
+    memory_storage, upstream: FakeUpstream, *models: ModelConfig, now: datetime = NOW
+) -> ForecastDriver:
+    return ForecastDriver(
+        config=ModelsConfig(list(models) or [EXPORT_MODEL]),
+        client=upstream.client(),
+        store=ForecastStore(memory_storage),
+        annotations=AnnotationStore(memory_storage),
+        now=lambda: now,
     )
 
 
-def test_run_force_reexports(document: AnnotationDocument, monkeypatch: pytest.MonkeyPatch) -> None:
-    driver, client, storage = make_driver(document, exported_with(document.revision))
-    exported = stub_export(driver, monkeypatch)
+def frame_keys(memory_storage) -> list[str]:
+    return sorted(key for key in memory_storage.objects if key.startswith("forecasts/") and key.endswith(".png"))
+
+
+def test_run_exports_the_newest_complete_run(memory_storage, published, document) -> None:
+    upstream = FakeUpstream(INITIALIZED, INITIALIZED - timedelta(hours=12))
+    driver = make_export_driver(memory_storage, upstream)
+    (manifest,) = driver.run()
+
+    assert (manifest.model, manifest.name, manifest.initialized) == ("uwwrf_4km", "UW WRF 4km", INITIALIZED)
+    assert manifest.registration_revision == document.revision and manifest.complete
+    assert [(layer.id, [frame.hour for frame in layer.frames]) for layer in manifest.layers] == [
+        ("surface-temp", [0, 3]), ("3-hour-precip", [3, 6]),
+    ]
+    assert frame_keys(memory_storage) == [
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/3-hour-precip/2026-10-21T1500.png",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/3-hour-precip/2026-10-21T1800.png",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1200.png",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.png",
+    ]
+    store = ForecastStore(memory_storage)
+    assert store.read_manifest("uwwrf_4km", INITIALIZED) == manifest
+    assert store.read_latest("uwwrf_4km") == RunPointer("uwwrf_4km", INITIALIZED, "2026/10/21/1200Z", NOW)
+
+
+def test_run_skips_a_run_exported_with_current_annotations_and_config(memory_storage, published) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    driver = make_export_driver(memory_storage, upstream)
+    driver.run()
+    upstream.downloads.clear()
+    puts = len(memory_storage.puts)
+
+    assert driver.run() == []
+    assert upstream.downloads == []
+    assert len(memory_storage.puts) == puts
+
+
+def test_run_reexports_every_layer_when_annotations_change(memory_storage, published, document) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    driver = make_export_driver(memory_storage, upstream)
+    driver.run()
+    upstream.downloads.clear()
+
+    published.publish(evolve(document, revision=document.revision + 1))
+    (manifest,) = driver.run()
+    assert len(upstream.downloads) == 4
+    assert manifest.registration_revision == published.load_published().revision
+
+
+def test_run_reexports_only_changed_layers(memory_storage, published) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    make_export_driver(memory_storage, upstream).run()
+    upstream.downloads.clear()
+
+    changed = make_model(
+        EXPORT_MODEL.layers[0],
+        evolve(EXPORT_MODEL.layers[1], hours=HourRange(first=3, last=9)),
+        make_layer("snow", "wa_snow3", HourRange(first=3, last=3)),
+    )
+    (manifest,) = make_export_driver(memory_storage, upstream, changed).run()
+    assert sorted(upstream.downloads) == [
+        "2026102112/images_d3/wa_pcp3.03.0000.gif",
+        "2026102112/images_d3/wa_pcp3.06.0000.gif",
+        "2026102112/images_d3/wa_pcp3.09.0000.gif",
+        "2026102112/images_d3/wa_snow3.03.0000.gif",
+    ]
+    assert [layer.id for layer in manifest.layers] == ["surface-temp", "3-hour-precip", "snow"]
+
+
+def test_run_renames_layers_without_downloading(memory_storage, published) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    make_export_driver(memory_storage, upstream).run()
+    upstream.downloads.clear()
+
+    renamed = make_model(evolve(EXPORT_MODEL.layers[0], name="Temperature"), EXPORT_MODEL.layers[1])
+    (manifest,) = make_export_driver(memory_storage, upstream, renamed).run()
+    assert upstream.downloads == []
+    assert manifest.layers[0].name == "Temperature"
+
+
+def test_run_force_reexports(memory_storage, published) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    driver = make_export_driver(memory_storage, upstream)
+    driver.run()
+    upstream.downloads.clear()
     assert len(driver.run(force=True)) == 1
-    assert exported == [("uwwrf_4km", INITIALIZED)]
+    assert len(upstream.downloads) == 4
 
 
-def test_run_exports_each_model_from_its_own_complete_run(document: AnnotationDocument, monkeypatch: pytest.MonkeyPatch) -> None:
-    other = make_model(make_layer(), model_id="uwwrf_1.33km")
-    driver, client, storage = make_driver(document, None, RUN_MODEL, other)
-    later = INITIALIZED - timedelta(hours=12)
-    client.latest_complete_run.side_effect = lambda model: INITIALIZED if model.id == "uwwrf_4km" else later
-    exported = stub_export(driver, monkeypatch)
-    assert len(driver.run()) == 2
-    assert exported == [("uwwrf_4km", INITIALIZED), ("uwwrf_1.33km", later)]
+def test_run_failed_download_leaves_the_published_run_alone(memory_storage, published) -> None:
+    older = INITIALIZED - timedelta(hours=12)
+    make_export_driver(memory_storage, FakeUpstream(older), now=older + timedelta(hours=6)).run()
 
-
-def test_run_continues_past_a_failing_model(document: AnnotationDocument, monkeypatch: pytest.MonkeyPatch) -> None:
-    other = make_model(make_layer(), model_id="uwwrf_1.33km")
-    driver, client, storage = make_driver(document, None, RUN_MODEL, other)
-    exported = stub_export(driver, monkeypatch)
-
-    def latest_complete_run(model):
-        if model.id == "uwwrf_4km":
-            raise httpx.ConnectTimeout("timed out")
-        return INITIALIZED
-
-    client.latest_complete_run.side_effect = latest_complete_run
-    with pytest.raises(ExportFailed) as failure:
-        driver.run()
-    assert failure.value.models == ["uwwrf_4km"]
-    assert len(failure.value.manifests) == 1
-    assert exported == [("uwwrf_1.33km", INITIALIZED)]
-
-
-def test_run_downloads_from_the_complete_run(document: AnnotationDocument) -> None:
-    layer = make_layer()
-    driver, client, storage = make_driver(document, None, make_model(layer))
-    # the mocked download writes no frames, so the export stops after downloading
+    driver = make_export_driver(memory_storage, FakeUpstream(INITIALIZED, older, fail="wa_pcp3.06"))
     with pytest.raises(ExportFailed):
         driver.run()
-    ((args, _),) = client.download_layer.call_args_list
-    assert args[0] == layer and args[1] == INITIALIZED and args[2].name == "surface-temp"
+    store = ForecastStore(memory_storage)
+    assert store.read_manifest("uwwrf_4km", INITIALIZED) is None
+    assert store.read_latest("uwwrf_4km").initialized == older
 
 
-def test_run_skips_without_a_complete_run(document: AnnotationDocument, monkeypatch: pytest.MonkeyPatch) -> None:
-    driver, client, storage = make_driver(document, None)
-    exported = stub_export(driver, monkeypatch)
-    client.latest_complete_run.return_value = None
-    assert driver.run(force=True) == []
-    assert exported == []
+def test_run_never_moves_latest_backwards(memory_storage, published) -> None:
+    store = ForecastStore(memory_storage)
+    make_export_driver(memory_storage, FakeUpstream(INITIALIZED)).run()
+
+    # the newest run disappears upstream (or a deploy exports an older one with a new config)
+    older = INITIALIZED - timedelta(hours=12)
+    changed = make_model(evolve(EXPORT_MODEL.layers[0], name="Temperature"), EXPORT_MODEL.layers[1])
+    make_export_driver(memory_storage, FakeUpstream(older), changed).run()
+    assert store.read_manifest("uwwrf_4km", older) is not None
+    assert store.read_latest("uwwrf_4km").initialized == INITIALIZED
 
 
-def test_run_skips_without_published_annotations(monkeypatch: pytest.MonkeyPatch) -> None:
-    driver, client, storage = make_driver(None, None)
-    exported = stub_export(driver, monkeypatch)
-    assert driver.run() == []
-    client.latest_complete_run.assert_not_called()
-    assert exported == []
+def test_run_prunes_runs_past_retention(memory_storage, published) -> None:
+    old = INITIALIZED - timedelta(days=8)
+    make_export_driver(memory_storage, FakeUpstream(old), now=old + timedelta(hours=6)).run()
+    make_export_driver(memory_storage, FakeUpstream(INITIALIZED)).run()
+    assert ForecastStore(memory_storage).list_runs("uwwrf_4km") == [INITIALIZED]
+
+
+def test_run_exports_each_model_and_continues_past_failures(memory_storage, published) -> None:
+    other = make_model(make_layer(hours=HourRange(last=0)), model_id="uwwrf_12km")
+    broken = make_model(make_layer("snow", "wa_snow3", HourRange(last=0)), model_id="broken")
+    upstream = FakeUpstream(INITIALIZED, fail="wa_snow3")
+    driver = make_export_driver(memory_storage, upstream, EXPORT_MODEL, broken, other)
+    with pytest.raises(ExportFailed) as failure:
+        driver.run()
+    assert failure.value.models == ["broken"]
+    assert [manifest.model for manifest in failure.value.manifests] == ["uwwrf_4km", "uwwrf_12km"]
+
+
+def test_run_skips_without_a_complete_run(memory_storage, published) -> None:
+    upstream = FakeUpstream()
+    assert make_export_driver(memory_storage, upstream).run(force=True) == []
+    assert frame_keys(memory_storage) == []
+
+
+def test_run_skips_without_published_annotations(memory_storage) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    assert make_export_driver(memory_storage, upstream).run() == []
+    assert upstream.downloads == []
 
 
 def test_fit_report_matches_snapshot_thresholds(document: AnnotationDocument) -> None:
@@ -439,6 +507,6 @@ def test_fit_report_flags_too_few_points(document: AnnotationDocument) -> None:
 def test_cli_registers_commands() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    for command in ("export-web", "serve", "download", "reproject", "check-layers"):
+    for command in ("export-web", "serve", "download", "reproject", "check-layers", "delete-legacy-exports"):
         assert command in result.output
     assert "--force" in CliRunner().invoke(main, ["export-web", "--help"]).output

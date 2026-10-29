@@ -9,7 +9,7 @@ declare module '*.vue' {
 interface ImportMetaEnv {
   /** Mapbox access token for /map; set it in `.env.local`. */
   readonly VITE_MAPBOX_TOKEN?: string
-  /** Where forecast frames and `manifest.json` are served. Defaults to `/api/forecast`. */
+  /** The upslope server's forecast API (`/status`, `/data/...`). Defaults to `/fx`. */
   readonly VITE_FORECAST_BASE_URL?: string
 }
 

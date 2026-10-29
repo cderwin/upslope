@@ -61,7 +61,7 @@ const runLabel = computed(() => {
   <div class="map-controls card shadow-sm">
     <div class="card-body vstack gap-3">
       <div>
-        <label class="form-label small mb-1" for="forecast-layer">Domain / variable</label>
+        <label class="form-label small mb-1" for="forecast-layer">Layer</label>
         <select
           id="forecast-layer"
           class="form-select form-select-sm"
@@ -104,7 +104,10 @@ const runLabel = computed(() => {
             <span v-if="offsetLabel" class="text-body-secondary font-monospace ms-1">{{ offsetLabel }}</span>
           </span>
         </label>
-        <div v-if="runLabel" class="small text-body-secondary">Model run {{ runLabel }}</div>
+        <div v-if="runLabel" class="small text-body-secondary">
+          Model run {{ runLabel }}
+          <span v-if="!layer.latest" class="badge text-bg-warning ms-1">not the latest</span>
+        </div>
         <input
           id="forecast-hour"
           v-model.number="index"

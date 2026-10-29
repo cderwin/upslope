@@ -1,4 +1,3 @@
-import json
 import mimetypes
 import os
 from collections.abc import Iterator
@@ -7,50 +6,20 @@ from pathlib import Path
 from typing import Self
 
 import boto3
-from attrs import define, evolve
+from attrs import define
 from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from cattrs.preconf.json import make_converter
 
 from upslope.logging import get_logger
-from upslope.models.manifest import Manifest
 
 logger = get_logger(__name__)
-
-_converter = make_converter()
 
 _NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
 
 
 def _error_code(error: ClientError) -> str:
     return str(error.response.get("Error", {}).get("Code", ""))
-
-
-@define
-class ModelRunMarker:
-    """Record that a model run was fully exported.
-
-    Attributes:
-        model: Model name, e.g. `uwwrf`.
-        initialized: Model run initialization time (UTC).
-        manifest: Bucket key of the run's `manifest.json`.
-        registration_revision: Revision of the published annotations the run was georegistered with.
-            None for runs exported before annotations were versioned.
-        config_fingerprint: `ModelConfig.fingerprint()` of the layer config the run was exported with.
-            None for runs exported before it was recorded.
-    """
-
-    model: str
-    initialized: datetime
-    manifest: str
-    registration_revision: int | None = None
-    config_fingerprint: str | None = None
-
-    @property
-    def export_prefix(self) -> str:
-        """Bucket prefix holding the run's manifest and frames, e.g. `web_exports/20261021T130000`."""
-        return self.manifest.rsplit("/", 1)[0]
 
 
 @define
@@ -133,45 +102,6 @@ class StorageClient:
 
     s3: BaseClient
     bucket: str
-
-    @staticmethod
-    def _model_run_key(model: str, initialized: datetime) -> str:
-        return f"model_runs/{model}/{initialized:%Y%m%dT%H%M}Z.json"
-
-    def model_run_marker(self, model: str, initialized: datetime) -> ModelRunMarker | None:
-        """Look up the export record for a model run.
-
-        Args:
-            model: Model name, e.g. `uwwrf`.
-            initialized: Model run initialization time (UTC).
-
-        Returns:
-            The marker written by `mark_model_run_exported`, or None if the run was never exported.
-        """
-        stored = self.get_bytes(self._model_run_key(model, initialized))
-        return None if stored is None else _converter.loads(stored.data, ModelRunMarker)
-
-    def latest_model_run(self, model: str) -> ModelRunMarker | None:
-        """Find the most recently initialized model run that was fully exported.
-
-        Args:
-            model: Model name, e.g. `uwwrf`.
-
-        Returns:
-            The run's marker, or None if the model has no exported runs.
-        """
-        # marker keys embed the run time as YYYYMMDDTHHMMZ, so the largest key is the newest run
-        latest_key = None
-        paginator = self.s3.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self.bucket, Prefix=f"model_runs/{model}/"):
-            for item in page.get("Contents", []):
-                if latest_key is None or item["Key"] > latest_key:
-                    latest_key = item["Key"]
-        if latest_key is None:
-            return None
-
-        response = self.s3.get_object(Bucket=self.bucket, Key=latest_key)
-        return _converter.loads(response["Body"].read(), ModelRunMarker)
 
     def get_object(self, key: str, if_none_match: str | None = None) -> StoredObject | None:
         """Fetch an object for streaming.
@@ -268,59 +198,31 @@ class StorageClient:
             keys.extend(item["Key"] for item in page.get("Contents", []))
         return sorted(keys)
 
-    def mark_model_run_exported(
-        self,
-        model: str,
-        initialized: datetime,
-        manifest_key: str,
-        registration_revision: int | None = None,
-        config_fingerprint: str | None = None,
-    ) -> None:
-        """Record that a model run has been exported, pointing at its manifest.
-
-        Call this only after `export_manifest` succeeds, so a partial upload is retried.
+    def upload_file(self, path: Path, key: str, content_type: str | None = None) -> None:
+        """Upload a local file.
 
         Args:
-            model: Model name, e.g. `uwwrf`.
-            initialized: Model run initialization time (UTC).
-            manifest_key: Bucket key of the run's manifest, as returned by `export_manifest`.
-            registration_revision: Revision of the published annotations used to georegister the run.
-            config_fingerprint: Fingerprint of the layer config the run was exported with.
+            path: File to upload.
+            key: Bucket key to write.
+            content_type: Media type; guessed from the file name if omitted.
         """
-        key = self._model_run_key(model, initialized)
-        body = _converter.dumps(ModelRunMarker(model, initialized, manifest_key, registration_revision, config_fingerprint))
-        self.s3.put_object(Bucket=self.bucket, Key=key, Body=body, ContentType="application/json")
-        logger.info("marked %s run %s as exported", model, f"{initialized:%Y-%m-%d %HZ}")
+        content_type = content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        self.s3.upload_file(str(path), self.bucket, key, ExtraArgs={"ContentType": content_type})
 
-    def export_manifest(self, manifest: Manifest) -> str:
-        """Upload a manifest and its frames to `web_exports/<started timestamp>/` in the bucket.
+    def delete_keys(self, keys: list[str]) -> None:
+        """Delete objects. Keys that don't exist are ignored.
 
         Args:
-            manifest: Manifest whose frame paths point to local files.
-
-        Returns:
-            The bucket key of the uploaded manifest.
+            keys: Bucket keys to delete.
         """
-        prefix = f"web_exports/{manifest.started:%Y%m%dT%H%M%S}"
-        logger.info("uploading manifest to s3://%s/%s", self.bucket, prefix)
-        layers = []
-        for layer in manifest.layers:
-            frames = []
-            for frame in layer.frames:
-                # frame paths in the exported manifest are relative to the manifest's directory
-                relpath = f"{layer.model}/{layer.variable}/{Path(frame.path).name}"
-                logger.debug("uploading %s", relpath)
-                content_type = mimetypes.guess_type(frame.path)[0] or "application/octet-stream"
-                self.s3.upload_file(frame.path, self.bucket, f"{prefix}/{relpath}", ExtraArgs={"ContentType": content_type})
-                frames.append(evolve(frame, path=relpath))
-            layers.append(evolve(layer, frames=frames))
-
-        # upload the manifest last so readers never see it before its frames exist
-        body = json.dumps(_converter.unstructure(evolve(manifest, layers=layers)))
-        manifest_key = f"{prefix}/manifest.json"
-        self.s3.put_object(Bucket=self.bucket, Key=manifest_key, Body=body, ContentType="application/json")
-        logger.info("uploaded manifest.json to s3://%s/%s", self.bucket, prefix)
-        return manifest_key
+        # DeleteObjects takes at most 1000 keys per request
+        for start in range(0, len(keys), 1000):
+            batch = keys[start : start + 1000]
+            response = self.s3.delete_objects(
+                Bucket=self.bucket, Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True}
+            )
+            if errors := response.get("Errors"):
+                raise RuntimeError(f"could not delete {len(errors)} objects, e.g. {errors[0].get('Key')}: {errors[0].get('Message')}")
 
     @classmethod
     def build(cls) -> Self:

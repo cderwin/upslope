@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta
 
 from upslope.clients.annotations import AnnotationStore
+from upslope.clients.forecasts import ForecastStore
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
 from upslope.models.config import ModelsConfig
@@ -16,7 +17,7 @@ logger = get_logger(__name__)
 
 def build_driver(config: ModelsConfig, storage: StorageClient) -> ForecastDriver:
     """Create the export driver, reading annotations from and exporting to `storage`."""
-    return ForecastDriver(config=config, client=ImageClient(), storage=storage, annotations=AnnotationStore(storage))
+    return ForecastDriver(config=config, client=ImageClient(), store=ForecastStore(storage), annotations=AnnotationStore(storage))
 
 
 def seconds_until_next_hour(now: datetime) -> float:

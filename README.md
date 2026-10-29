@@ -17,13 +17,14 @@ UW WRF plots (GIF)          annotations in S3 (control points)
   upslope export-web ── fit + warp to Web Mercator ── PNG frames + manifest.json ──► S3 / Tigris
                                                                                        │
   upslope serve (Litestar) ◄───────────────────────────────────────────────────────────┘
-    ├── /api/forecast   latest manifest and frames
+    ├── /fx/status      each model's latest and retained runs
+    ├── /fx/data/...    run manifests and frames (forecasts/ in the bucket)
     ├── /admin/...      annotation editing API (bearer token)
     ├── /health
     └── /               built webapp (/map, /annotation)
 ```
 
-- **Export pipeline** (`upslope/models/uw_wrf/`): downloads each configured layer,
+- **Export pipeline** (`upslope/models/`): downloads each configured layer,
   fits a pixel → Lambert-conformal transform per map type from the published
   control points, reprojects every frame to EPSG:3857, and uploads PNGs plus a
   `manifest.json`.

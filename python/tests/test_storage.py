@@ -8,9 +8,7 @@ from botocore.response import StreamingBody
 from botocore.stub import Stubber
 from dateutil.tz import tzutc
 
-from upslope.clients.storage import ModelRunMarker, PreconditionFailed, StorageClient, StoredBytes
-
-MARKER_JSON = b'{"model": "uwwrf", "initialized": "2026-10-21T12:00:00+00:00", "manifest": "web_exports/20261021T130000/manifest.json"}'
+from upslope.clients.storage import PreconditionFailed, StorageClient, StoredBytes
 
 
 def body(data: bytes) -> StreamingBody:
@@ -25,51 +23,6 @@ def stubbed():
     with Stubber(s3) as stubber:
         yield StorageClient(s3=s3, bucket="b"), stubber
         stubber.assert_no_pending_responses()
-
-
-def test_latest_model_run_picks_newest_key(stubbed) -> None:
-    storage, stubber = stubbed
-    stubber.add_response(
-        "list_objects_v2",
-        {"Contents": [{"Key": "model_runs/uwwrf/20261021T1200Z.json"}, {"Key": "model_runs/uwwrf/20261020T0000Z.json"}]},
-        {"Bucket": "b", "Prefix": "model_runs/uwwrf/"},
-    )
-    stubber.add_response(
-        "get_object", {"Body": body(MARKER_JSON)}, {"Bucket": "b", "Key": "model_runs/uwwrf/20261021T1200Z.json"}
-    )
-    marker = storage.latest_model_run("uwwrf")
-    assert marker == ModelRunMarker("uwwrf", datetime(2026, 10, 21, 12, tzinfo=UTC), "web_exports/20261021T130000/manifest.json")
-    assert marker.export_prefix == "web_exports/20261021T130000"
-
-
-def test_latest_model_run_none_when_empty(stubbed) -> None:
-    storage, stubber = stubbed
-    stubber.add_response("list_objects_v2", {}, {"Bucket": "b", "Prefix": "model_runs/uwwrf/"})
-    assert storage.latest_model_run("uwwrf") is None
-
-
-def test_marker_round_trips(stubbed) -> None:
-    storage, stubber = stubbed
-    marker = ModelRunMarker("uwwrf", datetime(2026, 10, 21, 12, tzinfo=UTC), "web_exports/20261021T130000/manifest.json")
-    stubber.add_response("put_object", {}, None)
-    storage.mark_model_run_exported(marker.model, marker.initialized, marker.manifest)
-    stubber.add_response("list_objects_v2", {"Contents": [{"Key": "model_runs/uwwrf/20261021T1200Z.json"}]}, None)
-    stubber.add_response("get_object", {"Body": body(MARKER_JSON)}, None)
-    assert storage.latest_model_run("uwwrf") == marker
-
-
-def test_model_run_marker_reads_revision(stubbed) -> None:
-    storage, stubber = stubbed
-    stubber.add_response(
-        "get_object",
-        {"Body": body(MARKER_JSON[:-1] + b', "registration_revision": 4}')},
-        {"Bucket": "b", "Key": "model_runs/uwwrf/20261021T1200Z.json"},
-    )
-    marker = storage.model_run_marker("uwwrf", datetime(2026, 10, 21, 12, tzinfo=UTC))
-    assert marker.registration_revision == 4
-    assert marker.config_fingerprint is None
-    stubber.add_client_error("get_object", service_error_code="NoSuchKey", http_status_code=404)
-    assert storage.model_run_marker("uwwrf", datetime(2026, 10, 21, 0, tzinfo=UTC)) is None
 
 
 def test_get_object_streams_body(stubbed) -> None:
@@ -163,13 +116,26 @@ def test_list_keys_pages_and_sorts(stubbed) -> None:
     assert storage.list_keys("p/") == ["p/a", "p/b", "p/c"]
 
 
-def test_marker_records_config_fingerprint() -> None:
-    s3 = MagicMock()
-    storage = StorageClient(s3=s3, bucket="b")
-    initialized = datetime(2026, 10, 21, 12, tzinfo=UTC)
-    storage.mark_model_run_exported("uwwrf", initialized, "web_exports/x/manifest.json", 4, "abc123")
-    written = s3.put_object.call_args.kwargs["Body"]
+def test_delete_keys_batches_by_1000(stubbed) -> None:
+    storage, stubber = stubbed
+    keys = [f"k{i:04d}" for i in range(1500)]
+    for batch in (keys[:1000], keys[1000:]):
+        stubber.add_response(
+            "delete_objects", {}, {"Bucket": "b", "Delete": {"Objects": [{"Key": k} for k in batch], "Quiet": True}}
+        )
+    storage.delete_keys(keys)
 
-    s3.get_object.return_value = {"Body": body(written.encode())}
-    marker = storage.model_run_marker("uwwrf", initialized)
-    assert marker == ModelRunMarker("uwwrf", initialized, "web_exports/x/manifest.json", 4, "abc123")
+
+def test_delete_keys_raises_on_errors(stubbed) -> None:
+    storage, stubber = stubbed
+    stubber.add_response("delete_objects", {"Errors": [{"Key": "k", "Code": "AccessDenied", "Message": "no"}]})
+    with pytest.raises(RuntimeError, match="could not delete 1 objects"):
+        storage.delete_keys(["k"])
+
+
+def test_upload_file_guesses_content_type(tmp_path) -> None:
+    s3 = MagicMock()
+    path = tmp_path / "2026-10-29T0600.png"
+    path.write_bytes(b"png")
+    StorageClient(s3=s3, bucket="b").upload_file(path, "forecasts/m/x.png")
+    s3.upload_file.assert_called_once_with(str(path), "b", "forecasts/m/x.png", ExtraArgs={"ContentType": "image/png"})

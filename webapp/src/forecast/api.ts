@@ -1,35 +1,82 @@
-import type { ForecastLayer, ForecastManifest } from './types'
+import type { ForecastLayer, ForecastStatus, ModelStatus, RunManifest, RunRef } from './types'
 
 /**
- * Forecast data is fetched at runtime, never bundled. In development the
- * `upslope-data-mounts` plugin serves `forecast/web_export` here; production
- * builds use the server's `/fx/web` proxy (see `.env.production`).
+ * The upslope server's forecast API, fetched at runtime and never bundled. In development, vite proxies
+ * it to a running server (`just up`).
  */
-export const FORECAST_BASE_URL = (import.meta.env.VITE_FORECAST_BASE_URL ?? '/api/forecast').replace(/\/+$/, '')
+export const FORECAST_BASE_URL = (import.meta.env.VITE_FORECAST_BASE_URL ?? '/fx').replace(/\/+$/, '')
 
-export async function fetchManifest(signal: AbortSignal | null = null): Promise<ForecastManifest> {
-  const response = await fetch(`${FORECAST_BASE_URL}/manifest.json`, { signal, cache: 'no-cache' })
-  if (!response.ok) throw new Error(`Could not load the forecast manifest (${response.status} ${response.statusText})`)
-  const manifest = (await response.json()) as ForecastManifest
-  for (const layer of manifest.layers) layer.frames.sort((a, b) => a.hour - b.hour)
-  return manifest
+function dataUrl(path: string): string {
+  return `${FORECAST_BASE_URL}/data/${path.split('/').map(encodeURIComponent).join('/')}`
 }
 
-export function frameUrl(path: string): string {
-  return `${FORECAST_BASE_URL}/${path.split('/').map(encodeURIComponent).join('/')}`
+async function getJson<T>(url: string, what: string, signal: AbortSignal | null): Promise<T> {
+  const response = await fetch(url, { signal, cache: 'no-cache' })
+  if (!response.ok) throw new Error(`Could not load ${what} (${response.status} ${response.statusText})`)
+  return (await response.json()) as T
 }
 
-export function layerKey(layer: Pick<ForecastLayer, 'model' | 'variable'>): string {
-  return `${layer.model}/${layer.variable}`
+export function fetchStatus(signal: AbortSignal | null = null): Promise<ForecastStatus> {
+  return getJson<ForecastStatus>(`${FORECAST_BASE_URL}/status`, 'the forecast status', signal)
 }
 
-/** The domain part of a model name: `uwwrf_12km` -> `12km`. */
-export function modelDomain(model: string): string {
-  const separator = model.indexOf('_')
-  return separator === -1 ? model : model.slice(separator + 1)
+export function fetchRunManifest(model: string, run: RunRef, signal: AbortSignal | null = null): Promise<RunManifest> {
+  return getJson<RunManifest>(dataUrl(`${model}/${run.path}/manifest.json`), `the ${model} ${run.path} manifest`, signal)
 }
 
-export function layerLabel(layer: Pick<ForecastLayer, 'model' | 'variable'>): string {
-  const variable = layer.variable.replace(/-/g, ' ')
-  return `${modelDomain(layer.model)} · ${variable.charAt(0).toUpperCase()}${variable.slice(1)}`
+// --- the ?run= URL parameter: a run's initialization time, e.g. `2026-10-29T00Z`
+
+const RUN_PARAM = /^(\d{4})-(\d{2})-(\d{2})T(\d{2})(?::?(\d{2}))?Z?$/
+
+/** The run folder (`2026/10/29/0000Z`) a `?run=` value names, or null if it isn't one. */
+export function runPathFromParam(value: string): string | null {
+  const match = RUN_PARAM.exec(value)
+  if (!match) return null
+  const [, year, month, day, hour, minute = '00'] = match
+  return `${year}/${month}/${day}/${hour}${minute}Z`
+}
+
+/** The `?run=` value for a run: `2026-10-29T00Z`, or `2026-10-29T00:30Z` off the hour. */
+export function runParam(run: RunRef): string {
+  const [year, month, day, time] = run.path.split('/')
+  const hour = time.slice(0, 2)
+  const minute = time.slice(2, 4)
+  return `${year}-${month}-${day}T${hour}${minute === '00' ? '' : `:${minute}`}Z`
+}
+
+/** The run of `model` to show: the one `runPath` names, or else the latest. Null if it has no such run. */
+export function selectRun(model: ModelStatus, runPath: string | null): RunRef | null {
+  if (runPath === null) return model.latest
+  return model.runs.find((run) => run.path === runPath) ?? null
+}
+
+/** Map-ready layers of a run; layers with no frames yet are left out. */
+export function runLayers(manifest: RunManifest, run: RunRef, latest: RunRef | null): ForecastLayer[] {
+  const layers: ForecastLayer[] = []
+  for (const layer of manifest.layers) {
+    if (!layer.dimensions || !layer.coordinates || !layer.frames.length) continue
+    layers.push({
+      model: manifest.model,
+      modelName: manifest.name,
+      id: layer.id,
+      name: layer.name,
+      initialized: manifest.initialized,
+      latest: latest?.path === run.path,
+      dimensions: layer.dimensions,
+      coordinates: layer.coordinates,
+      frames: layer.frames
+        .map((frame) => ({ hour: frame.hour, url: dataUrl(`${manifest.model}/${run.path}/${frame.path}`) }))
+        .sort((a, b) => a.hour - b.hour),
+      hours: layer.hours,
+    })
+  }
+  return layers
+}
+
+export function layerKey(layer: Pick<ForecastLayer, 'model' | 'id'>): string {
+  return `${layer.model}/${layer.id}`
+}
+
+export function layerLabel(layer: Pick<ForecastLayer, 'modelName' | 'name'>): string {
+  return `${layer.modelName} · ${layer.name}`
 }

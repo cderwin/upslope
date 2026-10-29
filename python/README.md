@@ -117,43 +117,80 @@ start. Production never reads it.
 ## Web export
 
 `export-web` runs the whole pipeline (`ForecastDriver`) for each configured
-model in a temporary directory: it downloads every layer, georegisters each frame,
-converts the GeoTIFFs to PNGs (nodata becomes transparent), and uploads the
-frames and `manifest.json` to `web_exports/<started timestamp>/` in the S3/Tigris
-bucket. It reads storage settings from `AWS_ACCESS_KEY_ID`,
-`AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally,
-`AWS_REGION`. Put them in the repo-root `.env.local` (gitignored; see
-`.env.example`); `just py-export` and `just py-serve` load it.
+model: it downloads each layer's images, georegisters each frame, converts it to
+a PNG (nodata becomes transparent) and uploads it to the S3/Tigris bucket. It
+reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+`AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally, `AWS_REGION`. Put them in
+the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export` and
+`just py-serve` load it.
 
 The export downloads each model's newest finished run from the run's own
 directory (for UW, `wrfrt/data/<YYYYMMDDHH>/`; UW's `timeindep/` copy is
 overwritten in place mid-run and mixes two runs). A run counts as finished once
-the last hour of every configured layer exists. Each exported run gets a marker
-in `model_runs/<model>/<YYYYMMDDTHHMM>Z.json` recording its manifest, the
-published annotation revision and a fingerprint of the model's layers
-(`ModelConfig.fingerprint()`, which ignores display names). A run is exported
-again when either has changed, so a publish, or a deploy that changes
-`config/models.yaml`, takes effect at the next export; production also exports
-at startup (`serve --export-on-startup`). A model that fails to export doesn't
-stop the others. The server serves the first configured model's newest export.
+the last hour of every configured layer exists. A model that fails to export
+doesn't stop the others.
+
+### Storage layout
+
+Runs live under `forecasts/`, laid out like open-meteo's
+[`data_spatial/`](https://github.com/open-meteo/open-data#data-organization):
+
+| Key | Contents |
+| --- | --- |
+| `forecasts/<model>/latest.json` | The newest complete run: `{model, initialized, path, updated_at}` |
+| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json` | The run's layers and frames (below) |
+| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>.png` | Frames, named by valid time (UTC) |
+
+Frames are uploaded before the manifest that lists them, and the manifest before
+`latest.json` points at the run, so a reader following the pointers never finds
+a missing file. `latest.json` never moves to an older run.
+
+A run is exported again, in place, when its layers no longer match what the
+config and annotations would produce. Each manifest layer records its
+`fingerprint` (`LayerConfig.fingerprint()`: its URL template, hours and maptype,
+not its name) and the manifest records the annotation revision. A publish
+re-exports every layer; a config change re-exports only the layers it changed;
+a renamed layer only rewrites the manifest. Production also exports at startup
+(`serve --export-on-startup`), so a deploy that changes `config/models.yaml`
+takes effect right away.
+
+After each export, runs initialized more than the model's `retention_days`
+(7 by default) ago are deleted, except the one `latest.json` points at.
+`georegistration/` is never touched. `upslope delete-legacy-exports` deletes the
+layout used before `forecasts/` (`web_exports/` and `model_runs/`).
+
+### Run manifest
 
 ```json
 {
-  "started": "2026-10-21T10:58:34",
-  "finished": "2026-10-21T11:02:10",
+  "model": "uwwrf_4km",
+  "name": "UW WRF 4km",
+  "initialized": "2026-10-29T00:00:00+00:00",
+  "registration_revision": 12,
+  "updated_at": "2026-10-29T06:02:10+00:00",
   "layers": [
     {
-      "model": "uwwrf_4km",
-      "variable": "surface-temp",
-      "initialized": "2026-10-21T12:00:00+00:00",
-      "dimensions": [900, 900],
+      "id": "surface-temp",
+      "name": "Surface temperature",
+      "maptype": "washington",
+      "fingerprint": "3f9c0d6e1a2b4c5d",
+      "hours": [0, 3, 6, ...],
+      "dimensions": [958, 919],
       "coordinates": [[lon, lat], ...],
-      "frames": [{ "hour": 6, "path": "uwwrf_4km/surface-temp/hour_06.png" }, ...]
+      "frames": [{ "hour": 6, "valid": "2026-10-29T06:00:00+00:00", "path": "surface-temp/2026-10-29T0600.png" }, ...]
     }
   ]
 }
 ```
 
-`dimensions` is `[width, height]` in pixels. `coordinates` are the image's
-top-left, top-right, bottom-right and bottom-left corners. Frame paths are
-relative to the manifest.
+`hours` lists every hour the layer is published for. `dimensions` is
+`[width, height]` in pixels. `coordinates` are the image's top-left, top-right,
+bottom-right and bottom-left corners. Frame paths are relative to the run's
+folder.
+
+### Forecast API
+
+| Method and path | Purpose |
+| --- | --- |
+| `GET /fx/status` | Each configured model's `latest` run and retained `runs` (`{initialized, path}`), cached for up to a minute |
+| `GET /fx/data/{path}` | `forecasts/{path}` from storage: pointers and manifests (`no-cache`) and frames (`max-age=300`), with ETags |
