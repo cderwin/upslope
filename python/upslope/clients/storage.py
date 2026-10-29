@@ -37,12 +37,15 @@ class ModelRunMarker:
         manifest: Bucket key of the run's `manifest.json`.
         registration_revision: Revision of the published annotations the run was georegistered with.
             None for runs exported before annotations were versioned.
+        config_fingerprint: `WrfConfig.fingerprint()` of the layer config the run was exported with.
+            None for runs exported before it was recorded.
     """
 
     model: str
     initialized: datetime
     manifest: str
     registration_revision: int | None = None
+    config_fingerprint: str | None = None
 
     @property
     def export_prefix(self) -> str:
@@ -266,7 +269,12 @@ class StorageClient:
         return sorted(keys)
 
     def mark_model_run_exported(
-        self, model: str, initialized: datetime, manifest_key: str, registration_revision: int | None = None
+        self,
+        model: str,
+        initialized: datetime,
+        manifest_key: str,
+        registration_revision: int | None = None,
+        config_fingerprint: str | None = None,
     ) -> None:
         """Record that a model run has been exported, pointing at its manifest.
 
@@ -277,9 +285,10 @@ class StorageClient:
             initialized: Model run initialization time (UTC).
             manifest_key: Bucket key of the run's manifest, as returned by `export_manifest`.
             registration_revision: Revision of the published annotations used to georegister the run.
+            config_fingerprint: Fingerprint of the layer config the run was exported with.
         """
         key = self._model_run_key(model, initialized)
-        body = _converter.dumps(ModelRunMarker(model, initialized, manifest_key, registration_revision))
+        body = _converter.dumps(ModelRunMarker(model, initialized, manifest_key, registration_revision, config_fingerprint))
         self.s3.put_object(Bucket=self.bucket, Key=key, Body=body, ContentType="application/json")
         logger.info("marked %s run %s as exported", model, f"{initialized:%Y-%m-%d %HZ}")
 

@@ -232,7 +232,7 @@ def gif_bytes(size: tuple[int, int]) -> bytes:
 @pytest.fixture
 def wrf_client() -> MagicMock:
     client = MagicMock()
-    client.current_run_initialization.return_value = datetime(2026, 10, 21, 12, tzinfo=UTC)
+    client.latest_complete_run.return_value = datetime(2026, 10, 21, 12, tzinfo=UTC)
     client.download_image.return_value = (DEV_GEOREGISTRATION / "images/washington/legacy-hour06.gif").read_bytes()
     return client
 
@@ -258,6 +258,8 @@ def test_promote_adds_image(promoting: AnnotationService, store: AnnotationStore
     image = result.draft.document.maptypes[WA].images[result.image]
     assert (image.source.model, image.source.hour, image.annotations) == (source.model, hour, {})
     assert store.read_image(WA, result.image) == wrf_client.download_image.return_value
+    # the frame comes from the run it's labeled with
+    assert wrf_client.download_image.call_args.args[1:] == (hour, datetime(2026, 10, 21, 12, tzinfo=UTC))
 
     # promoting the same frame of the same run again changes nothing
     again = run(promoting.promote(source.model, source.variable, hour))
@@ -281,4 +283,8 @@ def test_promote_validates(promoting: AnnotationService, wrf_client: MagicMock) 
 
     wrf_client.download_image.side_effect = httpx.ConnectError("down")
     with pytest.raises(UpstreamError, match="down"):
+        run(promoting.promote(source.model, source.variable, source.hours[0]))
+
+    wrf_client.latest_complete_run.return_value = None
+    with pytest.raises(UpstreamError, match="no complete model run"):
         run(promoting.promote(source.model, source.variable, source.hours[0]))

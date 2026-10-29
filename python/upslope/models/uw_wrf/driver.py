@@ -15,7 +15,7 @@ from upslope.logging import get_logger, log_duration
 from upslope.models.manifest import Frame, Manifest, ManifestLayer
 from upslope.clients.annotations import AnnotationStore
 from upslope.models.uw_wrf.georegistration import Registration
-from upslope.models.uw_wrf.wrf_client import WrfConfig, WrfClient, LayerConfig
+from upslope.models.uw_wrf.wrf_client import RUN_LOOKBACK, WrfConfig, WrfClient, LayerConfig
 
 logger = get_logger(__name__)
 
@@ -140,16 +140,16 @@ class WrfDriver:
     def run(self, force: bool = False) -> Manifest | None:
         """Process every configured layer in a temporary directory and export the resulting manifest.
 
-        A model run is exported again when the published annotations have changed since it was last
-        exported, so a publish takes effect at the next run of the export. Nothing is exported while
-        UW is partway through a run, even with `force`.
+        Exports the newest run UW has finished publishing. A run is exported again when the published
+        annotations or the layer config have changed since it was last exported, so a publish or a deploy
+        takes effect at the next run of the export.
 
         Args:
-            force: Export even if the current model run was already exported with the current annotations.
+            force: Export even if the run was already exported with the current annotations and config.
 
         Returns:
-            The exported manifest, or None if there was nothing to do (already exported, UW mid-run,
-            or no annotations published).
+            The exported manifest, or None if there was nothing to do (already exported, no complete
+            run, or no annotations published).
         """
         start_ts = datetime.now()
         published = self.annotations.load_published()
@@ -157,33 +157,41 @@ class WrfDriver:
             logger.error("no georegistration annotations have been published; skipping export")
             return None
 
-        if self.client.run_in_progress():
-            # images from two runs would be mixed in one export; the next hourly run picks it up
-            logger.info("UW is partway through a model run; skipping export until it finishes")
+        initialized = self.client.latest_complete_run()
+        if initialized is None:
+            logger.warning("UW has no complete model run in the last %d runs; skipping export", RUN_LOOKBACK)
             return None
 
-        initialized = self.client.current_run_initialization()
-        marker =self.storage.model_run_marker(self.model, initialized)
-        if not force and marker is not None and marker.registration_revision == published.revision:
-            logger.info(
-                "model run initialized %s already exported with annotations r%d; skipping",
-                f"{initialized:%Y-%m-%d %HZ}",
-                published.revision,
-            )
-            return None
+        run_name = f"{initialized:%Y-%m-%d %HZ}"
+        fingerprint = self.config.fingerprint()
+        marker = self.storage.model_run_marker(self.model, initialized)
         if marker is not None:
-            logger.info("annotations changed to r%d since the last export; exporting again", published.revision)
+            annotations_changed = marker.registration_revision != published.revision
+            config_changed = marker.config_fingerprint != fingerprint
+            if not (force or annotations_changed or config_changed):
+                logger.info("model run %s already exported with annotations r%d and this config; skipping", run_name, published.revision)
+                return None
+            reasons = [
+                reason
+                for reason, applies in (
+                    (f"annotations changed to r{published.revision}", annotations_changed),
+                    ("layer config changed", config_changed),
+                    ("forced", force),
+                )
+                if applies
+            ]
+            logger.info("model run %s was already exported; exporting again (%s)", run_name, ", ".join(reasons))
         registration = Registration.build(published)
 
         with TemporaryDirectory() as tmp_dir_name:
             output_directory = Path(tmp_dir_name)
             manifest_layers: list[ManifestLayer] = []
-            logger.info("exporting %d layers for model run initialized %s", len(self.config.layers), f"{initialized:%Y-%m-%d %HZ}")
+            logger.info("exporting %d layers for model run initialized %s", len(self.config.layers), run_name)
             for i, layer in enumerate(self.config.layers, start=1):
                 name = f"{layer.domain}-{layer.variable}"
                 logger.info("[%d/%d] processing layer %s", i, len(self.config.layers), name)
                 with log_duration(logger, f"downloaded {name}"):
-                    self.client.download_layer(layer, output_directory / "raw")
+                    self.client.download_layer(layer, output_directory / "raw", initialized)
                 with log_duration(logger, f"georegistered {name}"):
                     self.georegister_layer(layer, output_directory, registration)
                 with log_duration(logger, f"converted {name} to PNG frames"):
@@ -192,5 +200,5 @@ class WrfDriver:
             manifest = Manifest(start_ts, datetime.now(), manifest_layers)
             with log_duration(logger, "uploaded manifest"):
                 manifest_key = self.storage.export_manifest(manifest)
-            self.storage.mark_model_run_exported(self.model, initialized, manifest_key, published.revision)
+            self.storage.mark_model_run_exported(self.model, initialized, manifest_key, published.revision, fingerprint)
             return manifest

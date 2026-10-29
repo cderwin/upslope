@@ -52,4 +52,6 @@ USER upslope
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
-CMD ["upslope", "serve"]
+# Export at startup as well as hourly. It's a no-op unless the newest complete run hasn't been
+# exported with this image's layer config, so a deploy that changes the layers publishes them right away.
+CMD ["upslope", "serve", "--export-on-startup"]

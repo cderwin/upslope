@@ -1,6 +1,6 @@
-import re
-from datetime import datetime, UTC
-from email.utils import parsedate_to_datetime
+import hashlib
+import json
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 from typing import ClassVar
 from attrs import define, field
@@ -11,13 +11,24 @@ from upslope.logging import get_logger
 
 logger = get_logger(__name__)
 
-# Dates the run being served. The 12km domain is published first, so its hour-0 image is the
-# first to change when a new run starts.
-RUN_REFERENCE_IMAGE = "timeindep/images_d2/tsfc.00.0000.gif"
+# UW runs at 00Z and 12Z. How many recent runs to consider when looking for the newest complete one;
+# a run takes under 12 hours, so two is normally enough, and the rest cover a late or missing run.
+RUN_LOOKBACK = 4
 
 
-class RunStatusError(Exception):
-    """UW's response doesn't say which model run it is serving."""
+def latest_initializations(now: datetime, count: int = RUN_LOOKBACK) -> list[datetime]:
+    """The most recent 00Z/12Z initialization times at or before `now`, newest first.
+
+    Args:
+        now: Current time (timezone-aware).
+        count: How many times to return.
+
+    Returns:
+        `count` initialization times in UTC.
+    """
+    now = now.astimezone(UTC)
+    latest = now.replace(hour=now.hour - now.hour % 12, minute=0, second=0, microsecond=0)
+    return [latest - timedelta(hours=12 * i) for i in range(count)]
 
 
 @define
@@ -120,6 +131,25 @@ class WrfConfig:
         return code
 
 
+    def fingerprint(self) -> str:
+        """Identify what the export produces under this config: each layer and the URLs and hours it uses.
+
+        Codes and schedules that no layer uses don't affect it.
+
+        Returns:
+            A short hex digest; equal configs give equal digests.
+        """
+        layers = [
+            {
+                "domain": [layer.domain, self.get_domain_code(layer.domain)],
+                "variable": [layer.variable, self.get_variable_code(layer.variable)],
+                "maptype": [layer.maptype, self.get_maptype_code(layer.maptype)],
+                "hours": self.get_forecast_hours(layer.forecast_schedule),
+            }
+            for layer in self.layers
+        ]
+        return hashlib.sha256(json.dumps(layers, sort_keys=True).encode()).hexdigest()[:16]
+
     @classmethod
     def load(cls, wrf_config: Path) -> "WrfConfig":
         """Load the config from a YAML file.
@@ -136,7 +166,11 @@ class WrfConfig:
 
 @define
 class WrfClient:
-    """HTTP client for downloading UW WRF forecast images and checking run status.
+    """HTTP client for downloading UW WRF forecast images from a specific model run.
+
+    UW also serves the newest images under `timeindep/`, but overwrites them in place while a run is in
+    progress, so they mix two runs for hours at a time. Each run's own directory (`<YYYYMMDDHH>/`) is
+    never mixed, and UW keeps them for at least two weeks.
 
     Attributes:
         config: Name-to-URL-code mappings and forecast schedules used to build image URLs.
@@ -148,33 +182,48 @@ class WrfClient:
     base_url: ClassVar[str] = "https://a.atmos.washington.edu/wrfrt/data"
 
     def build_url(
-        self, domain: str, variable: str, hour: int, maptype: str | None = None
+        self, initialized: datetime, domain: str, variable: str, hour: int, maptype: str | None = None
     ) -> str:
+        """Build the URL of one forecast image.
+
+        Args:
+            initialized: Initialization time of the model run.
+            domain: Domain name.
+            variable: Variable name.
+            hour: Forecast hour.
+            maptype: Map type name; None for the domain's default map.
+
+        Returns:
+            The image's URL in the run's directory. Raises ValueError if a name isn't configured.
+        """
         domain_code = self.config.get_domain_code(domain)
         maptype_code = self.config.get_maptype_code(maptype) if maptype is not None else ""
         variable_code = self.config.get_variable_code(variable)
-        return f"{self.base_url}/timeindep/images_{domain_code}/{maptype_code}{variable_code}.{hour:02d}.0000.gif"
+        run = f"{initialized.astimezone(UTC):%Y%m%d%H}"
+        return f"{self.base_url}/{run}/images_{domain_code}/{maptype_code}{variable_code}.{hour:02d}.0000.gif"
 
-    def download_image(self, layer: LayerConfig, hour: int) -> bytes:
-        """Download one forecast hour of a layer from the latest run.
+    def download_image(self, layer: LayerConfig, hour: int, initialized: datetime) -> bytes:
+        """Download one forecast hour of a layer.
 
         Args:
             layer: Layer to download.
             hour: Forecast hour.
+            initialized: Initialization time of the model run to download from.
 
         Returns:
             The GIF's bytes. Raises httpx.HTTPError if the download fails.
         """
-        response = self._client.get(self.build_url(layer.domain, layer.variable, hour, layer.maptype))
+        response = self._client.get(self.build_url(initialized, layer.domain, layer.variable, hour, layer.maptype))
         _ = response.raise_for_status()
         return response.content
 
-    def download_layer(self, layer: LayerConfig, output_path: Path) -> None:
+    def download_layer(self, layer: LayerConfig, output_path: Path, initialized: datetime) -> None:
         """Download a layer's GIF for each forecast hour, skipping files already on disk.
 
         Args:
             layer: Layer to download.
             output_path: Root directory; files go to `<domain>/<variable>/hourNN.gif`.
+            initialized: Initialization time of the model run to download from.
         """
         for fx_hour in self.config.get_forecast_hours(layer.forecast_schedule):
             gif_output_path = (
@@ -185,49 +234,45 @@ class WrfClient:
                 continue
 
             gif_output_path.parent.mkdir(exist_ok=True, parents=True)
-            image_url = self.build_url(
-                layer.domain, layer.variable, fx_hour, layer.maptype
-            )
+            image_url = self.build_url(initialized, layer.domain, layer.variable, fx_hour, layer.maptype)
             logger.debug("downloading %s", image_url)
             r = self._client.get(image_url)
             _ = r.raise_for_status()
             _ = gif_output_path.write_bytes(r.content)
 
-    def run_in_progress(self) -> bool:
-        """Check whether UW is partway through publishing a model run.
+    def run_complete(self, initialized: datetime) -> bool:
+        """Check whether UW has published every configured layer of a model run.
 
-        UW overwrites the images in place as a run progresses, so during a run the early forecast hours
-        come from the new run and the later ones from the previous run.
+        UW publishes a run's forecast hours in order, so a run is complete once each layer's last
+        scheduled hour exists.
 
-        Returns:
-            False if the status page says the latest run is done or the next one hasn't begun; True
-            otherwise, including for a status this code doesn't recognize.
-        """
-        response = self._client.get(f"{self.base_url}/run_status.html")
-        _ = response.raise_for_status()
-        match = re.search(r"<td class=['\"]?(\w+)", response.text)
-        if match is not None and match.group(1) in ("wait", "done"):
-            return False
-        return "complete" not in response.text
-
-    def current_run_initialization(self) -> datetime:
-        """Identify the model run whose images UW is currently serving.
-
-        The status page doesn't name the run, and the clock alone mislabels it: at 00Z and 12Z UW is
-        still serving the previous run. Instead, read when the 12km domain's hour-0 image was
-        published (about 4 hours after initialization) and round down to the run before it.
+        Args:
+            initialized: Initialization time of the run.
 
         Returns:
-            The run's initialization time (00Z or 12Z, UTC). Raises RunStatusError if UW doesn't say
-            when the image was published.
+            True if every layer's last hour exists. Raises httpx.HTTPError on errors other than 404.
         """
-        response = self._client.head(f"{self.base_url}/{RUN_REFERENCE_IMAGE}")
-        _ = response.raise_for_status()
-        last_modified = response.headers.get("last-modified")
-        if last_modified is None:
-            raise RunStatusError(f"UW did not send Last-Modified for {RUN_REFERENCE_IMAGE}")
-        try:
-            published = parsedate_to_datetime(last_modified).astimezone(UTC)
-        except (TypeError, ValueError) as e:
-            raise RunStatusError(f"UW sent an unreadable Last-Modified for {RUN_REFERENCE_IMAGE}: {last_modified!r}") from e
-        return published.replace(hour=published.hour - published.hour % 12, minute=0, second=0, microsecond=0)
+        for layer in self.config.layers:
+            last_hour = max(self.config.get_forecast_hours(layer.forecast_schedule))
+            url = self.build_url(initialized, layer.domain, layer.variable, last_hour, layer.maptype)
+            response = self._client.head(url)
+            if response.status_code == 404:
+                logger.debug("run %s is incomplete: %s is missing", f"{initialized:%Y-%m-%d %HZ}", url)
+                return False
+            _ = response.raise_for_status()
+        return True
+
+    def latest_complete_run(self, now: datetime | None = None) -> datetime | None:
+        """Find the newest model run that UW has finished publishing.
+
+        Args:
+            now: Current time; defaults to now. Only runs initialized at or before it are considered.
+
+        Returns:
+            The run's initialization time (00Z or 12Z, UTC), or None if none of the last
+            RUN_LOOKBACK runs is complete.
+        """
+        for initialized in latest_initializations(now or datetime.now(UTC)):
+            if self.run_complete(initialized):
+                return initialized
+        return None
