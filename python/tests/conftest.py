@@ -1,7 +1,9 @@
 """Shared test doubles."""
 
 import hashlib
+import mimetypes
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +38,14 @@ class MemoryStorage:
         self.objects[key] = (data, content_type)
         self.puts.append(key)
         return self._etag(data)
+
+    def upload_file(self, path: Path, key: str, content_type: str | None = None) -> None:
+        content_type = content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        self.put_bytes(key, path.read_bytes(), content_type)
+
+    def delete_keys(self, keys: list[str]) -> None:
+        for key in keys:
+            self.objects.pop(key, None)
 
     def list_keys(self, prefix: str) -> list[str]:
         return sorted(key for key in self.objects if key.startswith(prefix))

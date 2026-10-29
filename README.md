@@ -1,7 +1,7 @@
 # upslope
 
 Georegistered mountain weather forecasts. upslope downloads the University of
-Washington WRF forecast plots every hour, warps them onto a real map projection
+Washington WRF forecast plots as they're published, warps them onto a real map projection
 using hand-placed control points, and serves them as an animated overlay on a
 Mapbox map.
 
@@ -17,18 +17,19 @@ UW WRF plots (GIF)          annotations in S3 (control points)
   upslope export-web ── fit + warp to Web Mercator ── PNG frames + manifest.json ──► S3 / Tigris
                                                                                        │
   upslope serve (Litestar) ◄───────────────────────────────────────────────────────────┘
-    ├── /api/forecast   latest manifest and frames
+    ├── /fx/status      each model's latest and retained runs
+    ├── /fx/data/...    run manifests and frames (forecasts/ in the bucket)
     ├── /admin/...      annotation editing API (bearer token)
     ├── /health
     └── /               built webapp (/map, /annotation)
 ```
 
-- **Export pipeline** (`upslope/models/uw_wrf/`): downloads each configured layer,
+- **Export pipeline** (`upslope/models/`): downloads each configured layer,
   fits a pixel → Lambert-conformal transform per map type from the published
   control points, reprojects every frame to EPSG:3857, and uploads PNGs plus a
   `manifest.json`.
 - **Server** (`upslope/server/`): one Litestar process that serves the API and
-  webapp and also runs the export at the top of every hour.
+  webapp and also runs the export every 15 minutes, following runs as they're published.
 - **Annotations** (`upslope/annotation_service.py`, `upslope/clients/annotations.py`):
   a versioned draft/publish workflow stored in S3, edited through the admin API
   and the webapp's `/annotation` page.
@@ -106,7 +107,7 @@ Backend tests use an in-memory S3 stand-in (`python/tests/conftest.py`) and the
 ## Deployment
 
 Production runs on Fly.io as a single always-on machine, which matters: the
-server runs the hourly export itself and serializes annotation edits with an
+server runs the periodic export itself and serializes annotation edits with an
 in-process lock.
 
 ```sh

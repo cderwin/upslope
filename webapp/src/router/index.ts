@@ -22,14 +22,14 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
-    // Forecast overlays on a Mapbox map; model/variable (plus ?hour=&opacity=)
-    // make the current view a shareable link.
+    // Forecast overlays on a Mapbox map; model/layer (plus ?hour=&opacity=&terrain=,
+    // and ?run=2026-10-29T00Z for a run other than the latest) make the view a shareable link.
     path: '/map',
     name: 'map',
     component: () => import('@/views/MapView.vue'),
   },
   {
-    path: '/map/:model/:variable',
+    path: '/map/:model/:layer',
     name: 'map-layer',
     component: () => import('@/views/MapView.vue'),
     props: true,

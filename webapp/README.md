@@ -20,7 +20,7 @@ npm run typecheck
 | `/annotation`                     | `annotation`       | Georegistration tool, first image selected    |
 | `/annotation/:maptype/:image`     | `annotation-image` | Same tool, deep-linked to one image           |
 | `/map`                            | `map`              | Forecast map, first layer selected            |
-| `/map/:domain/:variable`          | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&terrain=1`) |
+| `/map/:model/:layer`              | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&terrain=1&run=`) |
 | `/about`                          | `about`            | Project description and credits               |
 | anything else                     | `not-found`        | 404                                           |
 
@@ -39,16 +39,8 @@ Annotations come from the server's admin API (`/admin/georegistration`; see
 the local stack (`just up`, admin token `upslope-local-admin`) alongside
 `npm run dev`.
 
-Forecast frames in development come from the repository's `forecast/` tree.
-`plugins/dataMounts.ts` is a small Vite plugin that mounts directories under URL
-prefixes, configured in `vite.config.ts`:
-
-| Prefix                          | Directory                         | Notes                                     |
-| ------------------------------- | --------------------------------- | ----------------------------------------- |
-| `/api/forecast`                 | `forecast/web_export`             | Served from disk only, never bundled      |
-
-Every mount is served by both `vite dev` and `vite preview`, with a
-path-traversal guard.
+Forecasts come from the server's forecast API (`/fx/status` and `/fx/data/...`;
+see `python/README.md`), which the dev server also proxies to `localhost:8000`.
 
 ## Forecast map
 
@@ -58,12 +50,25 @@ token in the repo-root `.env.local` (gitignored; see `.env.example`), which
 
 ```sh
 VITE_MAPBOX_TOKEN=pk....
-# VITE_FORECAST_BASE_URL=https://forecast-api.example  # defaults to /api/forecast
+# VITE_FORECAST_BASE_URL=https://forecast-api.example  # defaults to /fx
 ```
 
-The page fetches `<base>/manifest.json` at runtime and loads frames from the
-paths it lists, so pointing `VITE_FORECAST_BASE_URL` at the forecast API is the
-only change needed once it exists. The basemap is Mapbox's
+The page fetches `<base>/status`, then each model's run manifest
+(`<base>/data/<model>/<run>/manifest.json`), and shows every layer of every
+model in one list, labeled with the model and layer names from the server's
+config. By default each model's latest complete run is shown. `?run=2026-10-29T00Z`
+shows that run instead (any run kept in storage, a week by default), with a
+banner linking back to the latest; an unknown run lists the available ones.
+`?run=in-progress` previews each model's newest run while it's still being
+published: only the frames exported so far are shown (the controls say e.g.
+"41 of 45 frames"), and the page reloads the manifests every 3 minutes to pick
+up new ones.
+
+The **Model runs** button (its dot is blue while a run is coming in, amber if a
+layer has stalled, red on errors) opens `RunStatusDialog`: each model's latest
+complete run, its newest run with a progress bar and state per layer (from
+`/fx/status`, refreshed every minute while open), links to preview it, and every
+kept run. The basemap is Mapbox's
 `satellite-streets-v12`. Frames are drawn as a Mapbox `image` source from their
 four corner coordinates, beneath the basemap's labels, with a Mercator
 projection to match the EPSG:3857 registration. The **3D terrain** switch adds
@@ -86,26 +91,25 @@ point or image, discarding, restoring) send the draft revision and reload if
 someone else changed the draft first.
 
 - Click the image to annotate a pixel; click a marker to edit or remove it.
-- **Add image** promotes a forecast frame (layer and hour) from UW's latest run;
+- **Add image** promotes a forecast frame (layer and hour) from the model's latest run;
   so does **Annotate this frame** on `/map` when a token is set.
 - The fit card shows the maptype's mean error against its threshold, which can
   be changed there; the table shows each point's error.
 - **Publish** shows every maptype's fit, takes an optional note, and reports
-  threshold warnings. The next hourly export uses the published annotations.
+  threshold warnings. The next export check (every 15 minutes) uses the published annotations.
 - **History** lists published versions and restores one into the draft;
   **Discard changes** resets the draft to what is published.
 
 ## Layout
 
 ```
-plugins/dataMounts.ts          Vite plugin: data directory serving + manifests
 src/router/                    Route table
 src/views/                     One component per route
 src/forecast/
-  types.ts                     Forecast manifest types
-  api.ts                       Manifest/frame URLs (VITE_FORECAST_BASE_URL)
+  types.ts                     Forecast API types (status, run manifests) and map layers
+  api.ts                       Forecast API (VITE_FORECAST_BASE_URL), ?run= parsing
   usePlayback.ts               Frame selection, playback, preloading
-  components/                  ForecastMap (Mapbox), MapControls
+  components/                  ForecastMap (Mapbox), MapControls, RunStatusDialog
 src/admin/
   token.ts                     Admin token (localStorage) and prompt state
   api.ts                       Authenticated requests; 401/403/412 handling

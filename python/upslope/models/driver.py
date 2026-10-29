@@ -1,22 +1,37 @@
-"""The export pipeline: download each model's newest complete run, georegister it and upload map-ready frames."""
+"""The export pipeline: follow each model's runs as they're published, georegistering and uploading each new frame.
 
-from datetime import datetime
+Every check advances each run from the latest complete one onward. A layer resumes after its newest exported
+hour and downloads hours until one isn't published yet (a 404), so a run's frames appear as the model
+produces them. Other failures (timeouts, server errors, bad images) are recorded and retried at the next check.
+"""
+
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+import httpx
 import numpy as np
 import rasterio
-from attrs import define
+from attrs import define, evolve
 from PIL import Image
 from pyproj import Transformer
 
-
-from upslope.clients.storage import StorageClient
-from upslope.logging import get_logger, log_duration
 from upslope.clients.annotations import AnnotationStore
+from upslope.clients.forecasts import ForecastStore
+from upslope.logging import get_logger, log_duration
 from upslope.models.config import LayerConfig, ModelConfig, ModelsConfig
-from upslope.models.image_client import ImageClient, raw_image_name
-from upslope.models.manifest import Manifest, ManifestLayer
+from upslope.models.image_client import ImageClient
+from upslope.models.manifest import (
+    Frame,
+    InProgress,
+    LayerProgress,
+    RunLayer,
+    RunManifest,
+    RunPointer,
+    frame_name,
+    valid_time,
+)
 from upslope.models.uw_wrf.georegistration import Registration
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 
@@ -76,110 +91,98 @@ class ExportFailed(Exception):
 
     Attributes:
         models: IDs of the models that failed.
-        manifests: Manifests of the models that exported successfully.
+        manifests: Manifests written for the models that didn't fail.
     """
 
-    def __init__(self, models: list[str], manifests: list[Manifest]) -> None:
+    def __init__(self, models: list[str], manifests: list[RunManifest]) -> None:
         super().__init__(f"export failed for {', '.join(models)}")
         self.models = models
         self.manifests = manifests
 
 
+def run_name(model: ModelConfig, initialized: datetime) -> str:
+    return f"{model.id} {initialized:%Y-%m-%d %HZ}"
+
+
+def reusable_layers(model: ModelConfig, existing: RunManifest | None, revision: int) -> dict[str, RunLayer]:
+    """Layers of an exported run whose frames are still what the config and annotations would produce.
+
+    A layer is reusable, complete or not, when it was georegistered with the current annotation revision
+    and its frames came from the same URL, hours and maptype (its fingerprint). Its display name may differ.
+
+    Args:
+        model: The model's current config.
+        existing: The run's manifest, if it was exported before.
+        revision: Revision of the published annotations.
+
+    Returns:
+        Reusable layers by id, with names updated from the config.
+    """
+    if existing is None or existing.registration_revision != revision:
+        return {}
+    reusable = {}
+    for layer in model.layers:
+        exported = existing.layer(layer.id)
+        if exported is not None and exported.fingerprint == layer.fingerprint():
+            reusable[layer.id] = evolve(exported, name=layer.name)
+    return reusable
+
+
+def _describe(error: Exception) -> str:
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"HTTP {error.response.status_code}"
+    return f"{error.__class__.__name__}: {error}" if str(error) else error.__class__.__name__
+
+
 @define
 class ForecastDriver:
-    """Runs the export pipeline for every configured model: download, georegister, and export a manifest.
+    """Runs the export pipeline for every configured model.
 
     Attributes:
         config: Models and layers to export.
         client: Client for downloading forecast images.
-        storage: Destination for the exported manifests.
-        annotations: Source of the published georegistration annotations, read at the start of each run.
+        store: Destination for the exported runs.
+        annotations: Source of the published georegistration annotations, read at the start of each check.
+        now: Clock, for tests.
     """
 
     config: ModelsConfig
     client: ImageClient
-    storage: StorageClient
+    store: ForecastStore
     annotations: AnnotationStore
+    now: Callable[[], datetime] = lambda: datetime.now(UTC)
 
-    def georegister_layer(self, layer: LayerConfig, output_directory: Path, registration: Registration) -> None:
-        """Georegister every downloaded image of a layer into a GeoTIFF.
+    def run(self, force: bool = False) -> list[RunManifest]:
+        """Check every configured model for new frames and export them.
 
-        Args:
-            layer: Layer to georegister.
-            output_directory: Working directory; reads from `raw/<layer>/` and writes to `registered/<layer>/`.
-            registration: Fitted transforms to place the images with.
-        """
-        for raw_image in (output_directory / "raw" / layer.id).glob("*.gif"):
-            registered_image_path = (output_directory / "registered" / layer.id / raw_image.name).with_suffix(".tiff")
-            registered_image_path.parent.mkdir(exist_ok=True, parents=True)
-            logger.debug("georegistering %s/%s", layer.id, raw_image.name)
-            registration.georegister(raw_image, registered_image_path, layer.maptype)
-
-    def export_layer(
-        self, model: ModelConfig, layer: LayerConfig, output_directory: Path, initialized: datetime
-    ) -> ManifestLayer:
-        """Convert a layer's registered GeoTIFFs to PNG frames and collect them into a manifest layer.
+        A model failing doesn't stop the others; the failures are raised together at the end.
 
         Args:
-            model: Model the layer belongs to.
-            layer: Layer to export.
-            output_directory: Working directory; reads from `registered/` and writes to `manifest/`.
-            initialized: Model run initialization time.
+            force: Export every layer of the runs being followed again, even ones already exported with the
+                current annotations and config.
 
         Returns:
-            The manifest layer with one frame per forecast hour. Raises if any frame is missing.
-        """
-        manifest_layer = ManifestLayer.new(model.id, layer.id, initialized)
-        for hour in layer.hours.hours:
-            tiff_path = (output_directory / "registered" / layer.id / raw_image_name(hour)).with_suffix(".tiff")
-            if not tiff_path.exists():
-                raise RuntimeError(f"registered image does not exist for layer {model.id}/{layer.id} at hour {hour}")
-
-            with rasterio.open(tiff_path) as dataset:
-                if manifest_layer.dimensions is None:
-                    manifest_layer.dimensions = (dataset.width, dataset.height)
-                    manifest_layer.coordinates = image_coordinates(dataset)
-                elif manifest_layer.dimensions != (dataset.width, dataset.height):
-                    raise ValueError(f"frame size changed at hour {hour} for layer {model.id}/{layer.id}")
-
-                frame_path = output_directory / "manifest" / layer.id / f"hour_{hour:02d}.png"
-                frame_path.parent.mkdir(exist_ok=True, parents=True)
-                convert_to_png(dataset, frame_path)
-                manifest_layer.add_frame(frame_path, hour)
-
-        if manifest_layer.dimensions is None or manifest_layer.coordinates is None:
-            raise ValueError(f"layer {model.id}/{layer.id} has no frames")
-
-        return manifest_layer
-
-    def run(self, force: bool = False) -> list[Manifest]:
-        """Export every configured model's newest complete run, where it isn't exported already.
-
-        A model failing to export doesn't stop the others; the failures are raised together at the end.
-
-        Args:
-            force: Export even if a run was already exported with the current annotations and config.
-
-        Returns:
-            The manifests exported, one per model that had something to export. Raises ExportFailed
-            if any model failed.
+            The manifests written. Raises ExportFailed if any model failed.
         """
         published = self.annotations.load_published()
         if published is None:
             logger.error("no georegistration annotations have been published; skipping export")
             return []
 
+        registration: Registration | None = None
+
+        def get_registration() -> Registration:
+            # fitting is only needed once something is downloaded
+            nonlocal registration
+            if registration is None:
+                registration = Registration.build(published)
+            return registration
+
         manifests = []
         failed: list[str] = []
-        registration: Registration | None = None
         for model in self.config.models:
             try:
-                initialized = self._run_to_export(model, published, force)
-                if initialized is None:
-                    continue
-                if registration is None:
-                    registration = Registration.build(published)
-                manifests.append(self.export_run(model, initialized, registration, published.revision))
+                manifests.extend(self.run_model(model, published, get_registration, force))
             except Exception:
                 logger.exception("export of %s failed", model.id)
                 failed.append(model.id)
@@ -187,65 +190,220 @@ class ForecastDriver:
             raise ExportFailed(failed, manifests)
         return manifests
 
-    def _run_to_export(self, model: ModelConfig, published: AnnotationDocument, force: bool) -> datetime | None:
-        """The model's newest complete run, if it needs exporting with these annotations and this config."""
-        initialized = self.client.latest_complete_run(model)
-        if initialized is None:
-            logger.warning("%s has no complete run in the last %d hours; skipping", model.id, model.lookback_hours)
-            return None
+    def run_model(
+        self,
+        model: ModelConfig,
+        published: AnnotationDocument,
+        registration: Callable[[], Registration],
+        force: bool = False,
+    ) -> list[RunManifest]:
+        """Advance every run of a model from its latest complete run onward, oldest first.
 
-        run_name = f"{model.id} {initialized:%Y-%m-%d %HZ}"
-        marker = self.storage.model_run_marker(model.id, initialized)
-        if marker is None:
-            return initialized
-        annotations_changed = marker.registration_revision != published.revision
-        config_changed = marker.config_fingerprint != model.fingerprint()
-        if not (force or annotations_changed or config_changed):
-            logger.info("%s already exported with annotations r%d and this config; skipping", run_name, published.revision)
-            return None
-        reasons = [
-            reason
-            for reason, applies in (
-                (f"annotations changed to r{published.revision}", annotations_changed),
-                ("layer config changed", config_changed),
-                ("forced", force),
-            )
-            if applies
-        ]
-        logger.info("%s was already exported; exporting again (%s)", run_name, ", ".join(reasons))
-        return initialized
+        Points `latest.json` at a run once it's complete, `in-progress.json` at the newest run that has
+        started, and deletes runs past the model's retention.
 
-    def export_run(
-        self, model: ModelConfig, initialized: datetime, registration: Registration, registration_revision: int
-    ) -> Manifest:
-        """Download, georegister and convert every layer of a run in a temporary directory, then upload it.
+        Args:
+            model: Model to export.
+            published: Published annotations.
+            registration: Returns the transforms fitted from `published`.
+            force: Export every layer again.
+
+        Returns:
+            The manifests written, oldest run first.
+        """
+        now = self.now()
+        latest = self.store.read_latest(model.id)
+        # no runs before the newest complete one: they'd never be shown
+        floor = latest.initialized if latest is not None else self.client.latest_complete_run(model, now)
+        runs = sorted(run for run in model.initializations(now) if floor is None or run >= floor)
+        previous = self.store.read_in_progress(model.id)
+
+        written: list[RunManifest] = []
+        newest: InProgress | None = None
+        latest_run = latest.initialized if latest is not None else None
+        for initialized in runs:
+            carried = previous if previous is not None and previous.initialized == initialized else None
+            advanced = self.advance_run(model, initialized, published.revision, registration, force, carried)
+            if advanced is None:
+                continue
+            manifest, progress, wrote = advanced
+            if wrote:
+                written.append(manifest)
+            newest = progress
+            if manifest.complete and (latest_run is None or latest_run < initialized):
+                self.store.write_latest(RunPointer.to(manifest, self.now()))
+                latest_run = initialized
+
+        if newest is not None:
+            self.store.write_in_progress(newest)
+        if latest_run is not None:
+            # keep what the pointers show, even when the model has stopped publishing
+            showing = newest or previous
+            keep = {latest_run} | ({showing.initialized} if showing is not None else set())
+            self.store.prune(model.id, model.retention_days, now, keep=keep)
+        return written
+
+    def advance_run(
+        self,
+        model: ModelConfig,
+        initialized: datetime,
+        revision: int,
+        registration: Callable[[], Registration],
+        force: bool = False,
+        previous: InProgress | None = None,
+    ) -> tuple[RunManifest, InProgress, bool] | None:
+        """Export whatever new frames a run has, writing its manifest after each layer that got any.
 
         Args:
             model: Model to export.
             initialized: Initialization time of the run.
-            registration: Fitted transforms to place the images with.
-            registration_revision: Revision of the annotations `registration` was fitted from.
+            revision: Revision of the annotations `registration` fits.
+            registration: Returns the fitted transforms to place the images with.
+            force: Start every layer over.
+            previous: The run's progress from the last check, to carry forward when each layer last advanced.
 
         Returns:
-            The exported manifest.
+            The manifest, the run's progress, and whether the manifest was written; or None if the run
+            hasn't started publishing (nothing is written for it then).
         """
-        start_ts = datetime.now()
-        with TemporaryDirectory() as tmp_dir_name:
-            output_directory = Path(tmp_dir_name)
-            manifest_layers: list[ManifestLayer] = []
-            logger.info("exporting %d layers of %s run %s", len(model.layers), model.id, f"{initialized:%Y-%m-%d %HZ}")
-            for i, layer in enumerate(model.layers, start=1):
-                name = f"{model.id}/{layer.id}"
-                logger.info("[%d/%d] processing layer %s", i, len(model.layers), name)
-                with log_duration(logger, f"downloaded {name}"):
-                    self.client.download_layer(layer, initialized, output_directory / "raw" / layer.id)
-                with log_duration(logger, f"georegistered {name}"):
-                    self.georegister_layer(layer, output_directory, registration)
-                with log_duration(logger, f"converted {name} to PNG frames"):
-                    manifest_layers.append(self.export_layer(model, layer, output_directory, initialized))
+        existing = self.store.read_manifest(model.id, initialized)
+        reusable = {} if force else reusable_layers(model, existing, revision)
+        layers = [reusable.get(layer.id) or self.new_layer(layer) for layer in model.layers]
+        manifest = RunManifest(model.id, model.name, initialized, revision, self.now(), layers)
+        # names, layers or annotations changed, or some layers are starting over
+        dirty = existing is None or evolve(existing, updated_at=manifest.updated_at) != manifest
 
-            manifest = Manifest(start_ts, datetime.now(), manifest_layers)
-            with log_duration(logger, "uploaded manifest"):
-                manifest_key = self.storage.export_manifest(manifest)
-            self.storage.mark_model_run_exported(model.id, initialized, manifest_key, registration_revision, model.fingerprint())
-            return manifest
+        progress = InProgress(model.id, initialized, manifest.path, self.now())
+        wrote = False
+        with TemporaryDirectory() as tmp_dir_name:
+            work = Path(tmp_dir_name)
+            for config, run_layer in zip(model.layers, layers):
+                before = previous.layer(config.id) if previous is not None else None
+                count = len(run_layer.frames)
+                progress.layers.append(self.advance_layer(model, config, run_layer, initialized, registration, work, before))
+                # a new run gets its first manifest once it has a frame
+                started = existing is not None or any(layer.frames for layer in layers)
+                if len(run_layer.frames) > count or (dirty and started):
+                    manifest.updated_at = self.now()
+                    self.store.write_manifest(manifest)
+                    wrote, dirty = True, False
+
+        progress.checked_at = self.now()
+        if existing is None and not wrote:
+            return None
+        if wrote:
+            frames = sum(len(layer.frames) for layer in manifest.layers)
+            total = sum(len(layer.hours) for layer in manifest.layers)
+            logger.info("%s: %d of %d frames%s", run_name(model, initialized), frames, total, " (complete)" if manifest.complete else "")
+        return manifest, progress, wrote
+
+    def advance_layer(
+        self,
+        model: ModelConfig,
+        layer: LayerConfig,
+        run_layer: RunLayer,
+        initialized: datetime,
+        registration: Callable[[], Registration],
+        work: Path,
+        previous: LayerProgress | None = None,
+    ) -> LayerProgress:
+        """Export a layer's hours after its newest frame, until one isn't published yet or fails.
+
+        Args:
+            model: Model the layer belongs to.
+            layer: Layer config.
+            run_layer: The layer in the run's manifest; frames are added to it.
+            initialized: Initialization time of the run.
+            registration: Returns the fitted transforms.
+            work: Scratch directory.
+            previous: The layer's progress at the last check.
+
+        Returns:
+            The layer's progress.
+        """
+        exported = {frame.hour for frame in run_layer.frames}
+        available = max((frame.hour for frame in run_layer.frames), default=None)
+        progress = LayerProgress(layer.id, layer.hours.last, available)
+        if previous is not None and previous.available_hour == available:
+            progress.progressed_at = previous.progressed_at
+        name = f"{model.id}/{layer.id}"
+        for hour in layer.hours.hours:
+            if hour in exported:
+                continue
+            try:
+                self.export_frame(model, layer, run_layer, initialized, hour, registration, work)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 404:
+                    logger.debug("%s hour %d isn't published yet", name, hour)
+                    break
+                self._record_error(progress, name, hour, e)
+                break
+            except Exception as e:
+                # timeouts, half-written images and the like: try again at the next check
+                self._record_error(progress, name, hour, e)
+                break
+            progress.available_hour = hour
+            progress.progressed_at = self.now()
+        if progress.available_hour != available:
+            logger.info("%s: exported hours %s to %d", name, "start" if available is None else available, progress.available_hour)
+        return progress
+
+    def _record_error(self, progress: LayerProgress, name: str, hour: int, error: Exception) -> None:
+        progress.error = f"hour {hour}: {_describe(error)}"
+        progress.error_at = self.now()
+        logger.warning("%s: could not export hour %d (%s); will retry", name, hour, _describe(error), exc_info=not isinstance(error, httpx.HTTPError))
+
+    @staticmethod
+    def new_layer(layer: LayerConfig) -> RunLayer:
+        """An empty run layer for a configured layer."""
+        return RunLayer(layer.id, layer.name, layer.maptype, layer.fingerprint(), layer.hours.hours)
+
+    def export_frame(
+        self,
+        model: ModelConfig,
+        layer: LayerConfig,
+        run_layer: RunLayer,
+        initialized: datetime,
+        hour: int,
+        registration: Callable[[], Registration],
+        work: Path,
+    ) -> Frame:
+        """Download one forecast hour, georegister it, upload it as a PNG and add it to `run_layer`.
+
+        Args:
+            model: Model the layer belongs to.
+            layer: Layer config.
+            run_layer: Layer to add the frame to; sets its dimensions and corners from the first frame.
+            initialized: Initialization time of the run.
+            hour: Forecast hour.
+            registration: Returns the fitted transforms to place the image with.
+            work: Scratch directory.
+
+        Returns:
+            The frame. Raises httpx.HTTPError if the download fails, and ValueError if the frame's
+            size differs from the layer's other frames.
+        """
+        gif = work / layer.id / f"{hour:03d}.gif"
+        gif.parent.mkdir(parents=True, exist_ok=True)
+        tiff, png = gif.with_suffix(".tiff"), gif.with_suffix(".png")
+        try:
+            gif.write_bytes(self.client.download_image(layer, initialized, hour))
+            registration().georegister(gif, tiff, layer.maptype)
+
+            with rasterio.open(tiff) as dataset:
+                size = (dataset.width, dataset.height)
+                if run_layer.dimensions is not None and tuple(run_layer.dimensions) != size:
+                    raise ValueError(f"frame size changed at hour {hour} for layer {model.id}/{layer.id}")
+                coordinates = image_coordinates(dataset)
+                convert_to_png(dataset, png)
+
+            valid = valid_time(initialized, hour)
+            frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid)}")
+            self.store.upload_frame(model.id, initialized, frame.path, png)
+        finally:
+            for path in (gif, tiff, png):
+                path.unlink(missing_ok=True)
+        if run_layer.dimensions is None:
+            run_layer.dimensions, run_layer.coordinates = size, coordinates
+        run_layer.frames.append(frame)
+        return frame

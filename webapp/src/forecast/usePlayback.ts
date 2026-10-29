@@ -1,5 +1,4 @@
 import { computed, onScopeDispose, ref, watch, type Ref } from 'vue'
-import { frameUrl } from './api'
 import type { ForecastLayer } from './types'
 
 /**
@@ -16,7 +15,7 @@ export function usePlayback(layer: Ref<ForecastLayer | undefined>, intervalMs: R
 
   const frames = computed(() => layer.value?.frames ?? [])
   const frame = computed(() => frames.value[index.value])
-  const url = computed(() => (frame.value ? frameUrl(frame.value.path) : undefined))
+  const url = computed(() => frame.value?.url)
   const loadProgress = computed(() =>
     frames.value.length ? (loaded.value.size + failed.value.size) / frames.value.length : 1,
   )
@@ -30,7 +29,7 @@ export function usePlayback(layer: Ref<ForecastLayer | undefined>, intervalMs: R
       failed.value = new Set()
       next.forEach((f, i) => {
         const image = new Image()
-        image.src = frameUrl(f.path)
+        image.src = f.url
         image
           .decode()
           .then(() => current === generation && (loaded.value = new Set(loaded.value).add(i)))

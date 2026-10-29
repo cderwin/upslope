@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { layerKey, layerLabel } from '@/forecast/api'
+import { layerKey, layerLabel, runLabel as formatRun } from '@/forecast/api'
 import type { ForecastLayer } from '@/forecast/types'
 
 const props = defineProps<{
@@ -26,13 +26,6 @@ const validFormat = new Intl.DateTimeFormat('en-US', {
   hour: 'numeric',
   timeZoneName: 'short',
 })
-const runFormat = new Intl.DateTimeFormat('en-US', {
-  timeZone: 'UTC',
-  month: 'short',
-  day: 'numeric',
-  hour: '2-digit',
-  hourCycle: 'h23',
-})
 
 const initialized = computed(() => new Date(props.layer.initialized))
 
@@ -48,20 +41,21 @@ const validLabel = computed(() => {
   return validFormat.format(new Date(start + hour * 3_600_000))
 })
 
-/** e.g. `Oct 22 06Z`, the convention for model run times. */
-const runLabel = computed(() => {
-  if (Number.isNaN(initialized.value.getTime())) return ''
-  const parts = runFormat.formatToParts(initialized.value)
-  const part = (type: Intl.DateTimeFormatPartTypes) => parts.find((p) => p.type === type)?.value ?? ''
-  return `${part('month')} ${part('day')} ${part('hour')}Z`
-})
+const runLabel = computed(() => formatRun(props.layer.initialized))
+
+/** `41 frames`, or `12 of 41 frames` while a run is still publishing. */
+const framesLabel = computed(() =>
+  props.hours.length < props.layer.hours.length
+    ? `${props.hours.length} of ${props.layer.hours.length} frames`
+    : `${props.hours.length} frames`,
+)
 </script>
 
 <template>
   <div class="map-controls card shadow-sm">
     <div class="card-body vstack gap-3">
       <div>
-        <label class="form-label small mb-1" for="forecast-layer">Domain / variable</label>
+        <label class="form-label small mb-1" for="forecast-layer">Layer</label>
         <select
           id="forecast-layer"
           class="form-select form-select-sm"
@@ -104,7 +98,11 @@ const runLabel = computed(() => {
             <span v-if="offsetLabel" class="text-body-secondary font-monospace ms-1">{{ offsetLabel }}</span>
           </span>
         </label>
-        <div v-if="runLabel" class="small text-body-secondary">Model run {{ runLabel }}</div>
+        <div v-if="runLabel" class="small text-body-secondary">
+          Model run {{ runLabel }}
+          <span v-if="layer.inProgress && !layer.latest" class="badge text-bg-info ms-1">in progress</span>
+          <span v-else-if="!layer.latest" class="badge text-bg-warning ms-1">not the latest</span>
+        </div>
         <input
           id="forecast-hour"
           v-model.number="index"
@@ -131,7 +129,7 @@ const runLabel = computed(() => {
               ›
             </button>
           </div>
-          <small class="text-body-secondary ms-auto">{{ hours.length }} frames</small>
+          <small class="text-body-secondary ms-auto">{{ framesLabel }}</small>
         </div>
       </div>
 

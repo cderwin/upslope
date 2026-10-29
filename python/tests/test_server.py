@@ -1,50 +1,33 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from litestar.testing import TestClient
 
-from upslope.clients.storage import ModelRunMarker, StoredObject
+from upslope.clients.forecasts import ForecastStore
+from upslope.clients.storage import StoredObject
+from upslope.models.config import HourRange, LayerConfig, ModelConfig, ModelsConfig
+from upslope.models.manifest import InProgress, LayerProgress, RunManifest, RunPointer
 from upslope.server.app import create_app
-from upslope.server.forecast import LatestRun
+from upslope.server.forecast import STALL_AFTER, StatusCache, in_progress_status
 
-RUN = ModelRunMarker(
-    model="uwwrf",
-    initialized=datetime(2026, 10, 21, 12, tzinfo=UTC),
-    manifest="web_exports/20261021T130000/manifest.json",
-)
+INITIALIZED = datetime(2026, 10, 21, 12, tzinfo=UTC)
+LAYER = LayerConfig("surface-temp", "Surface temperature", "https://x/{init:%Y%m%d%H}/{hour:02d}.gif", HourRange(last=3), "washington")
+CONFIG = ModelsConfig([
+    ModelConfig("uwwrf_4km", "UW WRF 4km", [0, 12], [LAYER]),
+    ModelConfig("uwwrf_12km", "UW WRF 12km", [0, 12], [LAYER]),
+])
+RUN_KEY = "forecasts/uwwrf_4km/2026/10/21/1200Z"
 
 
-class FakeStorage:
-    """Stands in for StorageClient: objects live in a dict, and lookups are counted."""
-
-    def __init__(self, marker: ModelRunMarker | None = RUN, objects: dict[str, bytes] | None = None) -> None:
-        self.marker = marker
-        self.objects = objects or {}
-        self.latest_calls = 0
-        self.requested: list[str] = []
-
-    def latest_model_run(self, model: str) -> ModelRunMarker | None:
-        self.latest_calls += 1
-        return self.marker
-
-    def get_object(self, key: str, if_none_match: str | None = None) -> StoredObject | None:
-        self.requested.append(key)
-        if key not in self.objects:
-            return None
-        etag = f'"{hash(self.objects[key])}"'
-        if if_none_match == etag:
-            return StoredObject(body=None, etag=etag, not_modified=True)
-        content_type = "application/json" if key.endswith(".json") else "image/png"
-        data = self.objects[key]
-        return StoredObject(
-            body=iter([data]),
-            content_type=content_type,
-            content_length=len(data),
-            etag=etag,
-            last_modified=datetime(2026, 10, 21, 13, 5, tzinfo=UTC),
-        )
+def export_run(storage, model: str = "uwwrf_4km", initialized: datetime = INITIALIZED, latest: bool = True) -> None:
+    store = ForecastStore(storage)
+    store.storage.put_bytes(f"{store.run_prefix(model, initialized)}/surface-temp/2026-10-21T1500.png", b"png-bytes", "image/png")
+    manifest = RunManifest(model, "UW WRF 4km", initialized, 1, initialized, [])
+    store.write_manifest(manifest)
+    if latest:
+        store.write_latest(RunPointer.to(manifest, initialized))
 
 
 @pytest.fixture
@@ -57,18 +40,15 @@ def dist(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def storage() -> FakeStorage:
-    return FakeStorage(
-        objects={
-            "web_exports/20261021T130000/manifest.json": b'{"layers": []}',
-            "web_exports/20261021T130000/uwwrf_12km/surface-temp/hour_06.png": b"png-bytes",
-        }
-    )
+def storage(memory_storage):
+    export_run(memory_storage, initialized=INITIALIZED - timedelta(hours=12))
+    export_run(memory_storage)
+    return memory_storage
 
 
 @pytest.fixture
-def client(storage: FakeStorage, dist: Path):
-    with TestClient(create_app(storage=storage, webapp_dist=dist, run_jobs=False)) as client:
+def client(storage, dist: Path):
+    with TestClient(create_app(storage=storage, webapp_dist=dist, run_jobs=False, config=CONFIG)) as client:
         yield client
 
 
@@ -76,134 +56,212 @@ def test_health(client: TestClient) -> None:
     assert client.get("/health").json() == {"status": "ok"}
 
 
-# --- forecast proxy
+# --- forecast status
 
 
-def test_manifest_proxied_from_latest_run(client: TestClient) -> None:
-    response = client.get("/fx/web/manifest.json")
+def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
+    response = client.get("/fx/status")
     assert response.status_code == 200
-    assert response.json() == {"layers": []}
+    assert response.headers["cache-control"] == "no-cache"
+    assert response.json() == {
+        "models": [
+            {
+                "id": "uwwrf_4km",
+                "name": "UW WRF 4km",
+                "latest": {"initialized": "2026-10-21T12:00:00+00:00", "path": "2026/10/21/1200Z"},
+                "in_progress": None,
+                "runs": [
+                    {"initialized": "2026-10-21T12:00:00+00:00", "path": "2026/10/21/1200Z"},
+                    {"initialized": "2026-10-21T00:00:00+00:00", "path": "2026/10/21/0000Z"},
+                ],
+            },
+            {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "in_progress": None, "runs": []},
+        ]
+    }
+
+
+def test_status_cached_across_requests(client: TestClient, storage) -> None:
+    client.get("/fx/status")
+    export_run(storage, model="uwwrf_12km")
+    assert client.get("/fx/status").json()["models"][1]["latest"] is None
+
+
+def test_status_cache_refreshes_when_stale(memory_storage) -> None:
+    cache = StatusCache(ForecastStore(memory_storage), CONFIG, max_age=0)
+
+    async def scenario() -> None:
+        assert (await cache.get()).models[0].latest is None
+        export_run(memory_storage)
+        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
+
+    asyncio.run(scenario())
+
+
+def test_status_cache_concurrent_stale_requests_share_one_lookup(memory_storage) -> None:
+    store = ForecastStore(memory_storage)
+    cache = StatusCache(store, CONFIG, max_age=60)
+    reads = 0
+    original = store.read_latest
+
+    def counting_read_latest(model: str):
+        nonlocal reads
+        reads += 1
+        return original(model)
+
+    cache._store = type(
+        "Counting",
+        (),
+        {"read_latest": staticmethod(counting_read_latest), "list_runs": store.list_runs, "read_in_progress": store.read_in_progress},
+    )()
+
+    async def scenario() -> None:
+        await asyncio.gather(*(cache.get() for _ in range(10)))
+
+    asyncio.run(scenario())
+    assert reads == len(CONFIG.models)
+
+
+def test_status_cache_serves_cached_status_when_refresh_fails(memory_storage) -> None:
+    export_run(memory_storage)
+    cache = StatusCache(ForecastStore(memory_storage), CONFIG, max_age=0)
+
+    async def scenario() -> None:
+        await cache.refresh()
+
+        def fail(model: str) -> None:
+            raise RuntimeError("s3 down")
+
+        cache._store = type(
+            "Broken", (), {"read_latest": staticmethod(fail), "list_runs": staticmethod(fail), "read_in_progress": staticmethod(fail)}
+        )()
+        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
+
+    asyncio.run(scenario())
+
+
+def test_status_includes_in_progress_run(client: TestClient, storage) -> None:
+    run = INITIALIZED + timedelta(hours=12)
+    checked = run + timedelta(hours=2)
+    ForecastStore(storage).write_in_progress(
+        InProgress("uwwrf_4km", run, "2026/10/22/0000Z", checked, [LayerProgress("surface-temp", 3, 0, checked)])
+    )
+    export_run(storage, initialized=run, latest=False)
+    # a fresh app, since the fixture's has already cached the status
+    with TestClient(create_app(storage=storage, webapp_dist=Path("/nonexistent"), run_jobs=False, config=CONFIG)) as fresh:
+        status = fresh.get("/fx/status").json()["models"][0]
+    assert status["latest"]["path"] == "2026/10/21/1200Z"
+    assert status["runs"][0]["path"] == "2026/10/22/0000Z"
+    progress = status["in_progress"]
+    assert (progress["path"], progress["complete"]) == ("2026/10/22/0000Z", False)
+    assert progress["layers"][0]["id"] == "surface-temp" and progress["layers"][0]["name"] == "Surface temperature"
+    assert (progress["layers"][0]["available_hour"], progress["layers"][0]["last_hour"]) == (0, 3)
+
+
+NOW = datetime(2026, 10, 22, 6, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("layer", "state"),
+    [
+        (LayerProgress("surface-temp", 3, 3, NOW - timedelta(hours=5)), "complete"),
+        (LayerProgress("surface-temp", 3, 0, NOW - timedelta(minutes=20)), "waiting"),
+        (LayerProgress("surface-temp", 3, 0, NOW - STALL_AFTER - timedelta(minutes=1)), "stalled"),
+        (LayerProgress("surface-temp", 3, 0, NOW, "hour 3: HTTP 503", NOW), "error"),
+        # no frames yet: measured from when the run's first frame arrived (the other layer's)
+        (LayerProgress("surface-temp", 3, None, None), "stalled"),
+    ],
+)
+def test_layer_states(layer: LayerProgress, state: str) -> None:
+    other = LayerProgress("snow", 6, 3, NOW - timedelta(hours=3))
+    model = ModelConfig("m", "M", [0], [LAYER, LayerConfig("snow", "Snow", LAYER.url, HourRange(first=3, last=6), "washington")])
+    status = in_progress_status(model, InProgress("m", NOW, "p", NOW, [layer, other]), NOW)
+    assert status.layers[0].state == state
+    assert status.layers[1].state == "stalled"
+    assert not status.complete
+
+
+def test_layer_states_for_new_and_finished_runs() -> None:
+    model = ModelConfig("m", "M", [0], [LAYER])
+    # a layer added to the config since the last check is waiting
+    assert in_progress_status(model, InProgress("m", NOW, "p", NOW, []), NOW).layers[0].state == "waiting"
+    done = in_progress_status(model, InProgress("m", NOW, "p", NOW, [LayerProgress("surface-temp", 3, 3, NOW)]), NOW)
+    assert done.complete and done.layers[0].name == "Surface temperature"
+
+
+# --- forecast data
+
+
+def test_manifest_and_pointer_served_uncached(client: TestClient) -> None:
+    response = client.get("/fx/data/uwwrf_4km/2026/10/21/1200Z/manifest.json")
+    assert response.status_code == 200
+    assert response.json()["initialized"] == "2026-10-21T12:00:00+00:00"
     assert response.headers["cache-control"] == "no-cache"
     assert response.headers["etag"]
+    latest = client.get("/fx/data/uwwrf_4km/latest.json")
+    assert latest.json()["path"] == "2026/10/21/1200Z"
+    assert latest.headers["cache-control"] == "no-cache"
 
 
-def test_frame_proxied_with_headers(client: TestClient, storage: FakeStorage) -> None:
-    response = client.get("/fx/web/uwwrf_12km/surface-temp/hour_06.png")
+def test_frame_served_with_headers(client: TestClient) -> None:
+    response = client.get("/fx/data/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.png")
     assert response.status_code == 200
     assert response.content == b"png-bytes"
     assert response.headers["content-type"] == "image/png"
     assert response.headers["content-length"] == "9"
     assert response.headers["cache-control"] == "public, max-age=300"
-    assert response.headers["last-modified"] == "Wed, 21 Oct 2026 13:05:00 GMT"
-    assert storage.requested[-1] == "web_exports/20261021T130000/uwwrf_12km/surface-temp/hour_06.png"
 
 
 def test_matching_etag_returns_304(client: TestClient) -> None:
-    etag = client.get("/fx/web/uwwrf_12km/surface-temp/hour_06.png").headers["etag"]
-    response = client.get("/fx/web/uwwrf_12km/surface-temp/hour_06.png", headers={"If-None-Match": etag})
+    path = "/fx/data/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.png"
+    etag = client.get(path).headers["etag"]
+    response = client.get(path, headers={"If-None-Match": etag})
     assert response.status_code == 304
     assert response.content == b""
 
 
-def test_missing_frame_404(client: TestClient) -> None:
-    assert client.get("/fx/web/uwwrf_12km/surface-temp/hour_99.png").status_code == 404
-
-
-def test_no_exported_run_404(dist: Path) -> None:
-    with TestClient(create_app(storage=FakeStorage(marker=None), webapp_dist=dist, run_jobs=False)) as client:
-        assert client.get("/fx/web/manifest.json").status_code == 404
+def test_missing_object_404(client: TestClient) -> None:
+    assert client.get("/fx/data/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T2100.png").status_code == 404
+    assert client.get("/fx/data/uwwrf_12km/latest.json").status_code == 404
 
 
 @pytest.mark.parametrize(
     "path",
     [
-        "/fx/web/uwwrf_12km/surface-temp/../../other/secret.json",
-        "/fx/web/uwwrf_12km/surface-temp/%2E%2E/x.png",
-        "/fx/web/uwwrf_12km/surface-temp/a//b.png",
-        "/fx/web/uwwrf_12km/surface-temp/a\\b.png",
+        "/fx/data/uwwrf_4km/../georegistration/draft.json",
+        "/fx/data/uwwrf_4km/%2E%2E/%2E%2E/georegistration/draft.json",
+        "/fx/data/uwwrf_4km/a\\b.png",
     ],
 )
-def test_path_traversal_rejected(client: TestClient, storage: FakeStorage, path: str) -> None:
-    storage.requested.clear()
-    assert client.get(path).status_code == 404
-    assert all(key.startswith("web_exports/20261021T130000/uwwrf_12km/") and ".." not in key for key in storage.requested)
+def test_path_traversal_rejected(client: TestClient, storage, path: str) -> None:
+    storage.put_bytes("georegistration/draft.json", b"secret", "application/json")
+    response = client.get(path)
+    assert response.status_code == 404
+    assert b"secret" not in response.content
 
 
 def test_unknown_fx_path_is_404_not_html(client: TestClient) -> None:
-    for path in ("/fx", "/fx/web", "/fx/web/only-one-segment", "/fx/other/thing"):
+    for path in ("/fx", "/fx/web/manifest.json", "/fx/data", "/fx/other/thing"):
         response = client.get(path)
         assert response.status_code == 404, path
         assert "<html>" not in response.text
 
 
-def test_server_errors_are_logged(dist: Path) -> None:
+def test_server_errors_are_logged(dist: Path, memory_storage) -> None:
     from unittest.mock import patch
 
-    class BrokenStorage(FakeStorage):
+    class BrokenStorage(type(memory_storage)):
         def get_object(self, key: str, if_none_match: str | None = None) -> StoredObject | None:
             raise RuntimeError("storage exploded")
 
     with patch("upslope.server.app.logger") as logger:
-        with TestClient(create_app(storage=BrokenStorage(), webapp_dist=dist, run_jobs=False)) as client:
-            assert client.get("/fx/web/manifest.json").status_code == 500
-            assert client.get("/fx/web/a/b/missing.png").status_code == 500
+        with TestClient(create_app(storage=BrokenStorage(), webapp_dist=dist, run_jobs=False, config=CONFIG)) as client:
+            assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 500
+            assert client.get("/fx/data/a/b/missing.png").status_code == 500
             assert logger.error.call_count == 2
             assert all(isinstance(call.kwargs["exc_info"], RuntimeError) for call in logger.error.call_args_list)
             logger.error.reset_mock()
             assert client.get("/fx/nope").status_code == 404  # client errors aren't logged
             logger.error.assert_not_called()
-
-
-# --- latest run cache
-
-
-def test_latest_run_cached_across_requests(client: TestClient, storage: FakeStorage) -> None:
-    calls = storage.latest_calls  # startup lookup
-    for _ in range(5):
-        client.get("/fx/web/manifest.json")
-    assert storage.latest_calls == calls
-
-
-def test_latest_run_refreshes_when_stale() -> None:
-    storage = FakeStorage()
-    latest = LatestRun(storage, "uwwrf", max_age=0)
-
-    async def scenario() -> None:
-        assert await latest.get() == RUN
-        newer = ModelRunMarker("uwwrf", datetime(2026, 10, 22, 0, tzinfo=UTC), "web_exports/20261022T010000/manifest.json")
-        storage.marker = newer
-        assert await latest.get() == newer
-
-    asyncio.run(scenario())
-    assert storage.latest_calls == 2
-
-
-def test_latest_run_concurrent_stale_requests_share_one_lookup() -> None:
-    storage = FakeStorage()
-    latest = LatestRun(storage, "uwwrf", max_age=60)
-
-    async def scenario() -> None:
-        results = await asyncio.gather(*(latest.get() for _ in range(10)))
-        assert all(result == RUN for result in results)
-
-    asyncio.run(scenario())
-    assert storage.latest_calls == 1
-
-
-def test_latest_run_serves_cached_marker_when_refresh_fails() -> None:
-    storage = FakeStorage()
-    latest = LatestRun(storage, "uwwrf", max_age=0)
-
-    async def scenario() -> None:
-        await latest.refresh()
-
-        def fail(model: str) -> None:
-            raise RuntimeError("s3 down")
-
-        storage.latest_model_run = fail
-        assert await latest.get() == RUN
-
-    asyncio.run(scenario())
 
 
 # --- frontend
@@ -242,24 +300,27 @@ def test_frontend_cannot_escape_dist(client: TestClient, dist: Path) -> None:
     assert "secret" not in response.text
 
 
-def test_missing_dist_still_serves_api(tmp_path: Path, storage: FakeStorage) -> None:
-    with TestClient(create_app(storage=storage, webapp_dist=tmp_path / "nope", run_jobs=False)) as client:
+def test_missing_dist_still_serves_api(tmp_path: Path, storage) -> None:
+    with TestClient(create_app(storage=storage, webapp_dist=tmp_path / "nope", run_jobs=False, config=CONFIG)) as client:
         assert client.get("/health").status_code == 200
-        assert client.get("/fx/web/manifest.json").status_code == 200
+        assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 200
         assert client.get("/").status_code == 404
 
 
 # --- hourly job
 
 
-def test_seconds_until_next_hour() -> None:
-    from upslope.server.jobs import seconds_until_next_hour
+def test_seconds_until_next() -> None:
+    from upslope.server.jobs import seconds_until_next
 
-    assert seconds_until_next_hour(datetime(2026, 10, 21, 13, 59, 30)) == 30
-    assert seconds_until_next_hour(datetime(2026, 10, 21, 14, 0, 0)) == 3600
+    quarter = timedelta(minutes=15)
+    assert seconds_until_next(datetime(2026, 10, 21, 13, 59, 30), quarter) == 30
+    assert seconds_until_next(datetime(2026, 10, 21, 14, 0, 0), quarter) == 900
+    assert seconds_until_next(datetime(2026, 10, 21, 14, 7, 0), quarter) == 480
+    assert seconds_until_next(datetime(2026, 10, 21, 13, 59, 30), timedelta(hours=1)) == 30
 
 
-def test_run_hourly_runs_immediately_when_asked() -> None:
+def test_run_periodically_runs_immediately_when_asked() -> None:
     from unittest.mock import MagicMock, patch
 
     from upslope.server import jobs
@@ -271,10 +332,10 @@ def test_run_hourly_runs_immediately_when_asked() -> None:
         raise asyncio.CancelledError
 
     with patch.object(jobs.asyncio, "sleep", stop_on_sleep), pytest.raises(asyncio.CancelledError):
-        asyncio.run(jobs.run_hourly(driver, run_immediately=True))
+        asyncio.run(jobs.run_periodically(driver, run_immediately=True))
     assert driver.run.call_count == 1
 
     driver.reset_mock()
     with patch.object(jobs.asyncio, "sleep", stop_on_sleep), pytest.raises(asyncio.CancelledError):
-        asyncio.run(jobs.run_hourly(driver))
+        asyncio.run(jobs.run_periodically(driver))
     assert driver.run.call_count == 0
