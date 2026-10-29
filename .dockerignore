@@ -5,9 +5,8 @@
 !python/pyproject.toml
 !python/uv.lock
 !python/README.md
+!python/config/
 !python/upslope/
-
-!data/wrf_codes.yaml
 
 !webapp/
 

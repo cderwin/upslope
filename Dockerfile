@@ -2,7 +2,7 @@
 #
 # The upslope server, with the built webapp baked in.
 #   docker build -t upslope --build-arg VITE_MAPBOX_TOKEN=pk.... .
-# The image keeps the repo layout under /app (python/, data/, webapp/dist/) so the
+# The image keeps the repo layout under /app (python/, webapp/dist/) so the
 # package finds its configs and the webapp relative to its own source.
 
 # --- webapp: vite build -> /app/webapp/dist
@@ -28,6 +28,7 @@ WORKDIR /app/python
 COPY python/pyproject.toml python/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev --no-install-project
 COPY python/README.md ./
+COPY python/config ./config
 COPY python/upslope ./upslope
 RUN --mount=type=cache,target=/root/.cache/uv uv sync --frozen --no-dev
 # readable by the runtime user whatever the permissions on the host checkout
@@ -43,7 +44,6 @@ RUN apt-get update \
 RUN useradd --create-home --uid 1000 upslope
 WORKDIR /app
 COPY --from=python /app/python /app/python
-COPY --chmod=644 data/wrf_codes.yaml /app/data/wrf_codes.yaml
 COPY --from=webapp /app/webapp/dist /app/webapp/dist
 ENV PATH="/app/python/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \

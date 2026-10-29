@@ -63,8 +63,8 @@ class ImageSource:
     """The forecast frame an image was promoted from.
 
     Attributes:
-        model: Manifest model name, e.g. `uwwrf_4km`.
-        variable: Forecast variable, e.g. `surface-temp`.
+        model: Model id, e.g. `uwwrf_4km`.
+        variable: Layer id, e.g. `surface-temp`.
         hour: Forecast hour.
         initialized: Initialization time of the model run current when the frame was downloaded.
         promoted_at: When the image was added.
@@ -115,7 +115,7 @@ class AnnotationDocument:
         revision: Increases with every change to the draft. A published copy keeps the revision of the
             draft it was published from.
         geographic_points: Landmarks keyed by point key.
-        maptypes: Annotated images per maptype (the `maptype` names in wrf_codes.yaml).
+        maptypes: Annotated images per maptype (the `maptype` names in python/config/models.yaml).
     """
 
     revision: int = 0

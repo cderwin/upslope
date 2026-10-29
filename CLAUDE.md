@@ -35,14 +35,17 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 
 | Path | Role |
 | --- | --- |
-| `cli/` | Click commands; `cli/main.py` registers them. `cli/__init__.py` holds repo paths (`PROJECT_BASE`, `DEFAULT_WRF_CONFIG`, `DEV_GEOREGISTRATION`) |
+| `cli/` | Click commands; `cli/main.py` registers them. `cli/__init__.py` holds repo paths (`PROJECT_BASE`, `DEFAULT_MODELS_CONFIG`, `DEV_GEOREGISTRATION`) |
 | `server/app.py` | `create_app()`: Litestar app, lifespan, hourly job wiring |
 | `server/admin.py` | Admin API controller; maps `AnnotationError` subclasses to HTTP status codes |
 | `server/forecast.py`, `server/frontend.py`, `server/jobs.py` | Forecast proxy, webapp serving, hourly export loop |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris; conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
-| `models/uw_wrf/` | WRF download (`wrf_client`), fit + reprojection (`georegistration`), document schema, export `driver` |
+| `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
+| `models/config.py` | Loads and validates `config/models.yaml` |
+| `models/image_client.py`, `models/driver.py` | Image download and run detection; the export pipeline (`ForecastDriver`) |
+| `models/uw_wrf/` | Fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |
 | `models/manifest.py` | Web export manifest schema |
 | `logging.py` | `get_logger`, `configure_logging`, `log_duration` |
 

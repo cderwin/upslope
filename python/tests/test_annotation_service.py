@@ -11,10 +11,10 @@ from PIL import Image
 import pytest
 
 from upslope.annotation_service import AnnotationService, Conflict, Invalid, NotFound, UpstreamError, to_key
-from upslope.cli import DEFAULT_WRF_CONFIG, DEV_GEOREGISTRATION
+from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
-from upslope.models.uw_wrf.wrf_client import WrfConfig
+from upslope.models.config import ModelsConfig
 
 WA = "washington"
 IMG = "legacy-hour06"
@@ -31,7 +31,7 @@ def store(memory_storage) -> AnnotationStore:
 
 @pytest.fixture
 def service(store: AnnotationStore) -> AnnotationService:
-    return AnnotationService(store, WrfConfig.load(DEFAULT_WRF_CONFIG))
+    return AnnotationService(store, ModelsConfig.load(DEFAULT_MODELS_CONFIG))
 
 
 def run(coroutine):
@@ -51,7 +51,7 @@ def test_draft_reports_published_revision(service: AnnotationService) -> None:
 def test_draft_starts_from_published_when_missing(memory_storage) -> None:
     store = AnnotationStore(memory_storage)
     store.publish(read_snapshot(DEV_GEOREGISTRATION))
-    service = AnnotationService(store, WrfConfig(domain_codes=[], maptype_codes=[], variable_codes=[], forecast_schedules=[], layers=[]))
+    service = AnnotationService(store, ModelsConfig([]))
     state, key = run(service.create_point("Mount Rainier", 46.853, -121.760))
     assert key == "mount_rainier" and state.document.revision == 2
     assert store.load_draft()[0].geographic_points[key].name == "Mount Rainier"
@@ -239,7 +239,7 @@ def wrf_client() -> MagicMock:
 
 @pytest.fixture
 def promoting(store: AnnotationStore, wrf_client: MagicMock) -> AnnotationService:
-    return AnnotationService(store, WrfConfig.load(DEFAULT_WRF_CONFIG), wrf_client)
+    return AnnotationService(store, ModelsConfig.load(DEFAULT_MODELS_CONFIG), wrf_client)
 
 
 def test_sources_list_configured_layers(service: AnnotationService) -> None:
@@ -254,12 +254,13 @@ def test_promote_adds_image(promoting: AnnotationService, store: AnnotationStore
     result = run(promoting.promote(source.model, source.variable, hour))
 
     assert result.maptype == WA
-    assert result.image == f"4km-{source.variable}-h{hour:02d}-20261021T12Z"
+    assert result.image == f"uwwrf_4km-{source.variable}-h{hour:02d}-20261021T12Z"
     image = result.draft.document.maptypes[WA].images[result.image]
     assert (image.source.model, image.source.hour, image.annotations) == (source.model, hour, {})
     assert store.read_image(WA, result.image) == wrf_client.download_image.return_value
-    # the frame comes from the run it's labeled with
-    assert wrf_client.download_image.call_args.args[1:] == (hour, datetime(2026, 10, 21, 12, tzinfo=UTC))
+    # the frame comes from the model's complete run, which it's labeled with
+    assert wrf_client.latest_complete_run.call_args.args[0].id == source.model
+    assert wrf_client.download_image.call_args.args[1:] == (datetime(2026, 10, 21, 12, tzinfo=UTC), hour)
 
     # promoting the same frame of the same run again changes nothing
     again = run(promoting.promote(source.model, source.variable, hour))
@@ -270,7 +271,7 @@ def test_promote_validates(promoting: AnnotationService, wrf_client: MagicMock) 
     source = next(s for s in promoting.sources() if s.maptype == WA)
     with pytest.raises(NotFound):
         run(promoting.promote("uwwrf_99km", source.variable, source.hours[0]))
-    with pytest.raises(Invalid, match="schedule"):
+    with pytest.raises(Invalid, match="forecast hours"):
         run(promoting.promote(source.model, source.variable, 7))
 
     wrf_client.download_image.return_value = gif_bytes((10, 10))
@@ -286,5 +287,5 @@ def test_promote_validates(promoting: AnnotationService, wrf_client: MagicMock) 
         run(promoting.promote(source.model, source.variable, source.hours[0]))
 
     wrf_client.latest_complete_run.return_value = None
-    with pytest.raises(UpstreamError, match="no complete model run"):
+    with pytest.raises(UpstreamError, match="no complete run"):
         run(promoting.promote(source.model, source.variable, source.hours[0]))

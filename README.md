@@ -42,7 +42,7 @@ are in [`python/README.md`](python/README.md). The webapp is documented in
 | Path | Contents |
 | --- | --- |
 | `python/` | The `upslope` package: CLI, export pipeline, server, tests (uv project) |
-| `data/wrf_codes.yaml` | Which WRF domains, map types and variables to export |
+| `python/config/models.yaml` | Forecast models and the image layers to export from each |
 | `dev/georegistration/` | Annotation snapshot for tests and the local stack (never deployed) |
 | `webapp/` | Vite + Vue 3 + TypeScript front end |
 | `justfile` | Every common task; run `just` to list them |

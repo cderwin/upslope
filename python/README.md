@@ -1,10 +1,12 @@
 # upslope
 
-Command-line tooling for downloading and georegistering UW WRF forecast images.
+Command-line tooling for downloading and georegistering forecast map images
+(currently UW WRF).
 
 ```sh
-uv run upslope download            # forecast/raw/<domain>/<variable>/hourNN.gif
-uv run upslope reproject           # forecast/georegistered/<domain>/<variable>/hourNN.tiff
+uv run upslope check-layers        # check every configured layer's images exist upstream (--model, --run)
+uv run upslope download            # forecast/raw/<model>/<layer>/hourNN.gif (--model, --run)
+uv run upslope reproject           # forecast/georegistered/<model>/<layer>/hourNN.tiff
 uv run upslope export-web          # full pipeline; uploads PNGs + manifest.json to storage
 uv run upslope registration-error  # per-maptype fit error, in meters (--draft, --snapshot DIR)
 uv run upslope serve               # API server + hourly export
@@ -14,6 +16,31 @@ uv run upslope georegistration snapshot DIR  # save the published annotations to
 
 `reproject` and `registration-error` read the annotations published in storage;
 pass `--snapshot ../dev/georegistration` to use the repo's snapshot instead.
+
+## Models config
+
+`config/models.yaml` lists the forecast models and, for each, the image layers
+to export (`upslope/models/config.py`):
+
+```yaml
+models:
+  - id: uwwrf_4km            # in map URLs and storage keys; don't rename
+    name: UW WRF 4km         # display only
+    start_times: [0, 12]     # UTC initialization hours
+    retention_days: 7
+    layers:
+      - id: 3-hour-precip    # in map URLs (/map/uwwrf_4km/3-hour-precip); don't rename
+        name: 3-hour precipitation
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/wa_pcp3.{hour:02d}.0000.gif
+        hours: {first: 6, last: 120}   # step defaults to 3, first to 0
+        maptype: washington  # annotations to georegister with
+```
+
+`url` takes exactly two fields: `{init}`, the run's initialization time (a UTC
+datetime, so give it a strftime format), and `{hour}`, the forecast hour. The
+file is validated when it loads (ids, templates, hour ranges, start times), so a
+mistake fails at startup. After editing it, run `upslope check-layers` to request
+every layer's every hour from the newest complete run.
 
 ## Georegistration
 
@@ -75,7 +102,7 @@ accept `If-Match: "<revision>"` to fail with 412 if the draft has moved on.
 | `PUT`/`DELETE /draft/maptypes/{m}/images/{i}/annotations/{point}` | A landmark's pixel on an image (`{pixel_x, pixel_y, replaces?}`) |
 | `DELETE /draft/maptypes/{m}/images/{i}` | Remove an image from the draft |
 | `PUT /draft/maptypes/{m}/fit-threshold` | `{meters}` (or `null`) |
-| `GET /sources`, `POST /draft/images` | Promote a forecast frame `{model, variable, hour}` from UW's latest run |
+| `GET /sources`, `POST /draft/images` | Promote a forecast frame `{model, variable, hour}` (model and layer ids) from the model's latest complete run |
 | `GET /images/{m}/{i}` | Image bytes |
 | `GET /draft/fit` | Fit error per maptype, image and point |
 | `POST /publish` | `{revision, note?}` -> `{history, warnings}` |
@@ -89,8 +116,8 @@ start. Production never reads it.
 
 ## Web export
 
-`export-web` runs the whole UW WRF pipeline (`WrfDriver`) in a temporary
-directory: it downloads every configured layer, georegisters each frame,
+`export-web` runs the whole pipeline (`ForecastDriver`) for each configured
+model in a temporary directory: it downloads every layer, georegisters each frame,
 converts the GeoTIFFs to PNGs (nodata becomes transparent), and uploads the
 frames and `manifest.json` to `web_exports/<started timestamp>/` in the S3/Tigris
 bucket. It reads storage settings from `AWS_ACCESS_KEY_ID`,
@@ -98,16 +125,17 @@ bucket. It reads storage settings from `AWS_ACCESS_KEY_ID`,
 `AWS_REGION`. Put them in the repo-root `.env.local` (gitignored; see
 `.env.example`); `just py-export` and `just py-serve` load it.
 
-The export downloads the newest model run UW has finished publishing, from the
-run's own directory (`wrfrt/data/<YYYYMMDDHH>/`; UW's `timeindep/` copy is
+The export downloads each model's newest finished run from the run's own
+directory (for UW, `wrfrt/data/<YYYYMMDDHH>/`; UW's `timeindep/` copy is
 overwritten in place mid-run and mixes two runs). A run counts as finished once
-the last scheduled hour of every configured layer exists. Each exported run gets
-a marker in `model_runs/uwwrf/<YYYYMMDDTHHMM>Z.json` recording its manifest, the
-published annotation revision and a fingerprint of the layer config
-(`WrfConfig.fingerprint()`). A run is exported again when either has changed, so
-a publish, or a deploy that changes `data/wrf_codes.yaml`, takes effect at the
-next export; production also exports at startup (`serve --export-on-startup`).
-The server serves the newest run's export.
+the last hour of every configured layer exists. Each exported run gets a marker
+in `model_runs/<model>/<YYYYMMDDTHHMM>Z.json` recording its manifest, the
+published annotation revision and a fingerprint of the model's layers
+(`ModelConfig.fingerprint()`, which ignores display names). A run is exported
+again when either has changed, so a publish, or a deploy that changes
+`config/models.yaml`, takes effect at the next export; production also exports
+at startup (`serve --export-on-startup`). A model that fails to export doesn't
+stop the others. The server serves the first configured model's newest export.
 
 ```json
 {

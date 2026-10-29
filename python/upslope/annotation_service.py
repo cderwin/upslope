@@ -22,7 +22,6 @@ from upslope.clients.annotations import AnnotationStore, HistoryEntry, HistorySu
 from upslope.clients.storage import PreconditionFailed, StoredObject
 from upslope.logging import get_logger
 from upslope.models.uw_wrf.georegistration import MaptypeFit, fit_report
-from upslope.models.uw_wrf.driver import WrfDriver
 from upslope.models.uw_wrf.georegistration_document import (
     AnnotatedImage,
     AnnotationDocument,
@@ -32,7 +31,8 @@ from upslope.models.uw_wrf.georegistration_document import (
     PixelAnnotation,
     is_valid_key,
 )
-from upslope.models.uw_wrf.wrf_client import LayerConfig, WrfClient, WrfConfig
+from upslope.models.config import LayerConfig, ModelConfig, ModelsConfig
+from upslope.models.image_client import ImageClient
 
 logger = get_logger(__name__)
 
@@ -56,7 +56,7 @@ class Invalid(AnnotationError):
 
 
 class UpstreamError(AnnotationError):
-    """The forecast image could not be downloaded from UW."""
+    """The forecast image could not be downloaded from the model's server."""
 
 
 class Conflict(AnnotationError):
@@ -85,8 +85,8 @@ class PromotableLayer:
     """A configured forecast layer whose frames can be promoted for annotation.
 
     Attributes:
-        model: Manifest model name, e.g. `uwwrf_4km` (as in the forecast map's URLs).
-        variable: Forecast variable.
+        model: Model id, e.g. `uwwrf_4km` (as in the forecast map's URLs).
+        variable: Layer id, e.g. `surface-temp`.
         maptype: Maptype the layer's images belong to.
         hours: Forecast hours available.
     """
@@ -157,14 +157,14 @@ class AnnotationService:
 
     Args:
         store: Where the annotations live.
-        wrf_config: Configured layers; publishing requires every layer's maptype to be fitted.
-        wrf_client: Client for downloading frames to promote. Built from `wrf_config` if omitted.
+        config: Configured models; publishing requires every layer's maptype to be fitted.
+        image_client: Client for downloading frames to promote.
     """
 
-    def __init__(self, store: AnnotationStore, wrf_config: WrfConfig, wrf_client: WrfClient | None = None) -> None:
+    def __init__(self, store: AnnotationStore, config: ModelsConfig, image_client: ImageClient | None = None) -> None:
         self.store = store
-        self.wrf_config = wrf_config
-        self.wrf_client = wrf_client or WrfClient(wrf_config)
+        self.config = config
+        self.image_client = image_client or ImageClient()
         self._lock = asyncio.Lock()
         self._published_revision: int | None = None
 
@@ -398,57 +398,54 @@ class AnnotationService:
     def sources(self) -> list[PromotableLayer]:
         """Configured layers that frames can be promoted from."""
         return [
-            PromotableLayer(
-                f"{WrfDriver.model}_{layer.domain}",
-                layer.variable,
-                layer.maptype,
-                self.wrf_config.get_forecast_hours(layer.forecast_schedule),
-            )
-            for layer in self.wrf_config.layers
+            PromotableLayer(model.id, layer.id, layer.maptype, layer.hours.hours)
+            for model in self.config.models
+            for layer in model.layers
         ]
 
-    def _find_layer(self, model: str, variable: str) -> LayerConfig:
-        for layer in self.wrf_config.layers:
-            if f"{WrfDriver.model}_{layer.domain}" == model and layer.variable == variable:
-                return layer
-        raise NotFound(f"no configured layer {model}/{variable}")
+    def _find_layer(self, model_id: str, layer_id: str) -> tuple[ModelConfig, LayerConfig]:
+        model = self.config.model(model_id)
+        layer = None if model is None else model.layer(layer_id)
+        if model is None or layer is None:
+            raise NotFound(f"no configured layer {model_id}/{layer_id}")
+        return model, layer
 
     async def promote(self, model: str, variable: str, hour: int, expected_revision: int | None = None) -> PromoteResult:
-        """Download a forecast frame from UW's latest run and add it to the draft for annotation.
+        """Download a forecast frame from the model's latest complete run and add it to the draft for annotation.
 
         Args:
-            model: Manifest model name, e.g. `uwwrf_4km`.
-            variable: Forecast variable.
-            hour: Forecast hour; must be in the layer's schedule.
+            model: Model id, e.g. `uwwrf_4km`.
+            variable: Layer id, e.g. `surface-temp`.
+            hour: Forecast hour; must be one the layer is published for.
             expected_revision: Apply only if the draft is still at this revision.
 
         Returns:
             The new draft and the image's maptype and ID. If the same frame of the same run was
             promoted before, the existing image is returned and the draft is unchanged.
         """
-        layer = self._find_layer(model, variable)
-        if hour not in self.wrf_config.get_forecast_hours(layer.forecast_schedule):
-            raise Invalid(f"hour {hour} is not in the {model}/{variable} forecast schedule")
+        model_config, layer = self._find_layer(model, variable)
+        if hour not in layer.hours.hours:
+            raise Invalid(f"hour {hour} is not one of the {model}/{variable} forecast hours")
 
         def download() -> tuple[datetime, bytes, tuple[int, int]]:
             try:
-                initialized = self.wrf_client.latest_complete_run()
+                initialized = self.image_client.latest_complete_run(model_config)
                 if initialized is None:
-                    raise UpstreamError("UW has no complete model run to download the frame from")
-                data = self.wrf_client.download_image(layer, hour, initialized)
+                    raise UpstreamError(f"{model} has no complete run to download the frame from")
+                data = self.image_client.download_image(layer, initialized, hour)
             except httpx.HTTPError as e:
-                raise UpstreamError(f"could not download the frame from UW: {e}") from e
+                raise UpstreamError(f"could not download the frame: {e}") from e
             try:
                 with Image.open(io.BytesIO(data)) as image:
                     if image.format != "GIF":
-                        raise UpstreamError(f"UW returned a {image.format} image, not a GIF")
+                        raise UpstreamError(f"the server returned a {image.format} image, not a GIF")
                     return initialized, data, image.size
             except UnidentifiedImageError as e:
-                raise UpstreamError("UW did not return an image") from e
+                raise UpstreamError("the server did not return an image") from e
 
         initialized, data, (width, height) = await asyncio.to_thread(download)
         maptype = layer.maptype
-        image_id = f"{layer.domain}-{variable}-h{hour:02d}-{initialized:%Y%m%dT%H}Z"
+        image_id = f"{model}-{variable}-h{hour:02d}-{initialized:%Y%m%dT%H}Z"
         await asyncio.to_thread(self.store.put_image, maptype, image_id, data)
 
         class AlreadyPresent(Exception):
@@ -488,7 +485,7 @@ class AnnotationService:
         for maptype, fit in report.items():
             if fit.error is not None:
                 problems.append(f"{maptype}: {fit.error} (has {fit.control_points})")
-        for maptype in sorted({layer.maptype for layer in self.wrf_config.layers} - report.keys()):
+        for maptype in sorted(self.config.maptypes - report.keys()):
             problems.append(f"{maptype}: no annotations, but a configured layer uses it")
         warnings = [
             f"{maptype}: mean fit error {fit.mean_error_m:.0f} m exceeds the {fit.fit_threshold_m:.0f} m threshold"

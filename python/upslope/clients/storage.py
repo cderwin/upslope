@@ -37,7 +37,7 @@ class ModelRunMarker:
         manifest: Bucket key of the run's `manifest.json`.
         registration_revision: Revision of the published annotations the run was georegistered with.
             None for runs exported before annotations were versioned.
-        config_fingerprint: `WrfConfig.fingerprint()` of the layer config the run was exported with.
+        config_fingerprint: `ModelConfig.fingerprint()` of the layer config the run was exported with.
             None for runs exported before it was recorded.
     """
 
