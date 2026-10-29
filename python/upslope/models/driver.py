@@ -322,7 +322,7 @@ class ForecastDriver:
             The layer's progress.
         """
         exported = {frame.hour for frame in run_layer.frames}
-        available = run_layer.frames[-1].hour if run_layer.frames else None
+        available = max((frame.hour for frame in run_layer.frames), default=None)
         progress = LayerProgress(layer.id, layer.hours.last, available)
         if previous is not None and previous.available_hour == available:
             progress.progressed_at = previous.progressed_at

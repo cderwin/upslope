@@ -518,6 +518,24 @@ def test_partial_run_is_exported_as_it_publishes(memory_storage, published) -> N
     assert store.read_in_progress("uwwrf_4km").complete
 
 
+def test_resume_ignores_frame_order(memory_storage, published) -> None:
+    """A manifest whose frames aren't in hour order resumes from its highest hour, without re-downloading."""
+    store = ForecastStore(memory_storage)
+    upstream = FakeUpstream(INITIALIZED, partial={NEXT: 3})
+    driver = make_export_driver(memory_storage, upstream, now=NEXT + timedelta(hours=3))
+    driver.run()
+    manifest = store.read_manifest("uwwrf_4km", NEXT)
+    manifest.layers[0].frames.reverse()
+    store.write_manifest(manifest)
+
+    upstream.downloads.clear()
+    upstream.publish(NEXT, 999)
+    driver.run()
+    assert upstream.downloads == ["2026102200/images_d3/wa_pcp3.06.0000.gif"]
+    assert store.read_in_progress("uwwrf_4km").layer("surface-temp").available_hour == 3
+    assert store.read_latest("uwwrf_4km").initialized == NEXT
+
+
 def test_run_not_started_writes_nothing(memory_storage, published) -> None:
     store = ForecastStore(memory_storage)
     upstream = FakeUpstream(INITIALIZED)
