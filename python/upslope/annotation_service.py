@@ -32,7 +32,7 @@ from upslope.models.uw_wrf.georegistration_document import (
     PixelAnnotation,
     is_valid_key,
 )
-from upslope.models.uw_wrf.wrf_client import LayerConfig, WrfClient, WrfConfig
+from upslope.models.uw_wrf.wrf_client import LayerConfig, RunStatusError, WrfClient, WrfConfig
 
 logger = get_logger(__name__)
 
@@ -434,7 +434,7 @@ class AnnotationService:
             try:
                 initialized = self.wrf_client.current_run_initialization()
                 data = self.wrf_client.download_image(layer, hour)
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, RunStatusError) as e:
                 raise UpstreamError(f"could not download the frame from UW: {e}") from e
             try:
                 with Image.open(io.BytesIO(data)) as image:

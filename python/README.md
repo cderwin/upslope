@@ -98,6 +98,14 @@ bucket. It reads storage settings from `AWS_ACCESS_KEY_ID`,
 `AWS_REGION`. Put them in the repo-root `.env.local` (gitignored; see
 `.env.example`); `just py-export` and `just py-serve` load it.
 
+UW overwrites the same image URLs with each model run, so the export works out
+which run it is downloading: the run's initialization time is the
+`Last-Modified` time of the 12km hour-0 image, rounded down to 00Z or 12Z. The
+export is skipped (even with `--force`) while UW's status page shows a run in
+progress, since early hours would come from the new run and later hours from
+the previous one. Each exported run gets a marker in `model_runs/uwwrf/`, and
+the server serves the newest run's export.
+
 ```json
 {
   "started": "2026-10-21T10:58:34",

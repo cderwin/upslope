@@ -141,14 +141,15 @@ class WrfDriver:
         """Process every configured layer in a temporary directory and export the resulting manifest.
 
         A model run is exported again when the published annotations have changed since it was last
-        exported, so a publish takes effect at the next run of the export.
+        exported, so a publish takes effect at the next run of the export. Nothing is exported while
+        UW is partway through a run, even with `force`.
 
         Args:
             force: Export even if the current model run was already exported with the current annotations.
 
         Returns:
-            The exported manifest, or None if there was nothing to do (already exported, or no
-            annotations published).
+            The exported manifest, or None if there was nothing to do (already exported, UW mid-run,
+            or no annotations published).
         """
         start_ts = datetime.now()
         published = self.annotations.load_published()
@@ -156,8 +157,13 @@ class WrfDriver:
             logger.error("no georegistration annotations have been published; skipping export")
             return None
 
+        if self.client.run_in_progress():
+            # images from two runs would be mixed in one export; the next hourly run picks it up
+            logger.info("UW is partway through a model run; skipping export until it finishes")
+            return None
+
         initialized = self.client.current_run_initialization()
-        marker = self.storage.model_run_marker(self.model, initialized)
+        marker =self.storage.model_run_marker(self.model, initialized)
         if not force and marker is not None and marker.registration_revision == published.revision:
             logger.info(
                 "model run initialized %s already exported with annotations r%d; skipping",

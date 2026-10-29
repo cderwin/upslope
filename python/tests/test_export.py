@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 import rasterio
 from click.testing import CliRunner
@@ -16,7 +17,15 @@ from upslope.cli.main import main
 from upslope.models.uw_wrf.driver import WrfDriver
 from upslope.models.uw_wrf.georegistration import OUTPUT_CRS, Registration, fit_report
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
-from upslope.models.uw_wrf.wrf_client import CodeConfig, ForecastScheduleConfig, LayerConfig, WrfClient, WrfConfig
+from upslope.models.uw_wrf.wrf_client import (
+    RUN_REFERENCE_IMAGE,
+    CodeConfig,
+    ForecastScheduleConfig,
+    LayerConfig,
+    RunStatusError,
+    WrfClient,
+    WrfConfig,
+)
 
 SAMPLE_GIF = snapshot_image_path(DEV_GEOREGISTRATION, "washington", "legacy-hour06")
 INITIALIZED = datetime(2026, 10, 21, 12, tzinfo=UTC)
@@ -124,11 +133,66 @@ def test_export_layer_missing_frame_raises(registration: Registration, tmp_path:
         driver.export_layer(layer, tmp_path, INITIALIZED)
 
 
+# --- model run detection
+
+
+def uw_client(status: str = "", last_modified: str | None = None) -> WrfClient:
+    """A WrfClient whose HTTP requests are answered locally: the status page and the run reference image."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/run_status.html"):
+            return httpx.Response(200, text=status)
+        if request.url.path.endswith(RUN_REFERENCE_IMAGE):
+            headers = {} if last_modified is None else {"Last-Modified": last_modified}
+            return httpx.Response(200, headers=headers)
+        return httpx.Response(404)
+
+    config = WrfConfig(domain_codes=[], maptype_codes=[], variable_codes=[], forecast_schedules=[], layers=[])
+    return WrfClient(config, httpx.Client(transport=httpx.MockTransport(handler)))
+
+
+@pytest.mark.parametrize(
+    ("last_modified", "initialized"),
+    [
+        # hour 0 of the 12Z run goes up around 16Z, and the run is served until the next one starts
+        ("Wed, 28 Oct 2026 15:47:36 GMT", datetime(2026, 10, 28, 12, tzinfo=UTC)),
+        ("Thu, 29 Oct 2026 03:50:11 GMT", datetime(2026, 10, 29, 0, tzinfo=UTC)),
+        ("Thu, 29 Oct 2026 00:00:00 GMT", datetime(2026, 10, 29, 0, tzinfo=UTC)),
+        ("Wed, 28 Oct 2026 23:59:59 GMT", datetime(2026, 10, 28, 12, tzinfo=UTC)),
+    ],
+)
+def test_run_initialization_comes_from_when_uw_published_hour_0(last_modified: str, initialized: datetime) -> None:
+    """Not the clock: at 00Z/12Z UW still serves the previous run, which must keep its own label."""
+    assert uw_client("complete", last_modified).current_run_initialization() == initialized
+
+
+@pytest.mark.parametrize("last_modified", [None, "yesterday"])
+def test_run_initialization_requires_a_publish_time(last_modified: str | None) -> None:
+    with pytest.raises(RunStatusError):
+        uw_client(last_modified=last_modified).current_run_initialization()
+
+
+@pytest.mark.parametrize(
+    ("cell", "in_progress"),
+    [
+        ("<td class=wait>not yet begun</td>", False),
+        ("<td class=done>complete</td>", False),
+        ("<td class='run'>finished 36/12/4, 1 1/3km to hr 53</td>", True),
+        ("<td>complete</td>", False),
+        ("<td>something new</td>", True),
+    ],
+)
+def test_run_in_progress_reads_uw_status(cell: str, in_progress: bool) -> None:
+    status = f"<td><a target='_top' href='/wrfrt/gfsinit.html'>WRF-GFS</a></td>{cell}</tr></table>"
+    assert uw_client(status).run_in_progress() is in_progress
+
+
 # --- driver and CLI
 
 
 def make_driver(document: AnnotationDocument | None, marker: ModelRunMarker | None) -> tuple[WrfDriver, MagicMock, MagicMock]:
     client, storage, annotations = MagicMock(), MagicMock(), MagicMock()
+    client.run_in_progress.return_value = False
     client.current_run_initialization.return_value = INITIALIZED
     storage.model_run_marker.return_value = marker
     annotations.load_published.return_value = document
@@ -153,6 +217,17 @@ def test_run_reexports_when_annotations_changed(document: AnnotationDocument, pr
     storage.export_manifest.return_value = "web_exports/y/manifest.json"
     assert driver.run() is not None
     storage.mark_model_run_exported.assert_called_once_with("uwwrf", INITIALIZED, "web_exports/y/manifest.json", document.revision)
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_run_skips_while_uw_is_mid_run(document: AnnotationDocument, force: bool) -> None:
+    """Mid-run, UW serves early hours from the new run and late hours from the old one; don't export that."""
+    driver, client, storage = make_driver(document, None)
+    client.run_in_progress.return_value = True
+    assert driver.run(force=force) is None
+    client.current_run_initialization.assert_not_called()
+    storage.export_manifest.assert_not_called()
+    storage.mark_model_run_exported.assert_not_called()
 
 
 def test_run_skips_without_published_annotations() -> None:

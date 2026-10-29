@@ -1,4 +1,6 @@
-from datetime import datetime, timedelta, UTC
+import re
+from datetime import datetime, UTC
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import ClassVar
 from attrs import define, field
@@ -8,6 +10,14 @@ from cattrs.preconf.pyyaml import make_converter
 from upslope.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Dates the run being served. The 12km domain is published first, so its hour-0 image is the
+# first to change when a new run starts.
+RUN_REFERENCE_IMAGE = "timeindep/images_d2/tsfc.00.0000.gif"
+
+
+class RunStatusError(Exception):
+    """UW's response doesn't say which model run it is serving."""
 
 
 @define
@@ -183,19 +193,41 @@ class WrfClient:
             _ = r.raise_for_status()
             _ = gif_output_path.write_bytes(r.content)
 
-    def current_run_finished(self) -> bool:
-        response = self._client.get(f"{self.base_url}/run_status.html")
-        _ = response.raise_for_status()
-        return "complete" in response.text
+    def run_in_progress(self) -> bool:
+        """Check whether UW is partway through publishing a model run.
 
-    def current_run_initialization(self) -> datetime:
-        """Identify the latest completed model run.
+        UW overwrites the images in place as a run progresses, so during a run the early forecast hours
+        come from the new run and the later ones from the previous run.
 
         Returns:
-            The run's initialization time (00Z or 12Z, UTC).
+            False if the status page says the latest run is done or the next one hasn't begun; True
+            otherwise, including for a status this code doesn't recognize.
         """
-        now = datetime.now(UTC)
-        today = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if self.current_run_finished():
-            return today + timedelta(hours=12) if now.hour >= 12 else today
-        return today if now.hour >= 12 else today - timedelta(hours=12)
+        response = self._client.get(f"{self.base_url}/run_status.html")
+        _ = response.raise_for_status()
+        match = re.search(r"<td class=['\"]?(\w+)", response.text)
+        if match is not None and match.group(1) in ("wait", "done"):
+            return False
+        return "complete" not in response.text
+
+    def current_run_initialization(self) -> datetime:
+        """Identify the model run whose images UW is currently serving.
+
+        The status page doesn't name the run, and the clock alone mislabels it: at 00Z and 12Z UW is
+        still serving the previous run. Instead, read when the 12km domain's hour-0 image was
+        published (about 4 hours after initialization) and round down to the run before it.
+
+        Returns:
+            The run's initialization time (00Z or 12Z, UTC). Raises RunStatusError if UW doesn't say
+            when the image was published.
+        """
+        response = self._client.head(f"{self.base_url}/{RUN_REFERENCE_IMAGE}")
+        _ = response.raise_for_status()
+        last_modified = response.headers.get("last-modified")
+        if last_modified is None:
+            raise RunStatusError(f"UW did not send Last-Modified for {RUN_REFERENCE_IMAGE}")
+        try:
+            published = parsedate_to_datetime(last_modified).astimezone(UTC)
+        except (TypeError, ValueError) as e:
+            raise RunStatusError(f"UW sent an unreadable Last-Modified for {RUN_REFERENCE_IMAGE}: {last_modified!r}") from e
+        return published.replace(hour=published.hour - published.hour % 12, minute=0, second=0, microsecond=0)
