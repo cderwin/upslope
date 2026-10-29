@@ -1,9 +1,10 @@
-"""Litestar app: healthcheck, forecast proxy, admin API, webapp frontend, and the hourly forecast export."""
+"""Litestar app: healthcheck, forecast API, admin API, webapp frontend, and the periodic forecast export."""
 
 import asyncio
 import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager, suppress
+from datetime import timedelta
 from pathlib import Path
 
 from litestar import Litestar, get
@@ -21,7 +22,7 @@ from upslope.models.config import ModelsConfig
 from upslope.server.admin import AdminGeoregistrationController
 from upslope.server.forecast import ForecastController, StatusCache
 from upslope.server.frontend import create_frontend_router
-from upslope.server.jobs import build_driver, run_hourly
+from upslope.server.jobs import DEFAULT_INTERVAL, build_driver, run_periodically
 
 logger = get_logger(__name__)
 
@@ -49,17 +50,19 @@ def create_app(
     export_on_startup: bool = False,
     admin_token: str | None = None,
     config: ModelsConfig | None = None,
+    export_interval: timedelta = DEFAULT_INTERVAL,
 ) -> Litestar:
     """Build the app.
 
     Args:
         storage: Storage to read exports from and export to. Built from the environment at startup if omitted.
         webapp_dist: Built webapp to serve at `/`. Defaults to `$UPSLOPE_WEBAPP_DIST` or `<repo>/webapp/dist`.
-        run_jobs: Run the hourly forecast export. Disable for tests.
+        run_jobs: Run the periodic forecast export. Disable for tests.
         export_on_startup: Also run the export once as soon as the app starts (in the background,
             so the server is up meanwhile). Ignored if `run_jobs` is False.
         admin_token: Bearer token for the admin API. Defaults to `$ADMIN_TOKEN`; empty disables the API.
         config: Models config. Loaded from `python/config/models.yaml` at startup if omitted.
+        export_interval: How often the export checks for new frames.
     """
     configure_logging()
 
@@ -87,7 +90,9 @@ def create_app(
         task = None
         if run_jobs:
             driver = build_driver(models, app.state.storage)
-            task = asyncio.create_task(run_hourly(driver, on_export=status.refresh, run_immediately=export_on_startup))
+            task = asyncio.create_task(
+                run_periodically(driver, export_interval, on_export=status.refresh, run_immediately=export_on_startup)
+            )
         try:
             yield
         finally:

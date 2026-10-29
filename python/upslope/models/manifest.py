@@ -1,4 +1,4 @@
-"""What an export writes to storage for each model run: its manifest, and the model's run pointers."""
+"""What an export writes to storage for each model run (its manifest), and per model (`latest.json`, `in-progress.json`)."""
 
 from datetime import datetime, timedelta
 from typing import Self
@@ -126,6 +126,66 @@ class RunPointer:
     @classmethod
     def to(cls, manifest: RunManifest, now: datetime) -> Self:
         return cls(manifest.model, manifest.initialized, manifest.path, now)
+
+    def to_json(self) -> bytes:
+        return converter.dumps(self).encode()
+
+    @classmethod
+    def from_json(cls, data: bytes | str) -> Self:
+        return converter.loads(data, cls)
+
+
+@define
+class LayerProgress:
+    """How far a layer of an in-progress run has got.
+
+    Attributes:
+        id: Layer id.
+        last_hour: The layer's last forecast hour; the layer is complete once it's exported.
+        available_hour: Newest hour exported so far, or None before the first.
+        progressed_at: When `available_hour` last advanced.
+        error: Why the last attempt to get the next hour failed (other than it not being published yet).
+        error_at: When that attempt was.
+    """
+
+    id: str
+    last_hour: int
+    available_hour: int | None = None
+    progressed_at: datetime | None = None
+    error: str | None = None
+    error_at: datetime | None = None
+
+    @property
+    def complete(self) -> bool:
+        return self.available_hour == self.last_hour
+
+
+@define
+class InProgress:
+    """The newest run that has started publishing, and how far each layer has got:
+    `forecasts/<model>/in-progress.json`. Updated at every check, so it also shows the run once complete.
+
+    Attributes:
+        model: Model id.
+        initialized: Run initialization time (UTC).
+        path: The run's folder under the model's prefix.
+        checked_at: When the exporter last checked the run for new hours.
+        layers: Each configured layer's progress, in display order.
+    """
+
+    model: str
+    initialized: datetime
+    path: str
+    checked_at: datetime
+    layers: list[LayerProgress] = field(factory=list)
+
+    @property
+    def complete(self) -> bool:
+        return all(layer.complete for layer in self.layers)
+
+    def layer(self, layer_id: str) -> LayerProgress | None:
+        """Look up a layer by id."""
+        return next((layer for layer in self.layers if layer.id == layer_id), None)
 
     def to_json(self) -> bytes:
         return converter.dumps(self).encode()

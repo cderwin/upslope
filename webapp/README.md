@@ -58,7 +58,17 @@ The page fetches `<base>/status`, then each model's run manifest
 model in one list, labeled with the model and layer names from the server's
 config. By default each model's latest complete run is shown. `?run=2026-10-29T00Z`
 shows that run instead (any run kept in storage, a week by default), with a
-banner linking back to the latest; an unknown run lists the available ones. The basemap is Mapbox's
+banner linking back to the latest; an unknown run lists the available ones.
+`?run=in-progress` previews each model's newest run while it's still being
+published: only the frames exported so far are shown (the controls say e.g.
+"41 of 45 frames"), and the page reloads the manifests every 3 minutes to pick
+up new ones.
+
+The **Model runs** button (its dot is blue while a run is coming in, amber if a
+layer has stalled, red on errors) opens `RunStatusDialog`: each model's latest
+complete run, its newest run with a progress bar and state per layer (from
+`/fx/status`, refreshed every minute while open), links to preview it, and every
+kept run. The basemap is Mapbox's
 `satellite-streets-v12`. Frames are drawn as a Mapbox `image` source from their
 four corner coordinates, beneath the basemap's labels, with a Mercator
 projection to match the EPSG:3857 registration. The **3D terrain** switch adds
@@ -86,7 +96,7 @@ someone else changed the draft first.
 - The fit card shows the maptype's mean error against its threshold, which can
   be changed there; the table shows each point's error.
 - **Publish** shows every maptype's fit, takes an optional note, and reports
-  threshold warnings. The next hourly export uses the published annotations.
+  threshold warnings. The next export check (every 15 minutes) uses the published annotations.
 - **History** lists published versions and restores one into the draft;
   **Discard changes** resets the draft to what is published.
 
@@ -99,7 +109,7 @@ src/forecast/
   types.ts                     Forecast API types (status, run manifests) and map layers
   api.ts                       Forecast API (VITE_FORECAST_BASE_URL), ?run= parsing
   usePlayback.ts               Frame selection, playback, preloading
-  components/                  ForecastMap (Mapbox), MapControls
+  components/                  ForecastMap (Mapbox), MapControls, RunStatusDialog
 src/admin/
   token.ts                     Admin token (localStorage) and prompt state
   api.ts                       Authenticated requests; 401/403/412 handling
