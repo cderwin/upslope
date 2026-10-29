@@ -61,8 +61,8 @@ class RunLayer:
 
     @property
     def complete(self) -> bool:
-        """Whether every forecast hour has a frame."""
-        return [frame.hour for frame in self.frames] == self.hours
+        """Whether every forecast hour has a frame, whatever order the frames are in."""
+        return {frame.hour for frame in self.frames} == set(self.hours)
 
 
 @define
