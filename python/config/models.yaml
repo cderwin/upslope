@@ -85,3 +85,9 @@ models:
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/snodep.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
+
+      - id: snow-depth-hr
+        name: Snow depth (high resolution)
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snodep.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: western-washington
