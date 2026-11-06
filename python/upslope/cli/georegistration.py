@@ -1,10 +1,11 @@
-"""`upslope georegistration`: move annotations between a snapshot directory and storage."""
+"""`upslope georegistration`: move annotations between a snapshot directory and storage, and seed new maptypes."""
 
 import shutil
 from pathlib import Path
 
 import click
 
+from upslope.cli import DEFAULT_MODELS_CONFIG
 from upslope.clients.annotations import AnnotationStore, iter_images, read_snapshot, snapshot_image_path
 from upslope.clients.storage import StorageClient
 
@@ -68,3 +69,43 @@ def snapshot(directory: Path) -> None:
         path.write_bytes(data)
     (directory / "document.json").write_bytes(document.to_json())
     click.echo(f"wrote r{document.revision} to {directory}")
+
+
+@georegistration.command("promote-examples")
+@click.option("-c", "--config", "config_path", type=click.Path(path_type=Path), default=DEFAULT_MODELS_CONFIG)
+@click.option("--hour", default=6, show_default=True, help="Forecast hour to promote, if the layer has it (else its first hour).")
+@click.option("--dry-run", is_flag=True, help="List the frames that would be promoted without downloading them.")
+def promote_examples(config_path: Path, hour: int, dry_run: bool) -> None:
+    """Add an image to annotate to the draft, for each configured maptype that has none.
+
+    Each image is a frame of the newest complete run of the first layer using the maptype. Annotate
+    it in the admin UI, then publish. Maptypes that already have an image are left alone.
+    """
+    import asyncio
+
+    from upslope.annotation_service import AnnotationError, AnnotationService
+    from upslope.models.config import ModelsConfig
+
+    service = AnnotationService(AnnotationStore(StorageClient.build()), ModelsConfig.load(config_path))
+
+    async def promote() -> list[str]:
+        frames = service.example_frames((await service.draft()).document, preferred_hour=hour)
+        if not frames:
+            click.echo("every configured maptype has an image")
+        failed = []
+        for frame in frames:
+            name = f"{frame.maptype}: {frame.model}/{frame.variable} hour {frame.hour}"
+            if dry_run:
+                click.echo(f"would promote {name}")
+                continue
+            try:
+                result = await service.promote(frame.model, frame.variable, frame.hour)
+            except AnnotationError as e:
+                click.echo(f"could not promote {name}: {e}", err=True)
+                failed.append(frame.maptype)
+                continue
+            click.echo(f"promoted {name} as {result.image} (draft r{result.draft.document.revision})")
+        return failed
+
+    if failed := asyncio.run(promote()):
+        raise click.ClickException(f"could not promote an image for {', '.join(failed)}")

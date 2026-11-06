@@ -12,6 +12,7 @@ uv run upslope registration-error  # per-maptype fit error, in meters (--draft, 
 uv run upslope serve               # API server + export every 15 min (--export-interval)
 uv run upslope georegistration upload DIR    # load a snapshot into storage (draft + published)
 uv run upslope georegistration snapshot DIR  # save the published annotations to a directory
+uv run upslope georegistration promote-examples  # draft an image for each configured maptype with none (--hour, --dry-run)
 ```
 
 `reproject` and `registration-error` read the annotations published in storage;
@@ -86,6 +87,12 @@ write from another process is never lost. Publishing is refused if a maptype
 can't be fitted (fewer than two control points), a configured layer's maptype
 has no annotations, or an annotation names an unknown landmark. A maptype whose
 mean fit error exceeds its threshold only produces a warning.
+
+A new maptype in `config/models.yaml` therefore blocks publishing until it is
+annotated. `upslope georegistration promote-examples` adds a frame (hour 6 by
+default) from the first layer using each configured maptype that has no images
+in the draft; annotate it on the `/annotation` page, then publish. Maptypes that
+already have an image, annotated or not, are skipped.
 
 ### Admin API
 
