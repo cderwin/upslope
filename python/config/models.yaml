@@ -11,8 +11,12 @@
 #
 # UW WRF images: https://a.atmos.washington.edu/wrfrt/data/<YYYYMMDDHH>/images_<domain>/<map prefix><variable>.<HH>.0000.gif
 #   domains: d1 36km, d2 12km, d3 4km, d4 1.33km
-#   map prefixes: "" for the domain's full map (pacific-northwest on d3), wa_ washington, ww_ western-washington
+#   map prefixes: "" for the domain's full map, wa_ washington, ww_ western-washington
 #   3-hour accumulations (pcp3, snow3, msnow3) have an empty hour 0 and no hour 3, so they start at 6.
+#   Each domain frames its maps differently, so each (domain, map) pair needs its own maptype:
+#     d3: "" pacific-northwest, wa_ washington
+#     d4: "" pacific-northwest-hr, ww_ western-washington. d4 runs to hour 72, and intcld, olr, fzlt
+#         and fzlc exist only on its full map.
 
 models:
   - id: uwwrf_4km
@@ -86,8 +90,73 @@ models:
         hours: {last: 120}
         maptype: pacific-northwest
 
-      - id: snow-depth-hr
-        name: Snow depth (high resolution)
+  - id: uwwrf_1.33km
+    name: UW WRF 1.33km
+    start_times: [0, 12]
+    retention_days: 7
+    layers:
+      - id: surface-temp
+        name: Surface temperature
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_tsfc.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: western-washington
+
+      - id: 10m-wind-speed
+        name: 10m wind speed
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_wssfc.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: western-washington
+
+      - id: integrated-cloud
+        name: Integrated cloud
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/intcld.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: pacific-northwest-hr
+
+      - id: longwave
+        name: Outgoing longwave radiation
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/olr.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: pacific-northwest-hr
+
+      - id: 3-hour-precip
+        name: 3-hour precipitation
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_pcp3.{hour:02d}.0000.gif
+        hours: {first: 6, last: 72}
+        maptype: western-washington
+
+      - id: snow
+        name: 3-hour snowfall
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snow3.{hour:02d}.0000.gif
+        hours: {first: 6, last: 72}
+        maptype: western-washington
+
+      - id: model-snow
+        name: 3-hour model snowfall
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_msnow3.{hour:02d}.0000.gif
+        hours: {first: 6, last: 72}
+        maptype: western-washington
+
+      - id: accumulated-snowfall
+        name: Accumulated snowfall
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snowacc.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: western-washington
+
+      - id: freezing-level-terrain
+        name: Freezing level over terrain
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/fzlt.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: pacific-northwest-hr
+
+      - id: freezing-level
+        name: Freezing level
+        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/fzlc.{hour:02d}.0000.gif
+        hours: {last: 72}
+        maptype: pacific-northwest-hr
+
+      - id: snow-depth
+        name: Snow depth
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snodep.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington

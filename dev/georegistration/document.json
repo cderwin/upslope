@@ -180,6 +180,36 @@
         }
       },
       "fit_threshold_m": 480.0
+    },
+    "pacific-northwest-hr": {
+      "images": {
+        "uwwrf_1.33km-longwave-h06-20261105T00Z": {
+          "width": 900,
+          "height": 900,
+          "source": {
+            "model": "uwwrf_1.33km",
+            "variable": "longwave",
+            "hour": 6,
+            "initialized": "2026-11-05T00:00:00+00:00",
+            "promoted_at": "2026-11-06T07:30:00+00:00"
+          },
+          "annotations": {
+            "cape_flattery": {
+              "pixel_x": 145,
+              "pixel_y": 273
+            },
+            "wa_ca_id_triple_point": {
+              "pixel_x": 503,
+              "pixel_y": 229
+            },
+            "wa_or_id_triple_point": {
+              "pixel_x": 520,
+              "pixel_y": 440
+            }
+          }
+        }
+      },
+      "fit_threshold_m": 800.0
     }
   }
 }
