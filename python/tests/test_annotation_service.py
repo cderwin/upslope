@@ -10,7 +10,7 @@ from PIL import Image
 
 import pytest
 
-from upslope.annotation_service import AnnotationService, Conflict, Invalid, NotFound, UpstreamError, to_key
+from upslope.annotation_service import AnnotationService, Conflict, ExampleFrame, Invalid, NotFound, UpstreamError, to_key
 from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
@@ -246,6 +246,22 @@ def test_sources_list_configured_layers(service: AnnotationService) -> None:
     sources = {(s.model, s.variable): s for s in service.sources()}
     source = sources[("uwwrf_4km", "surface-temp")]
     assert source.maptype == WA and source.hours
+
+
+def test_example_frames_cover_maptypes_without_images(service: AnnotationService) -> None:
+    document = read_snapshot(DEV_GEOREGISTRATION)
+    assert service.example_frames(document) == []
+
+    # a maptype missing from the document, and one with no images, both need an example
+    del document.maptypes["pacific-northwest-hr"]
+    document.maptypes[WA].images.clear()
+    frames = service.example_frames(document)
+    assert frames == [
+        ExampleFrame("pacific-northwest-hr", "uwwrf_1.33km", "integrated-cloud", 6),
+        ExampleFrame(WA, "uwwrf_4km", "surface-temp", 6),
+    ]
+    # an hour the layer doesn't publish falls back to its first hour
+    assert {f.hour for f in service.example_frames(document, preferred_hour=1)} == {0}
 
 
 def test_promote_adds_image(promoting: AnnotationService, store: AnnotationStore, wrf_client: MagicMock) -> None:

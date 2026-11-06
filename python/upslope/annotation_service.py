@@ -113,6 +113,23 @@ class PromoteResult:
 
 
 @define
+class ExampleFrame:
+    """A forecast frame to promote so a configured maptype gets an image to annotate.
+
+    Attributes:
+        maptype: The maptype that needs an image.
+        model: Model id of the layer to take the frame from.
+        variable: Layer id.
+        hour: Forecast hour.
+    """
+
+    maptype: str
+    model: str
+    variable: str
+    hour: int
+
+
+@define
 class PublishResult:
     """Outcome of a publish.
 
@@ -402,6 +419,30 @@ class AnnotationService:
             for model in self.config.models
             for layer in model.layers
         ]
+
+    def example_frames(self, document: AnnotationDocument, preferred_hour: int = 6) -> list[ExampleFrame]:
+        """Frames to promote for the configured maptypes that have nothing to annotate yet.
+
+        A maptype needs one when it has no images in `document`. A maptype with only unannotated
+        images already has one waiting to be annotated, so running this again adds nothing.
+
+        Args:
+            document: The draft to check.
+            preferred_hour: Forecast hour to take, when the layer has it; otherwise its first hour.
+
+        Returns:
+            One frame per maptype, from the first configured layer that uses it, sorted by maptype.
+        """
+        frames: dict[str, ExampleFrame] = {}
+        for model in self.config.models:
+            for layer in model.layers:
+                annotations = document.maptypes.get(layer.maptype)
+                if layer.maptype in frames or (annotations is not None and annotations.images):
+                    continue
+                hours = layer.hours.hours
+                hour = preferred_hour if preferred_hour in hours else hours[0]
+                frames[layer.maptype] = ExampleFrame(layer.maptype, model.id, layer.id, hour)
+        return [frames[maptype] for maptype in sorted(frames)]
 
     def _find_layer(self, model_id: str, layer_id: str) -> tuple[ModelConfig, LayerConfig]:
         model = self.config.model(model_id)
