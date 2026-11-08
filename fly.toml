@@ -27,7 +27,7 @@ primary_region = "sjc"
     grace_period = "20s"
 
 [[vm]]
-  # georegistering and PNG conversion are memory-hungry
-  memory = "1gb"
+  # georegistering, decoding GRIB fields from dynamical.org and PNG conversion are memory-hungry
+  memory = "2gb"
   cpu_kind = "shared"
   cpus = 1

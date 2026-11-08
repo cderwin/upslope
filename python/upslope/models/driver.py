@@ -14,11 +14,11 @@ from tempfile import TemporaryDirectory
 
 import httpx
 import rasterio
-from attrs import define, evolve
+from attrs import define, evolve, field
 
 from upslope.clients.forecasts import ForecastStore
 from upslope.logging import get_logger
-from upslope.models.config import LayerConfig, ModelConfig, ModelsConfig
+from upslope.models.config import AnyLayerConfig, ModelConfig, ModelsConfig
 from upslope.models.manifest import (
     Frame,
     InProgress,
@@ -75,7 +75,7 @@ def reusable_layers(model: ModelConfig, existing: RunManifest | None, revision: 
     reusable = {}
     for layer in model.layers:
         exported = existing.layer(layer.id)
-        if exported is not None and exported.fingerprint == layer.fingerprint():
+        if exported is not None and exported.fingerprint == model.layer_fingerprint(layer):
             reusable[layer.id] = evolve(exported, name=layer.name)
     return reusable
 
@@ -95,12 +95,16 @@ class ForecastDriver:
         sources: Source for each kind of model (`ModelConfig.source.kind`).
         store: Destination for the exported runs.
         now: Clock, for tests.
+        frames_per_model: Most frames to export per model in one check, or None for no limit. A backlog (a new
+            model, a config change, an outage) then takes several checks, while every model keeps advancing.
     """
 
     config: ModelsConfig
     sources: Mapping[str, ForecastSource]
     store: ForecastStore
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
+    frames_per_model: int | None = None
+    _frames_left: int | None = field(default=None, init=False)
 
     def run(self, force: bool = False) -> list[RunManifest]:
         """Check every configured model for new frames and export them.
@@ -148,6 +152,7 @@ class ForecastDriver:
             The manifests written, oldest run first.
         """
         now = self.now()
+        self._frames_left = self.frames_per_model
         revision = source.revision(model)
         latest = self.store.read_latest(model.id)
         # no runs before the newest complete one: they'd never be shown
@@ -171,6 +176,8 @@ class ForecastDriver:
                 self.store.write_latest(RunPointer.to(manifest, self.now()))
                 latest_run = initialized
 
+        if self._frames_left == 0:
+            logger.info("%s: exported %d frames this check; continuing at the next", model.id, self.frames_per_model)
         if newest is not None:
             self.store.write_in_progress(newest)
         if latest_run is not None:
@@ -205,7 +212,7 @@ class ForecastDriver:
         """
         existing = self.store.read_manifest(model.id, initialized)
         reusable = {} if force else reusable_layers(model, existing, revision)
-        layers = [reusable.get(layer.id) or self.new_layer(layer) for layer in model.layers]
+        layers = [reusable.get(layer.id) or self.new_layer(model, layer) for layer in model.layers]
         manifest = RunManifest(model.id, model.name, initialized, revision, self.now(), layers, model.attribution)
         # names, layers or annotations changed, or some layers are starting over
         dirty = existing is None or evolve(existing, updated_at=manifest.updated_at) != manifest
@@ -238,7 +245,7 @@ class ForecastDriver:
         self,
         model: ModelConfig,
         source: ForecastSource,
-        layer: LayerConfig,
+        layer: AnyLayerConfig,
         run_layer: RunLayer,
         initialized: datetime,
         work: Path,
@@ -267,6 +274,8 @@ class ForecastDriver:
         for hour in layer.hours.hours:
             if hour in exported:
                 continue
+            if self._frames_left == 0:
+                break
             try:
                 self.export_frame(model, source, layer, run_layer, initialized, hour, work)
             except NotPublished:
@@ -278,6 +287,8 @@ class ForecastDriver:
                 break
             progress.available_hour = hour
             progress.progressed_at = self.now()
+            if self._frames_left is not None:
+                self._frames_left -= 1
         if progress.available_hour != available:
             logger.info("%s: exported hours %s to %d", name, "start" if available is None else available, progress.available_hour)
         return progress
@@ -288,15 +299,15 @@ class ForecastDriver:
         logger.warning("%s: could not export hour %d (%s); will retry", name, hour, _describe(error), exc_info=not isinstance(error, httpx.HTTPError))
 
     @staticmethod
-    def new_layer(layer: LayerConfig) -> RunLayer:
+    def new_layer(model: ModelConfig, layer: AnyLayerConfig) -> RunLayer:
         """An empty run layer for a configured layer."""
-        return RunLayer(layer.id, layer.name, layer.maptype, layer.fingerprint(), layer.hours.hours)
+        return RunLayer(layer.id, layer.name, layer.maptype, model.layer_fingerprint(layer), layer.hours.hours)
 
     def export_frame(
         self,
         model: ModelConfig,
         source: ForecastSource,
-        layer: LayerConfig,
+        layer: AnyLayerConfig,
         run_layer: RunLayer,
         initialized: datetime,
         hour: int,

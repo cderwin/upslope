@@ -10,6 +10,7 @@ from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
 from upslope.models.config import ModelsConfig
 from upslope.models.driver import ExportFailed, ForecastDriver
+from upslope.models.dynamical.source import DynamicalSource
 from upslope.models.source import ForecastSource
 from upslope.models.uw_wrf.image_client import ImageClient
 from upslope.models.uw_wrf.source import UwWrfSource
@@ -17,14 +18,19 @@ from upslope.models.uw_wrf.source import UwWrfSource
 logger = get_logger(__name__)
 
 
+# Most frames a model exports per check. A new run of every model fits; a backlog (a new model or layer, a
+# config change, an outage) takes a few checks rather than one that runs for an hour and holds up the others.
+FRAMES_PER_MODEL = 400
+
+
 def build_sources(storage: StorageClient) -> dict[str, ForecastSource]:
     """Every kind of forecast source, by `SourceConfig.kind`; UW WRF reads its annotations from `storage`."""
-    return {"uw_wrf": UwWrfSource(ImageClient(), AnnotationStore(storage))}
+    return {"uw_wrf": UwWrfSource(ImageClient(), AnnotationStore(storage)), "dynamical": DynamicalSource()}
 
 
 def build_driver(config: ModelsConfig, storage: StorageClient) -> ForecastDriver:
     """Create the export driver, exporting to `storage`."""
-    return ForecastDriver(config=config, sources=build_sources(storage), store=ForecastStore(storage))
+    return ForecastDriver(config=config, sources=build_sources(storage), store=ForecastStore(storage), frames_per_model=FRAMES_PER_MODEL)
 
 
 # How often to check for new frames by default. A run takes hours to publish, so this sets how far

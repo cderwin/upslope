@@ -20,6 +20,7 @@ def warp_to_web_mercator(
     src_transform: Affine,
     nodata: float,
     resampling: Resampling = Resampling.nearest,
+    min_width: int | None = None,
 ) -> tuple[np.ndarray, Affine]:
     """Reproject a raster to `OUTPUT_CRS`, at about its native resolution.
 
@@ -29,6 +30,8 @@ def warp_to_web_mercator(
         src_transform: Transform from corner-based (col, row) to `src_crs` coordinates.
         nodata: Value for pixels outside the source, and source pixels to treat as missing.
         resampling: How to resample; nearest for palette indices, which can't be blended.
+        min_width: Upsample by a whole factor until the result is at least this many pixels wide, so a
+            coarse grid interpolates smoothly instead of showing its cells.
 
     Returns:
         The warped pixels, shaped (bands, rows, cols), and their transform.
@@ -39,6 +42,12 @@ def warp_to_web_mercator(
     dst_transform, dst_width, dst_height = calculate_default_transform(
         src_crs, OUTPUT_CRS, width, height, left=left, bottom=bottom, right=right, top=top
     )
+    if min_width is not None and dst_width < min_width:
+        factor = -(-min_width // dst_width)
+        dst_transform, dst_width, dst_height = calculate_default_transform(
+            src_crs, OUTPUT_CRS, width, height, left=left, bottom=bottom, right=right, top=top,
+            dst_width=dst_width * factor, dst_height=dst_height * factor,
+        )
     warped = np.full((count, dst_height, dst_width), nodata, dtype=data.dtype)
     reproject(
         source=data,

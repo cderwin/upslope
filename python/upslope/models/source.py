@@ -13,7 +13,7 @@ from typing import Protocol
 import numpy as np
 from attrs import define
 
-from upslope.models.config import LayerConfig, ModelConfig
+from upslope.models.config import AnyLayerConfig, ModelConfig
 from upslope.models.manifest import Legend
 
 
@@ -61,7 +61,7 @@ class ForecastSource(Protocol):
         """
         ...
 
-    def render_frame(self, model: ModelConfig, layer: LayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
+    def render_frame(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
         """Write one forecast hour of a layer as a GeoTIFF in Web Mercator (`upslope.raster.OUTPUT_CRS`).
 
         A single band is written paletted, with a colormap and a nodata index for pixels outside the frame.

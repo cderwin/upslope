@@ -4,13 +4,26 @@
 # image sources, so renaming one breaks links. Names are for display only and can change freely.
 #
 # Model fields:
-#   source   Where frames come from: {kind: uw_wrf} for UW WRF images placed with the annotations.
+#   source       Where frames come from: {kind: uw_wrf} for UW WRF images placed with the annotations, or
+#                {kind: dynamical, dataset: <catalog id>} for a dataset from https://dynamical.org/catalog/.
+#   region       dynamical only: [west, south, east, north] in degrees, the area to render.
+#   attribution  Credit shown with the model's frames (CC BY datasets require it).
 #
-# Layer fields:
+# UW WRF layer fields:
 #   url      Image URL for one forecast hour. Fields: {init} is the run's initialization time
 #            (a datetime, so use a strftime format such as {init:%Y%m%d%H}); {hour} is the forecast hour.
 #   hours    Forecast hours published: first (default 0) to last, every step (default 3) hours.
 #   maptype  Georegistration annotations to place the image with (a maptype in the annotation document).
+#
+# dynamical.org layer fields:
+#   field    The dataset variable shown (a name), or {derive: ..., variables: [...], hours: N}:
+#              wind_speed      speed from [u, v] components
+#              change          growth of a run total over the last N hours (e.g. 3-hour precipitation)
+#              rate_sum        a rate averaged since the previous step, summed over the last N hours
+#              freezing_level  a height, with missing, zero or negative values (at or below sea level) as 0
+#   scale    Color scale and display units (upslope/models/dynamical/scales.py), e.g. temperature_f, precip_in.
+#   hours    As for UW WRF; each hour must be a lead time of the dataset.
+# `upslope check-layers -m <model>` checks variables, hours and units against the live dataset.
 #
 # UW WRF images: https://a.atmos.washington.edu/wrfrt/data/<YYYYMMDDHH>/images_<domain>/<map prefix><variable>.<HH>.0000.gif
 #   domains: d1 36km, d2 12km, d3 4km, d4 1.33km
@@ -165,3 +178,53 @@ models:
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snodep.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington
+
+  - id: gfs_0.25
+    name: GFS 0.25°
+    source: {kind: dynamical, dataset: noaa-gfs-forecast-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS NCEP GFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    retention_days: 3
+    layers:
+      - id: surface-temp
+        name: Surface temperature
+        field: temperature_2m
+        scale: temperature_f
+        hours: {last: 240}
+
+      - id: 10m-wind-speed
+        name: 10m wind speed
+        field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
+        scale: wind_mph
+        hours: {last: 240}
+
+      - id: 3-hour-precip
+        name: 3-hour precipitation
+        field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
+        scale: precip_in
+        hours: {first: 3, last: 240}
+
+      - id: snow-depth
+        name: Snow depth
+        field: snow_thickness_surface
+        scale: snow_in
+        hours: {last: 240}
+
+      - id: freezing-level
+        name: Freezing level
+        field: {derive: freezing_level, variables: [geopotential_height_0c_isotherm]}
+        scale: height_ft
+        hours: {last: 240}
+
+      - id: cloud-cover
+        name: Cloud cover
+        field: total_cloud_cover_atmosphere
+        scale: cloud_pct
+        hours: {last: 240}
+
+      - id: reflectivity
+        name: Composite reflectivity
+        field: composite_reflectivity
+        scale: reflectivity_dbz
+        hours: {last: 240}

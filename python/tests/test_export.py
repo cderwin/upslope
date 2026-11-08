@@ -171,7 +171,7 @@ def test_configured_fingerprints_are_stable() -> None:
 
 def test_model_source_defaults_to_uw_wrf(tmp_path: Path) -> None:
     assert make_model().source.kind == "uw_wrf"
-    assert {model.source.kind for model in ModelsConfig.load(DEFAULT_MODELS_CONFIG).models} == {"uw_wrf"}
+    assert {model.source.kind for model in ModelsConfig.load(DEFAULT_MODELS_CONFIG).models} == {"uw_wrf", "dynamical"}
     path = tmp_path / "models.yaml"
     path.write_text(
         "models:\n"
@@ -229,7 +229,7 @@ def test_export_frame_uploads_a_placed_png(memory_storage, document: AnnotationD
     source = UwWrfSource(client, annotations)
     driver = ForecastDriver(config=ModelsConfig([model]), sources={"uw_wrf": source}, store=ForecastStore(memory_storage))
 
-    run_layer = driver.new_layer(layer)
+    run_layer = driver.new_layer(model, layer)
     with source.check():
         frame = driver.export_frame(model, source, layer, run_layer, INITIALIZED, 6, tmp_path)
 
@@ -752,6 +752,21 @@ def test_frames_with_values_get_a_value_image(memory_storage, tmp_path: Path) ->
     values = decode_values_png(tmp_path / "values.png", layer.values.scale, layer.values.offset)
     assert values.shape == (4, 4) and np.isnan(values[0, 0])
     assert values[1, 1] == pytest.approx(3.25)
+
+
+def test_frame_budget_spreads_a_backlog_over_checks(memory_storage) -> None:
+    """A model exports at most `frames_per_model` frames per check, then picks up where it stopped."""
+    source = FakeSource({INITIALIZED: 999})
+    driver = ForecastDriver(ModelsConfig([EXPORT_MODEL]), {"uw_wrf": source}, ForecastStore(memory_storage), now=lambda: NOW, frames_per_model=3)
+    (manifest,) = driver.run()
+    assert source.rendered == [("surface-temp", 0), ("surface-temp", 3), ("3-hour-precip", 3)]
+    assert not manifest.complete
+    progress = ForecastStore(memory_storage).read_in_progress("uwwrf_4km").layer("3-hour-precip")
+    assert (progress.available_hour, progress.error) == (3, None)  # not an error: it continues next check
+
+    source.rendered.clear()
+    (manifest,) = driver.run()
+    assert source.rendered == [("3-hour-precip", 6)] and manifest.complete
 
 
 def test_source_revision_change_reexports(memory_storage) -> None:

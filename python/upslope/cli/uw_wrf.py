@@ -32,6 +32,13 @@ def _select_models(config: "ModelsConfig", model_ids: tuple[str, ...]) -> list["
     return [model for model in config.models if model.id in model_ids]
 
 
+def _uw_models(models: list["ModelConfig"], model_ids: tuple[str, ...]) -> list["ModelConfig"]:
+    """The UW WRF models among `models`; naming another kind of model explicitly is an error."""
+    if named := [model.id for model in models if model.source.kind != "uw_wrf" and model.id in model_ids]:
+        raise click.ClickException(f"{', '.join(named)}: only UW WRF models have images to download")
+    return [model for model in models if model.source.kind == "uw_wrf"]
+
+
 def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | None, require_complete: bool) -> datetime:
     """The run to use: the one given, else the newest complete run, else (if allowed) the newest run."""
     if run is not None:
@@ -60,7 +67,7 @@ def download(config_path: Path, model_ids: tuple[str, ...], run: datetime | None
     from upslope.models.uw_wrf.image_client import ImageClient
 
     client = ImageClient()
-    for model in _select_models(ModelsConfig.load(config_path), model_ids):
+    for model in _uw_models(_select_models(ModelsConfig.load(config_path), model_ids), model_ids):
         initialized = _resolve_run(client, model, run, require_complete=True)
         click.echo(f"Downloading {model.id} run initialized {initialized:%Y-%m-%d %HZ}")
         for i, layer in enumerate(model.layers, start=1):
@@ -93,7 +100,7 @@ def reproject(config_path: Path, input_path: Path, output_path: Path, snapshot: 
     config = ModelsConfig.load(config_path)
     registration = Registration.build(load_annotations(snapshot))
 
-    for model in config.models:
+    for model in _uw_models(config.models, ()):
         for layer in tqdm(model.layers, desc=model.id):
             for hour in layer.hours.hours:
                 raw_gif_path = input_path / model.id / layer.id / raw_image_name(hour)
@@ -113,18 +120,23 @@ def reproject(config_path: Path, input_path: Path, output_path: Path, snapshot: 
 def check_layers(config_path: Path, model_ids: tuple[str, ...], run: datetime | None) -> None:
     """Check that every hour of every configured layer exists upstream, e.g. after editing the models config.
 
-    Checks the newest complete run unless --run is given. Exits with an error if any image is missing.
+    Checks the newest complete run unless --run is given. For dynamical.org models, also checks that each
+    layer's variables, hours and units fit the dataset. Exits with an error if any layer has a problem.
     """
     from concurrent.futures import ThreadPoolExecutor
 
     import httpx
 
+    from upslope.cli.dynamical import check_model
     from upslope.models.config import ModelsConfig
     from upslope.models.uw_wrf.image_client import ImageClient
 
     client = ImageClient()
     problems = 0
     for model in _select_models(ModelsConfig.load(config_path), model_ids):
+        if model.source.kind == "dynamical":
+            problems += check_model(model, run)
+            continue
         initialized = _resolve_run(client, model, run, require_complete=False)
         click.echo(f"{model.id} run {initialized:%Y-%m-%d %HZ}:")
 
@@ -149,7 +161,7 @@ def check_layers(config_path: Path, model_ids: tuple[str, ...], run: datetime | 
             click.echo(f"  PROBLEM  {layer.id}: {details}")
             click.echo(f"           e.g. {layer.image_url(initialized, next(iter(bad)))}")
     if problems:
-        raise click.ClickException(f"{problems} layer(s) have missing or unreadable images")
+        raise click.ClickException(f"{problems} layer(s) have problems")
 
 
 @click.command()
