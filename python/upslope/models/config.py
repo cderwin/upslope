@@ -141,6 +141,7 @@ class ModelConfig:
         retention_days: How long exported runs are kept.
         lookback_hours: How far back to look for a run to export.
         source: Where the model's frames come from.
+        attribution: Credit for the data, shown with it on the map (e.g. a CC BY license's attribution).
     """
 
     id: str
@@ -150,6 +151,7 @@ class ModelConfig:
     retention_days: int = 7
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS
     source: SourceConfig = field(factory=UwWrfSourceConfig)
+    attribution: str | None = None
 
     def __attrs_post_init__(self) -> None:
         _check_id("model", self.id)

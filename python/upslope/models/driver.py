@@ -26,11 +26,13 @@ from upslope.models.manifest import (
     RunLayer,
     RunManifest,
     RunPointer,
+    ValueEncoding,
     frame_name,
     valid_time,
+    values_name,
 )
 from upslope.models.source import ForecastSource, NotPublished, SourceUnavailable
-from upslope.raster import convert_to_png, image_coordinates
+from upslope.raster import convert_to_png, encode_values_png, image_coordinates
 
 logger = get_logger(__name__)
 
@@ -204,7 +206,7 @@ class ForecastDriver:
         existing = self.store.read_manifest(model.id, initialized)
         reusable = {} if force else reusable_layers(model, existing, revision)
         layers = [reusable.get(layer.id) or self.new_layer(layer) for layer in model.layers]
-        manifest = RunManifest(model.id, model.name, initialized, revision, self.now(), layers)
+        manifest = RunManifest(model.id, model.name, initialized, revision, self.now(), layers, model.attribution)
         # names, layers or annotations changed, or some layers are starting over
         dirty = existing is None or evolve(existing, updated_at=manifest.updated_at) != manifest
 
@@ -300,7 +302,7 @@ class ForecastDriver:
         hour: int,
         work: Path,
     ) -> Frame:
-        """Render one forecast hour, upload it as a PNG and add it to `run_layer`.
+        """Render one forecast hour, upload it as a PNG (and its value image, if any) and add it to `run_layer`.
 
         Args:
             model: Model the layer belongs to.
@@ -317,9 +319,9 @@ class ForecastDriver:
         """
         tiff = work / layer.id / f"{hour:03d}.tiff"
         tiff.parent.mkdir(parents=True, exist_ok=True)
-        png = tiff.with_suffix(".png")
+        png, values_png = tiff.with_suffix(".png"), tiff.with_suffix(".values.png")
         try:
-            source.render_frame(model, layer, initialized, hour, tiff)
+            rendered = source.render_frame(model, layer, initialized, hour, tiff)
 
             with rasterio.open(tiff) as dataset:
                 size = (dataset.width, dataset.height)
@@ -330,11 +332,21 @@ class ForecastDriver:
 
             valid = valid_time(initialized, hour)
             frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid)}")
+            encoding = run_layer.values or ValueEncoding()
+            if rendered.values is not None:
+                if rendered.values.shape != (size[1], size[0]):
+                    raise ValueError(f"values of {model.id}/{layer.id} hour {hour} don't match the image's grid")
+                encode_values_png(rendered.values, values_png, encoding.scale, encoding.offset)
+                frame.values = f"{layer.id}/{values_name(valid)}"
+                self.store.upload_frame(model.id, initialized, frame.values, values_png)
             self.store.upload_frame(model.id, initialized, frame.path, png)
         finally:
-            for path in (tiff, png):
+            for path in (tiff, png, values_png):
                 path.unlink(missing_ok=True)
         if run_layer.dimensions is None:
             run_layer.dimensions, run_layer.coordinates = size, coordinates
+        if frame.values is not None:
+            run_layer.values = encoding
+        run_layer.legend = rendered.legend
         run_layer.frames.append(frame)
         return frame

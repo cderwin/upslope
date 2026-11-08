@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ForecastMap from '@/forecast/components/ForecastMap.vue'
 import MapControls from '@/forecast/components/MapControls.vue'
+import MapLegend from '@/forecast/components/MapLegend.vue'
 import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import {
   FORECAST_BASE_URL,
@@ -249,7 +250,15 @@ onBeforeUnmount(() => {
         Showing {{ layer.inProgress ? 'a run that is still coming in' : 'an older model run' }}.
         <a href="#" class="alert-link" @click.prevent="showLatest">Show the latest</a>
       </div>
-      <ForecastMap :token="token" :layer="layer" :url="url" :opacity="opacity" :terrain="terrain" />
+      <ForecastMap
+        :token="token"
+        :layer="layer"
+        :url="url"
+        :values-url="frame?.valuesUrl ?? null"
+        :opacity="opacity"
+        :terrain="terrain"
+      />
+      <MapLegend :name="layer.name" :legend="layer.legend" :attribution="layer.attribution" />
       <MapControls
         v-model:index="index"
         v-model:opacity="opacity"
@@ -271,7 +280,8 @@ onBeforeUnmount(() => {
           <span class="status-dot" :class="`bg-${statusTone}`" aria-hidden="true"></span>
           Model runs
         </button>
-        <div v-if="adminToken.token">
+        <!-- only UW WRF frames (which have a maptype) are georegistered with annotations -->
+        <div v-if="adminToken.token && layer.maptype">
           <button
             type="button"
             class="btn btn-sm btn-outline-secondary w-100"

@@ -136,3 +136,36 @@ def convert_to_png(dataset: rasterio.DatasetReader, png_path: Path) -> None:
         image = Image.fromarray(np.moveaxis(data[:4], 0, -1))
 
     image.save(png_path, optimize=True, **save_options)
+
+
+# Largest integer an RGB pixel holds; 0 is reserved for no data
+_MAX_VALUE_CODE = (1 << 24) - 1
+
+
+def encode_values_png(values: np.ndarray, png_path: Path, scale: float, offset: float) -> None:
+    """Save numbers as a lossless RGB PNG the browser can read back exactly.
+
+    Pixel integer `n = R * 65536 + G * 256 + B` is 0 for no data (NaN), else `(n - 1) * scale + offset`
+    rounded to the nearest step; values outside the encodable range are clamped (see
+    `upslope.models.manifest.ValueEncoding`).
+
+    Args:
+        values: Values shaped (rows, cols); NaN where there is no data.
+        png_path: Path to write the PNG.
+        scale: Value of one step.
+        offset: Value of `n = 1`.
+    """
+    missing = ~np.isfinite(values)
+    steps = np.rint((np.where(missing, offset, values) - offset) / scale)
+    codes = (np.clip(steps, 0, _MAX_VALUE_CODE - 1) + 1).astype(np.uint32)
+    codes[missing] = 0
+    rgb = np.stack([(codes >> 16) & 0xFF, (codes >> 8) & 0xFF, codes & 0xFF], axis=-1).astype(np.uint8)
+    Image.fromarray(rgb, mode="RGB").save(png_path, optimize=True)
+
+
+def decode_values_png(png_path: Path, scale: float, offset: float) -> np.ndarray:
+    """Read back a PNG written by `encode_values_png`, as float64 values with NaN for no data."""
+    with Image.open(png_path) as image:
+        rgb = np.asarray(image.convert("RGB"), dtype=np.uint32)
+    codes = (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]
+    return np.where(codes == 0, np.nan, (codes.astype(np.float64) - 1) * scale + offset)

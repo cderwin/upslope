@@ -2,13 +2,16 @@
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ForecastLayer } from '@/forecast/types'
+import { formatValue, loadValueImage, pixelAt, valueAt } from '@/forecast/frameValues'
+import type { ForecastLayer, LngLat } from '@/forecast/types'
 
 const props = defineProps<{
   token: string
   layer: ForecastLayer
   /** Current frame URL. */
   url: string
+  /** Current frame's value image, for the value under the cursor; null for layers without numbers. */
+  valuesUrl: string | null
   /** 0–1 */
   opacity: number
   /** Drape everything over 3D terrain and tilt the camera. */
@@ -74,6 +77,40 @@ function source(): mapboxgl.ImageSource | undefined {
   return map?.getSource<mapboxgl.ImageSource>(SOURCE_ID)
 }
 
+// --- the value under the cursor (layers with value images only)
+
+/** Where the cursor is, in map and screen coordinates. */
+let pointer: { lngLat: LngLat; x: number; y: number } | null = null
+const hover = ref<{ x: number; y: number; text: string } | null>(null)
+let hoverRequest = 0
+
+/** Show the current frame's value under the pointer; value images load on first use. */
+async function updateHover() {
+  const request = ++hoverRequest
+  const { layer, valuesUrl } = props
+  const at = pointer
+  const pixel = at && valuesUrl && layer.values ? pixelAt(layer, at.lngLat) : null
+  if (!at || !valuesUrl || !layer.values || !pixel) {
+    hover.value = null
+    return
+  }
+  try {
+    const image = await loadValueImage(valuesUrl)
+    if (request !== hoverRequest) return // the pointer, frame or layer moved on meanwhile
+    const [col, row] = pixel
+    const value = col < image.width && row < image.height ? valueAt(image, layer.values, col, row) : null
+    hover.value = value === null ? null : { x: at.x, y: at.y, text: `${layer.name}: ${formatValue(value, layer.legend)}` }
+  } catch (e) {
+    if (request === hoverRequest) hover.value = null
+    console.error('[ForecastMap] value image', e)
+  }
+}
+
+function onPointer(event: mapboxgl.MapMouseEvent) {
+  pointer = { lngLat: [event.lngLat.lng, event.lngLat.lat], x: event.point.x, y: event.point.y }
+  void updateHover()
+}
+
 onMounted(() => {
   mapboxgl.accessToken = props.token
   map = new mapboxgl.Map({
@@ -89,6 +126,13 @@ onMounted(() => {
   map.addControl(new mapboxgl.ScaleControl(), 'bottom-right')
   map.on('style.load', addForecastLayer)
   map.on('error', (event) => console.error('[ForecastMap]', event.error))
+  map.on('mousemove', onPointer)
+  map.on('click', onPointer) // touch screens have no hover; a tap shows the value
+  map.on('mouseout', () => {
+    pointer = null
+    hoverRequest++
+    hover.value = null
+  })
 })
 
 onBeforeUnmount(() => {
@@ -103,6 +147,9 @@ watch(
     if (layer !== previousLayer) map?.fitBounds(bounds(layer), { padding: 40 })
   },
 )
+
+// playback and layer changes update the value under a still cursor
+watch(() => [props.valuesUrl, props.layer] as const, () => void updateHover())
 
 watch(
   () => props.terrain,
@@ -122,12 +169,33 @@ watch(
 </script>
 
 <template>
-  <div ref="container" class="forecast-map"></div>
+  <div class="forecast-map">
+    <div ref="container" class="forecast-map-canvas"></div>
+    <div
+      v-if="hover"
+      class="value-tooltip badge text-bg-dark shadow-sm"
+      role="status"
+      :style="{ left: `${hover.x}px`, top: `${hover.y}px` }"
+    >
+      {{ hover.text }}
+    </div>
+  </div>
 </template>
 
 <style scoped>
-.forecast-map {
+.forecast-map,
+.forecast-map-canvas {
   position: absolute;
   inset: 0;
+}
+
+.value-tooltip {
+  position: absolute;
+  z-index: 1;
+  /* above and to the right of the cursor, out of its way */
+  transform: translate(12px, calc(-100% - 8px));
+  pointer-events: none;
+  font-weight: 500;
+  white-space: nowrap;
 }
 </style>

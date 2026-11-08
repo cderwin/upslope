@@ -70,9 +70,17 @@ export function runLayers(manifest: RunManifest, run: RunRef, model: ModelStatus
       dimensions: layer.dimensions,
       coordinates: layer.coordinates,
       frames: layer.frames
-        .map((frame) => ({ hour: frame.hour, url: dataUrl(`${manifest.model}/${run.path}/${frame.path}`) }))
+        .map((frame) => ({
+          hour: frame.hour,
+          url: dataUrl(`${manifest.model}/${run.path}/${frame.path}`),
+          valuesUrl: frame.values ? dataUrl(`${manifest.model}/${run.path}/${frame.values}`) : null,
+        }))
         .sort((a, b) => a.hour - b.hour),
       hours: layer.hours,
+      maptype: layer.maptype,
+      legend: layer.legend ?? null,
+      values: layer.values ?? null,
+      attribution: manifest.attribution ?? null,
     })
   }
   return layers
