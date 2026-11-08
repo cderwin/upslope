@@ -1,8 +1,8 @@
 """Forecast models and their image layers, loaded from `python/config/models.yaml`.
 
-Each layer names a URL template for its images, so adding a layer or a model that publishes map
-images takes only config. Everything is validated at load time, so a typo fails at startup rather
-than as a 404 during an export.
+Each model names its source (where its frames come from); a UW WRF layer names a URL template for its
+images, so adding a layer or a model that publishes map images takes only config. Everything is
+validated at load time, so a typo fails at startup rather than as a 404 during an export.
 """
 
 import hashlib
@@ -11,7 +11,7 @@ import re
 import string
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from attrs import define, field
 from cattrs import transform_error
@@ -116,6 +116,20 @@ class LayerConfig:
 
 
 @define(frozen=True)
+class UwWrfSourceConfig:
+    """Map images published by UW WRF, placed on the map with the georegistration annotations.
+
+    Attributes:
+        kind: Source kind, `uw_wrf`.
+    """
+
+    kind: Literal["uw_wrf"] = "uw_wrf"
+
+
+SourceConfig = UwWrfSourceConfig
+
+
+@define(frozen=True)
 class ModelConfig:
     """A forecast model: when it runs, how long its runs are kept, and its layers.
 
@@ -126,6 +140,7 @@ class ModelConfig:
         layers: Layers to export from each run.
         retention_days: How long exported runs are kept.
         lookback_hours: How far back to look for a run to export.
+        source: Where the model's frames come from.
     """
 
     id: str
@@ -134,6 +149,7 @@ class ModelConfig:
     layers: list[LayerConfig]
     retention_days: int = 7
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS
+    source: SourceConfig = field(factory=UwWrfSourceConfig)
 
     def __attrs_post_init__(self) -> None:
         _check_id("model", self.id)

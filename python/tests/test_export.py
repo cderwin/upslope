@@ -1,5 +1,7 @@
 """Web export pipeline: config, georegistration and frame conversion, using the repo's real configs and sample GIFs."""
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -7,8 +9,10 @@ from unittest.mock import MagicMock
 import io
 
 import httpx
+import numpy as np
 import pytest
 import rasterio
+from affine import Affine
 from attrs import evolve
 from click.testing import CliRunner
 from PIL import Image
@@ -19,9 +23,12 @@ from upslope.clients.forecasts import ForecastStore
 from upslope.cli.main import main
 from upslope.models.config import ConfigError, HourRange, LayerConfig, ModelConfig, ModelsConfig
 from upslope.models.driver import ExportFailed, ForecastDriver
-from upslope.models.image_client import ImageClient
 from upslope.models.manifest import RunPointer
-from upslope.models.uw_wrf.georegistration import OUTPUT_CRS, Registration, fit_report
+from upslope.models.source import NotPublished, SourceUnavailable
+from upslope.models.uw_wrf.image_client import ImageClient
+from upslope.models.uw_wrf.source import UwWrfSource
+from upslope.models.uw_wrf.georegistration import Registration, fit_report
+from upslope.raster import OUTPUT_CRS, write_geotiff
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 
 SAMPLE_GIF = snapshot_image_path(DEV_GEOREGISTRATION, "washington", "legacy-hour06")
@@ -155,6 +162,26 @@ def test_initializations_follow_start_times() -> None:
     ]
 
 
+def test_configured_fingerprints_are_stable() -> None:
+    """A changed fingerprint re-exports every retained run of the model, so config refactors must keep them."""
+    config = ModelsConfig.load(DEFAULT_MODELS_CONFIG)
+    assert config.model("uwwrf_4km").fingerprint() == "e1359839afb6d730"
+    assert config.model("uwwrf_1.33km").fingerprint() == "4ac7afb08cb8b50b"
+
+
+def test_model_source_defaults_to_uw_wrf(tmp_path: Path) -> None:
+    assert make_model().source.kind == "uw_wrf"
+    assert {model.source.kind for model in ModelsConfig.load(DEFAULT_MODELS_CONFIG).models} == {"uw_wrf"}
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        "models:\n"
+        "  - {id: m, name: M, start_times: [0], source: {kind: elsewhere},"
+        " layers: [{id: a, name: A, url: 'https://x/{init:%Y}/{hour}.gif', hours: {last: 3}, maptype: w}]}\n"
+    )
+    with pytest.raises(ConfigError, match="source"):
+        ModelsConfig.load(path)
+
+
 def test_fingerprint_tracks_what_the_export_produces() -> None:
     base = make_model(make_layer(), make_layer("3-hour-precip", "wa_pcp3", HourRange(first=6, last=84)))
     assert make_model(*base.layers).fingerprint() == base.fingerprint()
@@ -191,16 +218,20 @@ def test_georegister_unknown_domain_raises(registration: Registration, tmp_path:
         registration.georegister(SAMPLE_GIF, tmp_path / "out.tiff", "atlantis")
 
 
-def test_export_frame_uploads_a_placed_png(registration: Registration, memory_storage, tmp_path: Path) -> None:
+def test_export_frame_uploads_a_placed_png(memory_storage, document: AnnotationDocument, tmp_path: Path) -> None:
     """Downloaded GIF -> transparent paletted PNG named by valid time, in a layer placed over Washington."""
     layer = make_layer(hours=HourRange(first=6, last=6))
     model = make_model(layer)
     client = MagicMock()
     client.download_image.return_value = SAMPLE_GIF.read_bytes()
-    driver = ForecastDriver(config=ModelsConfig([model]), client=client, store=ForecastStore(memory_storage), annotations=MagicMock())
+    annotations = AnnotationStore(memory_storage)
+    annotations.publish(document)
+    source = UwWrfSource(client, annotations)
+    driver = ForecastDriver(config=ModelsConfig([model]), sources={"uw_wrf": source}, store=ForecastStore(memory_storage))
 
     run_layer = driver.new_layer(layer)
-    frame = driver.export_frame(model, layer, run_layer, INITIALIZED, 6, lambda: registration, tmp_path)
+    with source.check():
+        frame = driver.export_frame(model, source, layer, run_layer, INITIALIZED, 6, tmp_path)
 
     assert (frame.hour, frame.valid, frame.path) == (6, INITIALIZED + timedelta(hours=6), "surface-temp/2026-10-21T1800.png")
     assert run_layer.frames == [frame]
@@ -236,6 +267,26 @@ def uw_client(*published: str, status: int = 404) -> ImageClient:
 def last_hours(run: str) -> list[str]:
     """Paths of the last hour of each RUN_MODEL layer in `run` (YYYYMMDDHH)."""
     return [f"{run}/images_d3/wa_tsfc.120.0000.gif", f"{run}/images_d3/wa_pcp3.84.0000.gif"]
+
+
+def test_uw_source_maps_upstream_responses(memory_storage, document: AnnotationDocument, tmp_path: Path) -> None:
+    """A 404 is an hour not published yet; other errors propagate, to be recorded and retried."""
+    annotations = AnnotationStore(memory_storage)
+    layer = RUN_MODEL.layers[0]
+    out = tmp_path / "frame.tiff"
+    source = UwWrfSource(uw_client(), annotations)
+    with source.check(), pytest.raises(SourceUnavailable):
+        source.render_frame(RUN_MODEL, layer, INITIALIZED, 0, out)
+
+    annotations.publish(document)
+    with source.check():
+        assert source.revision(RUN_MODEL) == document.revision
+        with pytest.raises(NotPublished):
+            source.render_frame(RUN_MODEL, layer, INITIALIZED, 0, out)
+    failing = UwWrfSource(uw_client(status=503), annotations)
+    with failing.check(), pytest.raises(httpx.HTTPStatusError):
+        failing.render_frame(RUN_MODEL, layer, INITIALIZED, 0, out)
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_latest_complete_run_skips_a_run_still_being_published() -> None:
@@ -347,9 +398,8 @@ def make_export_driver(
 ) -> ForecastDriver:
     return ForecastDriver(
         config=ModelsConfig(list(models) or [EXPORT_MODEL]),
-        client=upstream.client(),
+        sources={"uw_wrf": UwWrfSource(upstream.client(), AnnotationStore(memory_storage))},
         store=ForecastStore(memory_storage),
-        annotations=AnnotationStore(memory_storage),
         now=lambda: now,
     )
 
@@ -618,6 +668,72 @@ def test_run_skips_without_published_annotations(memory_storage) -> None:
     upstream = FakeUpstream(INITIALIZED)
     assert make_export_driver(memory_storage, upstream).run() == []
     assert upstream.downloads == []
+
+
+class FakeSource:
+    """A source with every layer's hours published up to `published[run]`, rendered as tiny paletted frames."""
+
+    def __init__(self, published: dict[datetime, int], revision: int | None = None) -> None:
+        self.published = published
+        self.current_revision = revision
+        self.rendered: list[tuple[str, int]] = []
+        self.checking = False
+
+    @contextmanager
+    def check(self) -> Iterator[None]:
+        self.checking = True
+        try:
+            yield
+        finally:
+            self.checking = False
+
+    def latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
+        last = max(layer.hours.last for layer in model.layers)
+        return max((run for run, hour in self.published.items() if hour >= last), default=None)
+
+    def revision(self, model: ModelConfig) -> int | None:
+        return self.current_revision
+
+    def render_frame(self, model: ModelConfig, layer: LayerConfig, initialized: datetime, hour: int, out: Path) -> None:
+        assert self.checking
+        if hour > self.published.get(initialized, -1):
+            raise NotPublished(f"hour {hour}")
+        self.rendered.append((layer.id, hour))
+        data = np.zeros((1, 4, 4), dtype=np.uint8)
+        data[0, 1:3, 1:3] = 1
+        transform = Affine(1000.0, 0.0, -13_600_000.0, 0.0, -1000.0, 6_000_000.0)
+        write_geotiff(out, data, transform, nodata=255, colormap={0: (0, 0, 0, 255), 1: (255, 0, 0, 255)})
+
+
+def make_fake_driver(memory_storage, source: FakeSource, now: datetime = NOW) -> ForecastDriver:
+    return ForecastDriver(ModelsConfig([EXPORT_MODEL]), {"uw_wrf": source}, ForecastStore(memory_storage), now=lambda: now)
+
+
+def test_driver_exports_from_any_source(memory_storage) -> None:
+    """The driver needs no annotations or HTTP: whatever the source renders becomes the run's frames."""
+    source = FakeSource({INITIALIZED: 999, NEXT: 0})
+    driver = make_fake_driver(memory_storage, source, now=NEXT + timedelta(hours=1))
+    complete, partial = driver.run()
+    assert (complete.initialized, complete.complete, complete.registration_revision) == (INITIALIZED, True, None)
+    assert [(layer.id, [f.hour for f in layer.frames]) for layer in partial.layers] == [("surface-temp", [0]), ("3-hour-precip", [])]
+    store = ForecastStore(memory_storage)
+    assert store.read_latest("uwwrf_4km").initialized == INITIALIZED
+    assert len(frame_keys(memory_storage)) == 5
+
+    # nothing new: nothing is rendered again
+    source.rendered.clear()
+    assert driver.run() == []
+    assert source.rendered == []
+
+
+def test_source_revision_change_reexports(memory_storage) -> None:
+    source = FakeSource({INITIALIZED: 999}, revision=1)
+    driver = make_fake_driver(memory_storage, source)
+    driver.run()
+    source.rendered.clear()
+    source.current_revision = 2
+    (manifest,) = driver.run()
+    assert len(source.rendered) == 4 and manifest.registration_revision == 2
 
 
 def test_fit_report_matches_snapshot_thresholds(document: AnnotationDocument) -> None:

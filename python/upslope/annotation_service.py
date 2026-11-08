@@ -32,7 +32,7 @@ from upslope.models.uw_wrf.georegistration_document import (
     is_valid_key,
 )
 from upslope.models.config import LayerConfig, ModelConfig, ModelsConfig
-from upslope.models.image_client import ImageClient
+from upslope.models.uw_wrf.image_client import ImageClient
 
 logger = get_logger(__name__)
 

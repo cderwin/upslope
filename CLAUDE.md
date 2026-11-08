@@ -45,8 +45,9 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` (manifests, frames, `latest.json`, retention) |
 | `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
-| `models/image_client.py`, `models/driver.py` | Image download and run detection; the export pipeline (`ForecastDriver`) |
-| `models/uw_wrf/` | Fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |
+| `models/driver.py`, `models/source.py` | The export pipeline (`ForecastDriver`), the same for every model; the `ForecastSource` interface each kind of model implements |
+| `models/uw_wrf/` | UW WRF source (`source.py`), image download and run detection (`image_client.py`), fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |
+| `raster.py` | Warping to Web Mercator, frame corners, PNG conversion; shared by every source |
 | `models/manifest.py` | Run manifest and `latest.json` schemas |
 | `logging.py` | `get_logger`, `configure_logging`, `log_duration` |
 

@@ -27,6 +27,7 @@ to export (`upslope/models/config.py`):
 models:
   - id: uwwrf_4km            # in map URLs and storage keys; don't rename
     name: UW WRF 4km         # display only
+    source: {kind: uw_wrf}   # where frames come from (the default)
     start_times: [0, 12]     # UTC initialization hours
     retention_days: 7
     layers:
@@ -124,8 +125,10 @@ start. Production never reads it.
 ## Web export
 
 `export-web` runs the whole pipeline (`ForecastDriver`) for each configured
-model: it downloads each layer's images, georegisters each frame, converts it to
-a PNG (nodata becomes transparent) and uploads it to the S3/Tigris bucket. It
+model: the model's source (`upslope/models/source.py`; for UW WRF,
+`models/uw_wrf/source.py`) renders each frame as a Web Mercator GeoTIFF (for
+UW, by downloading the image and georegistering it), and the driver converts it
+to a PNG (nodata becomes transparent) and uploads it to the S3/Tigris bucket. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally, `AWS_REGION`. Put them in
 the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export` and

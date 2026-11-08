@@ -10,14 +10,21 @@ from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
 from upslope.models.config import ModelsConfig
 from upslope.models.driver import ExportFailed, ForecastDriver
-from upslope.models.image_client import ImageClient
+from upslope.models.source import ForecastSource
+from upslope.models.uw_wrf.image_client import ImageClient
+from upslope.models.uw_wrf.source import UwWrfSource
 
 logger = get_logger(__name__)
 
 
+def build_sources(storage: StorageClient) -> dict[str, ForecastSource]:
+    """Every kind of forecast source, by `SourceConfig.kind`; UW WRF reads its annotations from `storage`."""
+    return {"uw_wrf": UwWrfSource(ImageClient(), AnnotationStore(storage))}
+
+
 def build_driver(config: ModelsConfig, storage: StorageClient) -> ForecastDriver:
-    """Create the export driver, reading annotations from and exporting to `storage`."""
-    return ForecastDriver(config=config, client=ImageClient(), store=ForecastStore(storage), annotations=AnnotationStore(storage))
+    """Create the export driver, exporting to `storage`."""
+    return ForecastDriver(config=config, sources=build_sources(storage), store=ForecastStore(storage))
 
 
 # How often to check for new frames by default. A run takes hours to publish, so this sets how far

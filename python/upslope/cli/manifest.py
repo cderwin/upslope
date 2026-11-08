@@ -18,18 +18,15 @@ def export_web(config_path: Path, force: bool, verbose: bool) -> None:
     Georegisters with the annotations currently published in storage. Layers already exported with
     those annotations and the current config are kept as they are.
     """
-    from upslope.clients.annotations import AnnotationStore
-    from upslope.clients.forecasts import ForecastStore
     from upslope.clients.storage import StorageClient
     from upslope.models.config import ModelsConfig
-    from upslope.models.driver import ExportFailed, ForecastDriver
-    from upslope.models.image_client import ImageClient
+    from upslope.models.driver import ExportFailed
+    from upslope.server.jobs import build_driver
 
     configure_logging(verbose)
     logger.info("loading models config from %s", config_path)
     config = ModelsConfig.load(config_path)
-    storage = StorageClient.build()
-    driver = ForecastDriver(config=config, client=ImageClient(), store=ForecastStore(storage), annotations=AnnotationStore(storage))
+    driver = build_driver(config, StorageClient.build())
     try:
         manifests = driver.run(force=force)
     except ExportFailed as e:
