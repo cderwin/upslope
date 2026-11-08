@@ -3,6 +3,9 @@
 # Model and layer IDs appear in map URLs (/map/<model>/<layer>), storage keys and annotation
 # image sources, so renaming one breaks links. Names are for display only and can change freely.
 #
+# Model fields:
+#   source   Where frames come from: {kind: uw_wrf} for UW WRF images placed with the annotations.
+#
 # Layer fields:
 #   url      Image URL for one forecast hour. Fields: {init} is the run's initialization time
 #            (a datetime, so use a strftime format such as {init:%Y%m%d%H}); {hour} is the forecast hour.
@@ -21,6 +24,7 @@
 models:
   - id: uwwrf_4km
     name: UW WRF 4km
+    source: {kind: uw_wrf}
     start_times: [0, 12]
     retention_days: 7
     layers:
@@ -92,6 +96,7 @@ models:
 
   - id: uwwrf_1.33km
     name: UW WRF 1.33km
+    source: {kind: uw_wrf}
     start_times: [0, 12]
     retention_days: 7
     layers:

@@ -73,7 +73,8 @@ class RunManifest:
         model: Model id, e.g. `uwwrf_4km`.
         name: Model display name.
         initialized: Run initialization time (UTC).
-        registration_revision: Revision of the published annotations the frames were georegistered with.
+        registration_revision: The source's revision the frames were exported at: for UW WRF, the revision of
+            the published annotations they were georegistered with; None for sources without one.
         updated_at: When the manifest was last written.
         layers: The run's layers, in display order.
     """
@@ -81,7 +82,7 @@ class RunManifest:
     model: str
     name: str
     initialized: datetime
-    registration_revision: int
+    registration_revision: int | None
     updated_at: datetime
     layers: list[RunLayer] = field(factory=list)
 

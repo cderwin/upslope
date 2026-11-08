@@ -8,10 +8,11 @@ import rasterio
 from affine import Affine
 from attrs import define
 from rasterio.errors import NotGeoreferencedWarning
-from rasterio.warp import Resampling, calculate_default_transform, reproject
+from rasterio.warp import Resampling
 
 from pyproj import Geod, Transformer
 
+from upslope.raster import warp_to_web_mercator, write_geotiff
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument, GeographicPoint, PixelAnnotation
 
 
@@ -21,10 +22,6 @@ from upslope.models.uw_wrf.georegistration_document import AnnotationDocument, G
 WRF_LAMBERT_CRS = (
     "+proj=lcc +lat_1=30 +lat_2=60 +lat_0=45.66480255 +lon_0=-121 +x_0=0 +y_0=0 +R=6370000 +units=m +no_defs"
 )
-
-# Web Mercator: Mapbox draws image overlays linearly between their corners in this CRS, so warped
-# frames place exactly.
-OUTPUT_CRS = "EPSG:3857"
 
 _to_projected = Transformer.from_crs("EPSG:4326", WRF_LAMBERT_CRS, always_xy=True)
 _to_geographic = Transformer.from_crs(WRF_LAMBERT_CRS, "EPSG:4326", always_xy=True)
@@ -189,40 +186,11 @@ class Registration:
                 except ValueError:
                     cmap = None
                 nodata = src.nodata if src.nodata is not None else unused_palette_index(data)
-                count, dtype, width, height = src.count, src.dtypes[0], src.width, src.height
 
-        left, top = src_transform @ (0, 0)
-        right, bottom = src_transform * (width, height)
-        dst_transform, dst_width, dst_height = calculate_default_transform(
-            WRF_LAMBERT_CRS, OUTPUT_CRS, width, height, left=left, bottom=bottom, right=right, top=top
-        )
-        warped = np.full((count, dst_height, dst_width), nodata, dtype=dtype)
-        reproject(
-            source=data,
-            destination=warped,
-            src_transform=src_transform,
-            src_crs=WRF_LAMBERT_CRS,
-            dst_transform=dst_transform,
-            dst_crs=OUTPUT_CRS,
-            dst_nodata=nodata,
-            resampling=Resampling.nearest,  # palette indices can't be blended
-        )
-
-        profile = {
-            "driver": "GTiff",
-            "height": dst_height,
-            "width": dst_width,
-            "count": count,
-            "dtype": dtype,
-            "crs": OUTPUT_CRS,
-            "transform": dst_transform,
-            "nodata": nodata,
-            "compress": "deflate",
-        }
-        with rasterio.open(registered_forecast_image, "w", **profile) as dst:
-            dst.write(warped)
-            if cmap is not None:
-                dst.write_colormap(1, cmap)  # keeps the GIF's palette so colors render correctly
+        # nearest: palette indices can't be blended
+        warped, dst_transform = warp_to_web_mercator(data, WRF_LAMBERT_CRS, src_transform, nodata, Resampling.nearest)
+        # keeps the GIF's palette so colors render correctly
+        write_geotiff(registered_forecast_image, warped, dst_transform, nodata, cmap)
 
     @classmethod
     def build(cls, document: AnnotationDocument) -> Self:

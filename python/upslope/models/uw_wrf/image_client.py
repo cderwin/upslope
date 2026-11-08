@@ -1,4 +1,4 @@
-"""HTTP client for downloading a model run's forecast images, using each layer's URL template."""
+"""HTTP client for downloading a UW WRF run's forecast images, using each layer's URL template."""
 
 from datetime import UTC, datetime
 from pathlib import Path

@@ -9,7 +9,7 @@ from upslope.cli import DEFAULT_MODELS_CONFIG, PROJECT_BASE, load_annotations
 
 if TYPE_CHECKING:
     from upslope.models.config import ModelConfig, ModelsConfig
-    from upslope.models.image_client import ImageClient
+    from upslope.models.uw_wrf.image_client import ImageClient
 
 config_option = click.option(
     "-c", "--config", "config_path", type=click.Path(path_type=Path), default=DEFAULT_MODELS_CONFIG,
@@ -57,7 +57,7 @@ def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | No
 def download(config_path: Path, model_ids: tuple[str, ...], run: datetime | None, output_path: Path) -> None:
     """Download every configured layer's images of a model run."""
     from upslope.models.config import ModelsConfig
-    from upslope.models.image_client import ImageClient
+    from upslope.models.uw_wrf.image_client import ImageClient
 
     client = ImageClient()
     for model in _select_models(ModelsConfig.load(config_path), model_ids):
@@ -87,7 +87,7 @@ def reproject(config_path: Path, input_path: Path, output_path: Path, snapshot: 
     from tqdm import tqdm
 
     from upslope.models.config import ModelsConfig
-    from upslope.models.image_client import raw_image_name
+    from upslope.models.uw_wrf.image_client import raw_image_name
     from upslope.models.uw_wrf.georegistration import Registration
 
     config = ModelsConfig.load(config_path)
@@ -120,7 +120,7 @@ def check_layers(config_path: Path, model_ids: tuple[str, ...], run: datetime | 
     import httpx
 
     from upslope.models.config import ModelsConfig
-    from upslope.models.image_client import ImageClient
+    from upslope.models.uw_wrf.image_client import ImageClient
 
     client = ImageClient()
     problems = 0
