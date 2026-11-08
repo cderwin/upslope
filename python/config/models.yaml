@@ -393,3 +393,46 @@ models:
         field: total_cloud_cover_atmosphere
         scale: cloud_pct
         hours: {last: 360, step: 6}
+
+  - id: hrdps_2.5km
+    name: HRDPS 2.5km
+    # a materialized dataset (no virtual one exists): a run appears once it's complete, about 4.5 h after init
+    source: {kind: dynamical, dataset: eccc-hrdps-forecast}
+    region: [-127, 41.5, -113, 50]
+    attribution: >-
+      ECCC HRDPS data processed by dynamical.org from Environment and Climate Change Canada, used under the ECCC
+      Data Servers End-use Licence version 2.1 (https://eccc-msc.github.io/open-data/licence/readme_en/).
+    start_times: [0, 6, 12, 18]
+    retention_days: 2
+    layers:
+      - id: surface-temp
+        name: Surface temperature
+        field: temperature_2m
+        scale: temperature_f
+        hours: {last: 48, step: 1}
+
+      - id: 10m-wind-speed
+        name: 10m wind speed
+        field: wind_speed_10m
+        scale: wind_mph
+        hours: {last: 48, step: 1}
+
+      - id: 3-hour-precip
+        name: 3-hour precipitation
+        # an average rate since the previous hour, summed over 3 hours
+        field: {derive: rate_sum, variables: [precipitation_surface], hours: 3}
+        scale: precip_in
+        hours: {first: 3, last: 48, step: 1}
+
+      - id: snow-water-equivalent
+        name: Snow water equivalent
+        field: snow_water_equivalent_surface
+        scale: snow_in
+        hours: {last: 48, step: 1}
+
+      - id: cloud-cover
+        name: Cloud cover
+        # missing at hour 0
+        field: total_cloud_cover_atmosphere
+        scale: cloud_pct
+        hours: {first: 1, last: 48, step: 1}
