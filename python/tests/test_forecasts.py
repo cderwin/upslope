@@ -64,9 +64,12 @@ def test_manifest_json_shape(store: ForecastStore, memory_storage, tmp_path: Pat
     export(store, tmp_path, manifest())
     data = json.loads(memory_storage.objects["forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json"][0])
     assert data["model"] == MODEL and data["initialized"] == "2026-10-29T00:00:00+00:00"
+    assert data["attribution"] is None
     layer = data["layers"][0]
-    assert {"id", "name", "maptype", "fingerprint", "hours", "dimensions", "coordinates", "frames"} <= layer.keys()
-    assert layer["frames"][1] == {"hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300.png"}
+    assert {"id", "name", "maptype", "fingerprint", "hours", "dimensions", "coordinates", "frames", "legend", "values"} <= layer.keys()
+    assert layer["frames"][1] == {
+        "hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300.png", "values": None,
+    }
 
 
 def test_layer_complete_ignores_frame_order() -> None:

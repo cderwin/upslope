@@ -28,6 +28,7 @@ models:
   - id: uwwrf_4km            # in map URLs and storage keys; don't rename
     name: UW WRF 4km         # display only
     source: {kind: uw_wrf}   # where frames come from (the default)
+    # attribution: ...       # optional credit shown with the model's frames
     start_times: [0, 12]     # UTC initialization hours
     retention_days: 7
     layers:
@@ -217,16 +218,34 @@ layout used before `forecasts/` (`web_exports/` and `model_runs/`).
       "hours": [0, 3, 6, ...],
       "dimensions": [958, 919],
       "coordinates": [[lon, lat], ...],
-      "frames": [{ "hour": 6, "valid": "2026-10-29T06:00:00+00:00", "path": "surface-temp/2026-10-29T0600.png" }, ...]
+      "frames": [{ "hour": 6, "valid": "2026-10-29T06:00:00+00:00", "path": "surface-temp/2026-10-29T0600.png", "values": null }, ...],
+      "legend": null,
+      "values": null
     }
-  ]
+  ],
+  "attribution": null
 }
 ```
 
 `hours` lists every hour the layer is published for. `dimensions` is
 `[width, height]` in pixels. `coordinates` are the image's top-left, top-right,
 bottom-right and bottom-left corners. Frame paths are relative to the run's
-folder.
+folder. `registration_revision` is null for models whose source has no
+annotations.
+
+Layers whose colors the export chooses (rather than an upstream image with its
+own legend, like UW's) also have:
+
+- `legend`: `{"units": "°F", "stops": [{"value": 32, "color": "#ffffff"}, ...], "decimals": 0}`;
+  each color applies from its value up to the next stop's.
+- `values`: `{"scale": 0.01, "offset": -100000}`, and each frame's `values`
+  names a value image beside it (`surface-temp/2026-10-29T0600.values.png`): a
+  lossless RGB PNG on the frame's pixel grid where `n = R*65536 + G*256 + B` is
+  no data when 0, else the value `(n - 1) * scale + offset` in the legend's
+  units. The map reads it to show the value under the cursor.
+
+`attribution` is the model's `attribution` from the config (credit a license
+requires), shown on the map.
 
 ### Forecast API
 

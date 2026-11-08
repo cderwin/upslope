@@ -23,12 +23,12 @@ from upslope.clients.forecasts import ForecastStore
 from upslope.cli.main import main
 from upslope.models.config import ConfigError, HourRange, LayerConfig, ModelConfig, ModelsConfig
 from upslope.models.driver import ExportFailed, ForecastDriver
-from upslope.models.manifest import RunPointer
-from upslope.models.source import NotPublished, SourceUnavailable
+from upslope.models.manifest import Legend, LegendStop, RunPointer, ValueEncoding
+from upslope.models.source import NotPublished, RenderedFrame, SourceUnavailable
 from upslope.models.uw_wrf.image_client import ImageClient
 from upslope.models.uw_wrf.source import UwWrfSource
 from upslope.models.uw_wrf.georegistration import Registration, fit_report
-from upslope.raster import OUTPUT_CRS, write_geotiff
+from upslope.raster import OUTPUT_CRS, decode_values_png, write_geotiff
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 
 SAMPLE_GIF = snapshot_image_path(DEV_GEOREGISTRATION, "washington", "legacy-hour06")
@@ -673,9 +673,10 @@ def test_run_skips_without_published_annotations(memory_storage) -> None:
 class FakeSource:
     """A source with every layer's hours published up to `published[run]`, rendered as tiny paletted frames."""
 
-    def __init__(self, published: dict[datetime, int], revision: int | None = None) -> None:
+    def __init__(self, published: dict[datetime, int], revision: int | None = None, legend: Legend | None = None) -> None:
         self.published = published
         self.current_revision = revision
+        self.legend = legend
         self.rendered: list[tuple[str, int]] = []
         self.checking = False
 
@@ -694,7 +695,7 @@ class FakeSource:
     def revision(self, model: ModelConfig) -> int | None:
         return self.current_revision
 
-    def render_frame(self, model: ModelConfig, layer: LayerConfig, initialized: datetime, hour: int, out: Path) -> None:
+    def render_frame(self, model: ModelConfig, layer: LayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
         assert self.checking
         if hour > self.published.get(initialized, -1):
             raise NotPublished(f"hour {hour}")
@@ -703,6 +704,11 @@ class FakeSource:
         data[0, 1:3, 1:3] = 1
         transform = Affine(1000.0, 0.0, -13_600_000.0, 0.0, -1000.0, 6_000_000.0)
         write_geotiff(out, data, transform, nodata=255, colormap={0: (0, 0, 0, 255), 1: (255, 0, 0, 255)})
+        if self.legend is None:
+            return RenderedFrame()
+        values = np.full((4, 4), hour + 0.25)
+        values[0, 0] = np.nan
+        return RenderedFrame(values=values, legend=self.legend)
 
 
 def make_fake_driver(memory_storage, source: FakeSource, now: datetime = NOW) -> ForecastDriver:
@@ -724,6 +730,28 @@ def test_driver_exports_from_any_source(memory_storage) -> None:
     source.rendered.clear()
     assert driver.run() == []
     assert source.rendered == []
+
+
+def test_frames_with_values_get_a_value_image(memory_storage, tmp_path: Path) -> None:
+    """A source's numbers are exported beside each frame, with the legend and the model's attribution."""
+    legend = Legend("°F", [LegendStop(0, "#0000ff"), LegendStop(32, "#ffffff")], decimals=1)
+    model = evolve(EXPORT_MODEL, attribution="Data: somebody (CC BY 4.0)")
+    driver = ForecastDriver(
+        ModelsConfig([model]), {"uw_wrf": FakeSource({INITIALIZED: 999}, legend=legend)}, ForecastStore(memory_storage), now=lambda: NOW
+    )
+    (manifest,) = driver.run()
+    assert manifest.attribution == "Data: somebody (CC BY 4.0)"
+    layer = manifest.layer("surface-temp")
+    assert (layer.legend, layer.values) == (legend, ValueEncoding())
+    frame = layer.frames[1]
+    assert frame.values == "surface-temp/2026-10-21T1500.values.png"
+
+    data, content_type = memory_storage.objects[f"forecasts/uwwrf_4km/2026/10/21/1200Z/{frame.values}"]
+    assert content_type == "image/png"
+    (tmp_path / "values.png").write_bytes(data)
+    values = decode_values_png(tmp_path / "values.png", layer.values.scale, layer.values.offset)
+    assert values.shape == (4, 4) and np.isnan(values[0, 0])
+    assert values[1, 1] == pytest.approx(3.25)
 
 
 def test_source_revision_change_reexports(memory_storage) -> None:

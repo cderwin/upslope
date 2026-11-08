@@ -80,6 +80,15 @@ plays/pauses, ←/→ step. The controls show each frame's valid time (the layer
 `initialized` time plus the frame's hour) in Pacific time, with the offset and
 the run time (UTC) alongside.
 
+Layers with a `legend` in their manifest (colors chosen by the export, not an
+upstream image) show it bottom left (top left on phones), with the model's
+`attribution`. Layers with value images (`values`; see `python/README.md`) show
+the value under the cursor in a tooltip, or under a tap on touch screens
+(`src/forecast/frameValues.ts`): the current frame's value image is fetched the
+first time the cursor is over it, decoded on a canvas with no color management,
+and the recent 64 are kept for playback. **Annotate this frame** appears only
+for layers with an annotation maptype (UW WRF).
+
 ## Annotation page
 
 The page asks for the admin token (kept in `localStorage` until you log out in

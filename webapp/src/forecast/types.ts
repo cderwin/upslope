@@ -60,13 +60,42 @@ export interface RunFrame {
   valid: string
   /** Relative to the run's folder. */
   path: string
+  /** The frame's value image, relative to the run's folder (see `ValueEncoding`); absent or null without one. */
+  values?: string | null
+}
+
+/** One color of a layer's scale (python `LegendStop`). */
+export interface LegendStop {
+  /** Value the color starts at, in the legend's units. */
+  value: number
+  /** CSS hex color. */
+  color: string
+}
+
+/** How to read a layer's colors (python `Legend`); absent for images that carry their own (UW WRF). */
+export interface Legend {
+  /** e.g. `°F` */
+  units: string
+  /** Increasing; each color applies from its value up to the next one's. */
+  stops: LegendStop[]
+  decimals: number
+}
+
+/**
+ * How a value image stores numbers (python `ValueEncoding`): an RGB PNG on the frame's pixel grid where
+ * `n = R * 65536 + G * 256 + B` is no data when 0, else the value `(n - 1) * scale + offset`.
+ */
+export interface ValueEncoding {
+  scale: number
+  offset: number
 }
 
 /** python `RunLayer`. */
 export interface RunLayer {
   id: string
   name: string
-  maptype: string
+  /** Annotation maptype (UW WRF only); frames without one can't be promoted for annotation. */
+  maptype: string | null
   fingerprint: string
   /** Every hour the layer is published for, exported or not. */
   hours: number[]
@@ -75,6 +104,8 @@ export interface RunLayer {
   /** Image corners: top-left, top-right, bottom-right, bottom-left (Mapbox order). */
   coordinates: [LngLat, LngLat, LngLat, LngLat] | null
   frames: RunFrame[]
+  legend?: Legend | null
+  values?: ValueEncoding | null
 }
 
 /** A run's `manifest.json` (python `RunManifest`). */
@@ -82,9 +113,11 @@ export interface RunManifest {
   model: string
   name: string
   initialized: string
-  registration_revision: number
+  registration_revision: number | null
   updated_at: string
   layers: RunLayer[]
+  /** Credit for the data, shown on the map. */
+  attribution?: string | null
 }
 
 // --- what the map shows
@@ -93,6 +126,8 @@ export interface ForecastFrame {
   hour: number
   /** Absolute or root-relative URL of the image. */
   url: string
+  /** URL of the frame's value image, if the layer has numbers to show under the cursor. */
+  valuesUrl: string | null
 }
 
 /** One layer of one model run, ready for the map. */
@@ -117,4 +152,10 @@ export interface ForecastLayer {
   frames: ForecastFrame[]
   /** Hours the layer is published for; more than `frames` while a run is incomplete. */
   hours: number[]
+  /** Annotation maptype (UW WRF only). */
+  maptype: string | null
+  legend: Legend | null
+  /** Encoding of the frames' value images, if they have them. */
+  values: ValueEncoding | null
+  attribution: string | null
 }

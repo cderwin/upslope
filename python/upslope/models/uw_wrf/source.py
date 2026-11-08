@@ -11,7 +11,7 @@ from attrs import define, field
 from upslope.clients.annotations import AnnotationStore
 from upslope.logging import get_logger
 from upslope.models.config import LayerConfig, ModelConfig
-from upslope.models.source import NotPublished, SourceUnavailable
+from upslope.models.source import NotPublished, RenderedFrame, SourceUnavailable
 from upslope.models.uw_wrf.georegistration import Registration
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 from upslope.models.uw_wrf.image_client import ImageClient
@@ -58,7 +58,7 @@ class UwWrfSource:
     def revision(self, model: ModelConfig) -> int | None:
         return self._require_published().revision
 
-    def render_frame(self, model: ModelConfig, layer: LayerConfig, initialized: datetime, hour: int, out: Path) -> None:
+    def render_frame(self, model: ModelConfig, layer: LayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
         published = self._require_published()
         try:
             data = self.client.download_image(layer, initialized, hour)
@@ -75,3 +75,5 @@ class UwWrfSource:
             self._registration.georegister(gif, out, layer.maptype)
         finally:
             gif.unlink(missing_ok=True)
+        # UW's images carry their own legend, and have no numbers to read back
+        return RenderedFrame()
