@@ -9,7 +9,7 @@ import asyncio
 import io
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime
 from typing import TypeVar
 
@@ -412,13 +412,16 @@ class AnnotationService:
 
     # --- promoting forecast frames
 
+    def _annotated_layers(self) -> Iterator[tuple[ModelConfig, LayerConfig]]:
+        """Configured layers placed with annotations (UW WRF); others are georeferenced already."""
+        for model in self.config.models:
+            for layer in model.layers:
+                if isinstance(layer, LayerConfig):
+                    yield model, layer
+
     def sources(self) -> list[PromotableLayer]:
         """Configured layers that frames can be promoted from."""
-        return [
-            PromotableLayer(model.id, layer.id, layer.maptype, layer.hours.hours)
-            for model in self.config.models
-            for layer in model.layers
-        ]
+        return [PromotableLayer(model.id, layer.id, layer.maptype, layer.hours.hours) for model, layer in self._annotated_layers()]
 
     def example_frames(self, document: AnnotationDocument, preferred_hour: int = 6) -> list[ExampleFrame]:
         """Frames to promote for the configured maptypes that have nothing to annotate yet.
@@ -434,14 +437,13 @@ class AnnotationService:
             One frame per maptype, from the first configured layer that uses it, sorted by maptype.
         """
         frames: dict[str, ExampleFrame] = {}
-        for model in self.config.models:
-            for layer in model.layers:
-                annotations = document.maptypes.get(layer.maptype)
-                if layer.maptype in frames or (annotations is not None and annotations.images):
-                    continue
-                hours = layer.hours.hours
-                hour = preferred_hour if preferred_hour in hours else hours[0]
-                frames[layer.maptype] = ExampleFrame(layer.maptype, model.id, layer.id, hour)
+        for model, layer in self._annotated_layers():
+            annotations = document.maptypes.get(layer.maptype)
+            if layer.maptype in frames or (annotations is not None and annotations.images):
+                continue
+            hours = layer.hours.hours
+            hour = preferred_hour if preferred_hour in hours else hours[0]
+            frames[layer.maptype] = ExampleFrame(layer.maptype, model.id, layer.id, hour)
         return [frames[maptype] for maptype in sorted(frames)]
 
     def _find_layer(self, model_id: str, layer_id: str) -> tuple[ModelConfig, LayerConfig]:
@@ -449,6 +451,8 @@ class AnnotationService:
         layer = None if model is None else model.layer(layer_id)
         if model is None or layer is None:
             raise NotFound(f"no configured layer {model_id}/{layer_id}")
+        if not isinstance(layer, LayerConfig):
+            raise Invalid(f"{model_id}/{layer_id} is georeferenced already; only UW WRF frames are annotated")
         return model, layer
 
     async def promote(self, model: str, variable: str, hour: int, expected_revision: int | None = None) -> PromoteResult:

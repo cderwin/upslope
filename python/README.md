@@ -13,6 +13,7 @@ uv run upslope serve               # API server + export every 15 min (--export-
 uv run upslope georegistration upload DIR    # load a snapshot into storage (draft + published)
 uv run upslope georegistration snapshot DIR  # save the published annotations to a directory
 uv run upslope georegistration promote-examples  # draft an image for each configured maptype with none (--hour, --dry-run)
+uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.png  # preview a dynamical.org frame
 ```
 
 `reproject` and `registration-error` read the annotations published in storage;
@@ -44,6 +45,49 @@ datetime, so give it a strftime format), and `{hour}`, the forecast hour. The
 file is validated when it loads (ids, templates, hour ranges, start times), so a
 mistake fails at startup. After editing it, run `upslope check-layers` to request
 every layer's every hour from the newest complete run.
+
+### dynamical.org models
+
+Models with `source: {kind: dynamical, dataset: <id>}` are rendered from a
+gridded dataset in [dynamical.org's catalog](https://dynamical.org/catalog/)
+instead of downloaded as images (`upslope/models/dynamical/`):
+
+```yaml
+  - id: gfs_0.25
+    name: GFS 0.25°
+    source: {kind: dynamical, dataset: noaa-gfs-forecast-virtual}
+    region: [-127, 41.5, -113, 50]   # west, south, east, north: the area rendered
+    attribution: NOAA NWS NCEP GFS data processed by dynamical.org ... (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    layers:
+      - id: 3-hour-precip
+        name: 3-hour precipitation
+        field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
+        scale: precip_in            # colors and display units (models/dynamical/scales.py)
+        hours: {first: 3, last: 240}
+```
+
+`field` is a dataset variable, or a derivation: `wind_speed` from u and v
+components, `change` (a run total's growth over `hours`, e.g. precipitation),
+`rate_sum` (a rate averaged since the previous step, summed over `hours`) and
+`freezing_level` (missing, zero or negative heights, at or below sea level, as
+0). Values are converted from the variable's `units` to the scale's.
+
+Each check looks the dataset's Icechunk repository up in the STAC catalog
+(`https://stac.dynamical.org/<id>/collection.json`; store URLs are versioned, so
+they're never hard-coded) and opens it once, as one snapshot. Virtual datasets
+point at the upstream GRIB files in NOAA's and ECMWF's open-data buckets, which
+are read anonymously and decoded with `gribberish`. A frame is the region's
+window of the native grid (lat/lon or projected) at one forecast hour, plus a
+two-cell margin, warped to Web Mercator (bilinear, upsampled to about 600 px
+across for coarse grids) and colored with the scale; its values are exported as
+the frame's value image. An hour counts as published once `temperature_2m` has
+data over the region (unwritten chunks read as NaN), so frames of a run appear as
+the model publishes them.
+
+`upslope check-layers -m <model>` checks each layer's variables, hours and units
+against the live dataset and lists hours not published yet;
+`upslope render-frame` writes one frame as a PNG, without uploading it.
 
 ## Georegistration
 
@@ -126,10 +170,12 @@ start. Production never reads it.
 ## Web export
 
 `export-web` runs the whole pipeline (`ForecastDriver`) for each configured
-model: the model's source (`upslope/models/source.py`; for UW WRF,
-`models/uw_wrf/source.py`) renders each frame as a Web Mercator GeoTIFF (for
-UW, by downloading the image and georegistering it), and the driver converts it
-to a PNG (nodata becomes transparent) and uploads it to the S3/Tigris bucket. It
+model: the model's source (`upslope/models/source.py`; `models/uw_wrf/source.py`
+and `models/dynamical/source.py`) renders each frame as a Web Mercator GeoTIFF
+(for UW, by downloading the image and georegistering it), and the driver
+converts it to a PNG (nodata becomes transparent) and uploads it to the
+S3/Tigris bucket. A model exports at most 400 frames per check
+(`server/jobs.py`), so a backlog takes a few checks without holding up the others. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally, `AWS_REGION`. Put them in
 the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export` and

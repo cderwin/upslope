@@ -283,6 +283,15 @@ def test_promote_adds_image(promoting: AnnotationService, store: AnnotationStore
     assert again.image == result.image and again.draft.document.revision == result.draft.document.revision
 
 
+def test_only_uw_wrf_layers_are_promotable(promoting: AnnotationService, wrf_client: MagicMock) -> None:
+    """dynamical.org layers are georeferenced already, so they have no maptype and nothing to annotate."""
+    assert "gfs_0.25" not in {s.model for s in promoting.sources()}
+    assert all(frame.maptype for frame in promoting.example_frames(AnnotationDocument()))
+    with pytest.raises(Invalid, match="georeferenced"):
+        run(promoting.promote("gfs_0.25", "surface-temp", 0))
+    wrf_client.download_image.assert_not_called()
+
+
 def test_promote_validates(promoting: AnnotationService, wrf_client: MagicMock) -> None:
     source = next(s for s in promoting.sources() if s.maptype == WA)
     with pytest.raises(NotFound):

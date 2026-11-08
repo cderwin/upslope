@@ -11,7 +11,9 @@ dependencies = [
     "botocore>=1.43.116",
     "cattrs>=25.3.0",
     "click>=8.3.0",
+    "gribberish>=1.9.0",
     "httpx>=0.28.1",
+    "icechunk>=2.3.1",
     "litestar[standard]>=2.25.0",
     "numpy>=2.3.5",
     "pillow>=11.0.0",
@@ -19,6 +21,8 @@ dependencies = [
     "pyyaml>=6.0.3",
     "rasterio>=1.5.2",
     "tqdm>=4.70.1",
+    "xarray>=2026.9.0",
+    "zarr>=3.4.2",
 ]
 
 [project.scripts]
