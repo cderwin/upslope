@@ -228,3 +228,129 @@ models:
         field: composite_reflectivity
         scale: reflectivity_dbz
         hours: {last: 240}
+
+  - id: hrrr_3km
+    name: HRRR 3km
+    source: {kind: dynamical, dataset: noaa-hrrr-forecast-48-hour-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS NCEP HRRR data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    retention_days: 2
+    layers:
+      - id: surface-temp
+        name: Surface temperature
+        field: temperature_2m
+        scale: temperature_f
+        hours: {last: 48, step: 1}
+
+      - id: 10m-wind-speed
+        name: 10m wind speed
+        # grid-relative components; their speed is the same as earth-relative
+        field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
+        scale: wind_mph
+        hours: {last: 48, step: 1}
+
+      - id: 3-hour-precip
+        name: 3-hour precipitation
+        field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
+        scale: precip_in
+        hours: {first: 3, last: 48, step: 1}
+
+      - id: snow
+        name: 3-hour snowfall
+        field: {derive: change, variables: [total_snowfall_run_total_surface], hours: 3}
+        scale: snow_in
+        hours: {first: 3, last: 48, step: 1}
+
+      - id: accumulated-snowfall
+        name: Accumulated snowfall
+        field: total_snowfall_run_total_surface
+        scale: snow_in
+        hours: {last: 48, step: 1}
+
+      - id: snow-depth
+        name: Snow depth
+        field: snow_thickness_surface
+        scale: snow_in
+        hours: {last: 48, step: 1}
+
+      - id: freezing-level
+        name: Freezing level
+        field: {derive: freezing_level, variables: [geopotential_height_0c_isotherm]}
+        scale: height_ft
+        hours: {last: 48, step: 1}
+
+      - id: cloud-cover
+        name: Cloud cover
+        field: total_cloud_cover_atmosphere
+        scale: cloud_pct
+        hours: {last: 48, step: 1}
+
+      - id: reflectivity
+        name: Composite reflectivity
+        field: composite_reflectivity
+        scale: reflectivity_dbz
+        hours: {last: 48, step: 1}
+
+  - id: rrfs_3km
+    name: RRFS 3km
+    source: {kind: dynamical, dataset: noaa-rrfs-forecast-84-hour-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS NCEP RRFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    retention_days: 2
+    layers:
+      - id: surface-temp
+        name: Surface temperature
+        field: temperature_2m
+        scale: temperature_f
+        hours: {last: 84, step: 3}
+
+      - id: 10m-wind-speed
+        name: 10m wind speed
+        # grid-relative components; their speed is the same as earth-relative
+        field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
+        scale: wind_mph
+        hours: {last: 84, step: 3}
+
+      - id: 3-hour-precip
+        name: 3-hour precipitation
+        field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
+        scale: precip_in
+        hours: {first: 3, last: 84, step: 3}
+
+      - id: snow
+        name: 3-hour snowfall
+        field: {derive: change, variables: [total_snowfall_run_total_surface], hours: 3}
+        scale: snow_in
+        hours: {first: 3, last: 84, step: 3}
+
+      - id: accumulated-snowfall
+        name: Accumulated snowfall
+        field: total_snowfall_run_total_surface
+        scale: snow_in
+        hours: {last: 84, step: 3}
+
+      - id: snow-depth
+        name: Snow depth
+        field: snow_thickness_surface
+        scale: snow_in
+        hours: {last: 84, step: 3}
+
+      - id: freezing-level
+        name: Freezing level
+        field: {derive: freezing_level, variables: [geopotential_height_0c_isotherm]}
+        scale: height_ft
+        hours: {last: 84, step: 3}
+
+      - id: cloud-cover
+        name: Cloud cover
+        field: total_cloud_cover_atmosphere
+        scale: cloud_pct
+        hours: {last: 84, step: 3}
+
+      - id: reflectivity
+        name: Composite reflectivity
+        field: composite_reflectivity
+        scale: reflectivity_dbz
+        hours: {last: 84, step: 3}
