@@ -354,3 +354,42 @@ models:
         field: composite_reflectivity
         scale: reflectivity_dbz
         hours: {last: 84, step: 3}
+
+  - id: aifs_0.25
+    name: ECMWF AIFS 0.25°
+    source: {kind: dynamical, dataset: ecmwf-aifs-single-forecast-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: ECMWF AIFS Single forecast data processed by dynamical.org from ECMWF Open Data (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    retention_days: 3
+    # AIFS steps are 6-hourly, so accumulations are over 6 hours
+    layers:
+      - id: surface-temp
+        name: Surface temperature
+        field: temperature_2m
+        scale: temperature_f
+        hours: {last: 360, step: 6}
+
+      - id: 10m-wind-speed
+        name: 10m wind speed
+        field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
+        scale: wind_mph
+        hours: {last: 360, step: 6}
+
+      - id: 6-hour-precip
+        name: 6-hour precipitation
+        field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 6}
+        scale: precip_in
+        hours: {first: 6, last: 360, step: 6}
+
+      - id: 6-hour-snowfall-water
+        name: 6-hour snowfall (water equivalent)
+        field: {derive: change, variables: [snowfall_water_equivalent_run_total_surface], hours: 6}
+        scale: precip_in
+        hours: {first: 6, last: 360, step: 6}
+
+      - id: cloud-cover
+        name: Cloud cover
+        field: total_cloud_cover_atmosphere
+        scale: cloud_pct
+        hours: {last: 360, step: 6}
