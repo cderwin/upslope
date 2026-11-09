@@ -30,13 +30,19 @@ py-sync:
 py-test *args:
     uv run pytest {{ args }}
 
-# Run the export against the S3 settings in .env.local
+# Run one export check against the S3 settings in .env.local
 [group('python')]
 [working-directory('python')]
 py-export *args:
     uv run upslope export-web {{ args }}
 
-# Run the server against the S3 settings in .env.local
+# Run the exporter (a check every 15 minutes) against the S3 settings in .env.local
+[group('python')]
+[working-directory('python')]
+py-export-loop *args:
+    uv run upslope export-loop {{ args }}
+
+# Run the server against the S3 settings in .env.local (it doesn't export; see py-export-loop)
 [group('python')]
 [working-directory('python')]
 py-serve *args:
@@ -70,7 +76,7 @@ web-build:
 docker-build:
     docker build -t {{ image }} --build-arg VITE_MAPBOX_TOKEN .
 
-# Build and start the local stack (MinIO + server); the server exports at startup
+# Build and start the local stack (MinIO, server, exporter); the exporter checks at startup
 [group('docker')]
 up:
     docker compose up -d --build
@@ -91,7 +97,7 @@ reset:
 
 # --- deploy
 
-# Deploy to Fly.io by hand (merging to main deploys via GitHub Actions; one machine, so the hourly export runs once)
+# Deploy to Fly.io by hand (merging to main deploys via GitHub Actions; --ha=false keeps one exporter running)
 [group('deploy')]
 deploy:
     fly deploy --ha=false --build-arg VITE_MAPBOX_TOKEN="${VITE_MAPBOX_TOKEN:-}"

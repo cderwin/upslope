@@ -1,6 +1,9 @@
 """dynamical.org source: config, grids, derived fields, publishing and rendering, against small in-memory datasets."""
 
+import asyncio
 import io
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -23,6 +26,7 @@ from upslope.models.config import (
     ModelsConfig,
 )
 from upslope.models.driver import ForecastDriver
+from upslope.models.manifest import RunManifest
 from upslope.models.dynamical.catalog import anonymous_credentials, store_url
 from upslope.models.dynamical.scales import NODATA_INDEX, SCALES, convert
 from upslope.models.dynamical.source import DynamicalSource, grid_window
@@ -214,11 +218,27 @@ def test_grid_window_outside_the_grid_raises() -> None:
         grid_window(lat_lon_dataset(), (10.0, 10.0, 20.0, 20.0))
 
 
+@contextmanager
+def checking(source: DynamicalSource) -> Iterator[None]:
+    """A check, for calling the source's blocking methods directly."""
+    source.begin_check()
+    try:
+        yield
+    finally:
+        source.end_check()
+
+
+def export(driver: ForecastDriver) -> list[RunManifest]:
+    report = asyncio.run(driver.run())
+    assert not report.failed, report
+    return report.manifests
+
+
 # --- fields
 
 
 def values(source: DynamicalSource, model: ModelConfig, layer: DynamicalLayerConfig, hour: int, run: datetime = RUN) -> np.ndarray:
-    with source.check():
+    with checking(source):
         return source.field_values(model, layer, run, hour)
 
 
@@ -276,14 +296,19 @@ def test_latest_complete_run_needs_the_last_hour() -> None:
     model = make_model(TEMPERATURE)
     now = RUN + timedelta(hours=4)
     source = make_source(lat_lon_dataset({PREVIOUS: 6, RUN: 3}))
-    with source.check():
-        assert source.latest_complete_run(model, now) == PREVIOUS
+    with checking(source):
+        assert source.find_latest_complete_run(model, now) == PREVIOUS
     source = make_source(lat_lon_dataset())
-    with source.check():
-        assert source.latest_complete_run(model, now) == RUN
+
+    async def latest() -> datetime | None:
+        async with source.check():
+            return await source.latest_complete_run(model, now)
+
+    assert asyncio.run(latest()) == RUN
+    with checking(source):
         assert source.layer_problems(model, TEMPERATURE, RUN) == []
     source = make_source(lat_lon_dataset({PREVIOUS: 6, RUN: 3}))
-    with source.check():
+    with checking(source):
         assert source.layer_problems(model, TEMPERATURE, RUN) == ["hours [6] aren't published yet"]
         assert source.layer_problems(model, layer("x", FieldConfig(("nope",)), "snow_in"), RUN) == ["test-dataset has no variable 'nope'"]
 
@@ -295,8 +320,12 @@ def test_render_frame_writes_a_paletted_web_mercator_frame_and_its_values(tmp_pa
     source = make_source(lat_lon_dataset())
     model = make_model()
     out = tmp_path / "frame.tiff"
-    with source.check():
-        frame = source.render_frame(model, TEMPERATURE, RUN, 3, out)
+
+    async def render():
+        async with source.check():
+            return await source.render_frame(model, TEMPERATURE, RUN, 3, out)
+
+    frame = asyncio.run(render())
     with rasterio.open(out) as dataset:
         assert dataset.crs == OUTPUT_CRS and dataset.count == 1 and dataset.nodata == NODATA_INDEX
         assert dataset.width >= 600  # upsampled from the coarse grid
@@ -311,8 +340,8 @@ def test_render_frame_on_a_projected_grid(tmp_path: Path) -> None:
     model = make_model(layer("surface-temp", FieldConfig(("temperature_2m",)), "temperature_f", last=0))
     source = make_source(lambert_dataset())
     out = tmp_path / "frame.tiff"
-    with source.check():
-        frame = source.render_frame(model, model.layers[0], RUN, 0, out)
+    with checking(source):
+        frame = source.render(model, model.layers[0], RUN, 0, out)
     # the grid is rotated against Web Mercator, so the image's corners are empty, but the region is covered
     with rasterio.open(out) as dataset:
         to_mercator = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
@@ -328,7 +357,7 @@ def test_driver_exports_a_dynamical_model(memory_storage) -> None:
     store = ForecastStore(memory_storage)
     source = make_source(lat_lon_dataset({PREVIOUS: 6, RUN: 3}))
     driver = ForecastDriver(ModelsConfig([model]), {"dynamical": source}, store, now=lambda: RUN + timedelta(hours=4))
-    complete, partial = driver.run()
+    complete, partial = export(driver)
     assert (complete.initialized, complete.complete, partial.initialized, partial.complete) == (PREVIOUS, True, RUN, False)
     assert complete.registration_revision is None and complete.attribution == "Test data (CC BY 4.0)"
     assert [(l.id, [f.hour for f in l.frames]) for l in partial.layers] == [("surface-temp", [0, 3]), ("3-hour-precip", [3])]

@@ -7,9 +7,10 @@ Command-line tooling for downloading and georegistering forecast map images
 uv run upslope check-layers        # check every configured layer's images exist upstream (--model, --run)
 uv run upslope download            # forecast/raw/<model>/<layer>/hourNN.gif (--model, --run)
 uv run upslope reproject           # forecast/georegistered/<model>/<layer>/hourNN.tiff
-uv run upslope export-web          # full pipeline; uploads PNGs + manifest.json to storage
+uv run upslope export-web          # one export check of every model; uploads PNGs + manifest.json to storage
+uv run upslope export-loop         # the exporter: a check every 15 min, forever (--interval, --run-immediately)
 uv run upslope registration-error  # per-maptype fit error, in meters (--draft, --snapshot DIR)
-uv run upslope serve               # API server + export every 15 min (--export-interval)
+uv run upslope serve               # API server and webapp (doesn't export)
 uv run upslope georegistration upload DIR    # load a snapshot into storage (draft + published)
 uv run upslope georegistration snapshot DIR  # save the published annotations to a directory
 uv run upslope georegistration promote-examples  # draft an image for each configured maptype with none (--hour, --dry-run)
@@ -175,15 +176,85 @@ and `models/dynamical/source.py`) renders each frame as a Web Mercator GeoTIFF
 (for UW, by downloading the image and georegistering it), and the driver
 converts it to a PNG (nodata becomes transparent) and uploads it to the
 S3/Tigris bucket. A model exports at most 400 frames per check
-(`server/jobs.py`), so a backlog takes a few checks without holding up the others. It
+(`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally, `AWS_REGION`. Put them in
-the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export` and
-`just py-serve` load it.
+the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export`,
+`just py-export-loop` and `just py-serve` load it.
 
-The server runs the export every 15 minutes, on the clock (`serve
---export-interval`), and at startup with `--export-on-startup`. Each check
-follows every run of each model from its latest complete run onward, oldest
+### The exporter
+
+`export-loop` (`upslope/export_loop.py`) runs a check every 15 minutes, on the
+clock (`--interval`), and also at startup with `--run-immediately`. It's its
+own process, apart from the server: in production the `exporter` Fly process
+group, on its own machine, so exporting never slows down requests (`fly.toml`).
+Exactly one exporter may run, since two would race on manifests and retention;
+deploys pass `--ha=false`. The two processes share only the bucket.
+
+The pipeline is async. Every model is checked concurrently, each in its own
+task, while a model's runs, layers and hours go in order. Blocking work
+(reading datasets, georegistering, PNG encoding, storage) runs in worker
+threads, with at most 3 dynamical.org frames rendered at once. Nothing stops
+the loop:
+
+- a model that fails is reported failed and the others carry on;
+- a model that takes over 40 minutes is stopped, and a check over 45
+  (`--check-timeout`). What they exported is kept, and the next check resumes;
+- any other error is logged and recorded in the status.
+
+Every request has a timeout:
+
+- UW: 30 s, 10 s to connect;
+- dynamical.org: 60 s per read and 180 s per operation, with Icechunk's own
+  retries;
+- storage (boto3): 60 s, with standard retries.
+
+Requests to UW, a single modest server, go through a shared throttle: at most
+2 at once, started at least 0.2 s apart. Throttle and retries are in
+`models/uw_wrf/image_client.py`.
+
+- 429, 5xx responses and connection errors are retried up to 4 tries, with
+  exponential backoff (2 s, 4 s, 8 s, with jitter, capped at 30 s) and honoring
+  `Retry-After`.
+- A 429 or 503 also holds back every other UW request for the backoff.
+- A 404 is never retried: it means the hour isn't published yet.
+
+Log lines of a check are tagged `[check N]`, and a model's lines also `[<model
+id>]`, so one check or model can be followed through the interleaved logs. A
+check ends with a summary line: frames exported, failed and skipped models,
+and frames to retry.
+
+As each check starts and finishes, the exporter writes
+`forecasts/export-status.json` (`ExportStatus` in `models/manifest.py`). The
+server reports it at `/fx/status`:
+
+```json
+{
+  "state": "failed",
+  "check": 12,
+  "started_at": "2026-11-08T14:00:00+00:00",
+  "overdue_after": "2026-11-08T14:25:00+00:00",
+  "finished_at": "2026-11-08T14:03:41+00:00",
+  "next_check_at": "2026-11-08T14:15:00+00:00",
+  "last_success_at": "2026-11-08T13:48:12+00:00",
+  "consecutive_failures": 1,
+  "error": null,
+  "models": [
+    { "id": "gfs_0.25", "state": "ok", "frames": 9, "error": null, "layer_errors": [], "seconds": 41.2 },
+    { "id": "uwwrf_4km", "state": "failed", "frames": 0, "error": "HTTP 503", "layer_errors": [], "seconds": 102.5 }
+  ]
+}
+```
+
+- `state` is `running`, `ok`, or `failed` (the check as a whole, or some
+  model).
+- A model's `state` is `ok`, `skipped` (e.g. no annotations are published) or
+  `failed`. Its `layer_errors` are frames that failed and are retried at the
+  next check; they don't fail the model.
+- `overdue_after` is when to suspect the exporter is stuck or down: the
+  running check's time limit, or 10 minutes after the next check is due.
+
+Each check follows every run of each model from its latest complete run onward, oldest
 first, downloading from the run's own directory (for UW,
 `wrfrt/data/<YYYYMMDDHH>/`; UW's `timeindep/` copy is overwritten in place
 mid-run and mixes two runs). Each layer resumes after its newest exported hour
@@ -203,6 +274,7 @@ Runs live under `forecasts/`, laid out like open-meteo's
 
 | Key | Contents |
 | --- | --- |
+| `forecasts/export-status.json` | The exporter's health: its last check's outcome, per model (above) |
 | `forecasts/<model>/latest.json` | The newest complete run: `{model, initialized, path, updated_at}` |
 | `forecasts/<model>/in-progress.json` | The newest run that has started, and each layer's progress (below) |
 | `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json` | The run's layers and frames (below) |
@@ -236,8 +308,8 @@ config and annotations would produce. Each manifest layer records its
 not its name) and the manifest records the annotation revision. A publish
 re-exports every layer; a config change re-exports only the layers it changed;
 a renamed layer only rewrites the manifest. This applies to the latest run and
-any newer ones being followed. Production also exports at startup
-(`serve --export-on-startup`), so a deploy that changes `config/models.yaml`
+any newer ones being followed. Production also checks at startup
+(`export-loop --run-immediately`), so a deploy that changes `config/models.yaml`
 takes effect right away.
 
 After each check, runs initialized more than the model's `retention_days`
@@ -297,7 +369,7 @@ requires), shown on the map.
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`); refreshed after every check and at most a minute old |
+| `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`); at most a minute old |
 | `GET /fx/data/{path}` | `forecasts/{path}` from storage: pointers and manifests (`no-cache`) and frames (`max-age=300`), with ETags |
 
 `in_progress` adds `checked_at`, `complete` and, per configured layer, `name`,
@@ -306,3 +378,7 @@ derives: `complete`; `waiting` for the next hour; `stalled` when an incomplete
 layer has gained no frame for 2 hours (`STALL_AFTER`; a layer with no frames is
 measured from the run's first frame); or `error` when the last attempt failed
 (it's retried at the next check).
+
+`export` is `export-status.json` (see [The exporter](#the-exporter)), or null if
+the exporter has never run. `export_overdue` is true once `export.overdue_after`
+has passed without a newer status: the exporter is stuck or down.

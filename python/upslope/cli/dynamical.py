@@ -18,7 +18,7 @@ def resolve_run(source: "DynamicalSource", model: "ModelConfig", run: datetime |
     if run is not None:
         return run.replace(tzinfo=UTC)
     now = datetime.now(UTC)
-    initialized = source.latest_complete_run(model, now)
+    initialized = source.find_latest_complete_run(model, now)
     if initialized is not None:
         return initialized
     click.echo(f"{model.id} has no complete run; checking the newest run")
@@ -31,7 +31,8 @@ def check_model(model: "ModelConfig", run: datetime | None) -> int:
 
     source = DynamicalSource()
     problems = 0
-    with source.check():
+    source.begin_check()
+    try:
         initialized = resolve_run(source, model, run)
         click.echo(f"{model.id} ({model.source.dataset}) run {initialized:%Y-%m-%d %HZ}:")
         for layer in model.layers:
@@ -41,6 +42,8 @@ def check_model(model: "ModelConfig", run: datetime | None) -> int:
                 continue
             problems += 1
             click.echo(f"  PROBLEM  {layer.id}: {'; '.join(found)}")
+    finally:
+        source.end_check()
     return problems
 
 
@@ -74,13 +77,15 @@ def render_frame(config_path: Path, model_id: str, layer_id: str, hour: int, run
 
     source = DynamicalSource()
     tiff = output.with_suffix(".tiff")
+    source.begin_check()
     try:
-        with source.check():
+        try:
             initialized = resolve_run(source, model, run)
-            try:
-                frame = source.render_frame(model, layer, initialized, hour, tiff)
-            except NotPublished as e:
-                raise click.ClickException(f"not published yet: {e}") from e
+            frame = source.render(model, layer, initialized, hour, tiff)
+        except NotPublished as e:
+            raise click.ClickException(f"not published yet: {e}") from e
+        finally:
+            source.end_check()
         with rasterio.open(tiff) as dataset:
             convert_to_png(dataset, output)
             corners = image_coordinates(dataset)

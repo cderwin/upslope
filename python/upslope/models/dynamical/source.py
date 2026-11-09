@@ -6,11 +6,16 @@ to Web Mercator and colored with the layer's scale. The numbers come back too, f
 
 Virtual datasets fill in a run as the model publishes it. An hour counts as published once the reference
 variable (`temperature_2m`) has data over the region; missing chunks read back as NaN.
+
+Reading and rendering are blocking (Icechunk, xarray, GDAL), so the async methods run them in threads, a few
+at a time; models are exported concurrently, so the per-check caches are shared under a lock.
 """
 
+import asyncio
+import threading
 from collections import OrderedDict
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
@@ -23,7 +28,7 @@ from attrs import define, field
 from pyproj import Transformer
 from rasterio.warp import Resampling
 
-from upslope.logging import get_logger
+from upslope.logging import get_logger, log_duration
 from upslope.models.config import AnyLayerConfig, DynamicalLayerConfig, DynamicalSourceConfig, ModelConfig
 from upslope.models.dynamical.catalog import open_dataset
 from upslope.models.dynamical.scales import NODATA_INDEX, SCALES, convert
@@ -40,6 +45,10 @@ REGION_MARGIN_CELLS = 2
 MIN_FRAME_WIDTH = 600
 # Region reads kept per check, so a field read for one layer or interval is reused by the next
 FIELD_CACHE_SIZE = 64
+# Frames rendered at once across models: bounds memory and CPU, while letting reads overlap
+RENDER_CONCURRENCY = 3
+# The catalog lookup is one small JSON document
+CATALOG_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
 
 @define(frozen=True)
@@ -128,22 +137,38 @@ class DynamicalSource:
 
     Attributes:
         open: Opens a catalog dataset by id; defaults to the live catalog (tests pass in-memory datasets).
+        concurrency: Most frames rendered at once.
     """
 
-    open: Callable[[str], xr.Dataset] = field(factory=lambda: partial(open_dataset, client=httpx.Client(timeout=30.0)))
+    open: Callable[[str], xr.Dataset] = field(factory=lambda: partial(open_dataset, client=httpx.Client(timeout=CATALOG_TIMEOUT)))
+    concurrency: int = RENDER_CONCURRENCY
     _checking: bool = field(default=False, init=False)
+    # guards the caches below; held while a dataset is opened, not while data is read
+    _lock: threading.RLock = field(factory=threading.RLock, init=False)
+    _renders: asyncio.Semaphore = field(init=False)
     _datasets: dict[str, xr.Dataset] = field(factory=dict, init=False)
     _windows: dict[str, GridWindow] = field(factory=dict, init=False)
     _fields: OrderedDict[tuple, tuple[np.ndarray, str]] = field(factory=OrderedDict, init=False)
     _published: dict[tuple, bool] = field(factory=dict, init=False)
 
-    @contextmanager
-    def check(self) -> Iterator[None]:
-        self._checking = True
+    def __attrs_post_init__(self) -> None:
+        self._renders = asyncio.Semaphore(self.concurrency)
+
+    @asynccontextmanager
+    async def check(self) -> AsyncIterator[None]:
+        self.begin_check()
         try:
             yield
         finally:
-            # the next check sees the datasets' newest snapshots
+            self.end_check()
+
+    def begin_check(self) -> None:
+        """Start a check (what `check` does, for blocking callers such as the CLI)."""
+        self._checking = True
+
+    def end_check(self) -> None:
+        """End a check; the next one sees the datasets' newest snapshots."""
+        with self._lock:
             self._checking = False
             self._datasets.clear()
             self._windows.clear()
@@ -154,14 +179,23 @@ class DynamicalSource:
         # frames depend only on the config (fingerprinted) and the data
         return None
 
-    def latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
+    async def latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
+        return await asyncio.to_thread(self.find_latest_complete_run, model, now)
+
+    def find_latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
+        """The newest run with the last hour of every layer published (blocking)."""
         last = max(layer.hours.last for layer in model.layers)
         for initialized in model.initializations(now):
             if self.is_published(model, initialized, last):
                 return initialized
         return None
 
-    def render_frame(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
+    async def render_frame(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
+        async with self._renders:
+            return await asyncio.to_thread(self.render, model, layer, initialized, hour, out)
+
+    def render(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
+        """Render a frame (blocking); see `ForecastSource.render_frame`."""
         layer = self._dynamical(layer)
         scale = SCALES[layer.scale]
         values = self.field_values(model, layer, initialized, hour)
@@ -219,12 +253,17 @@ class DynamicalSource:
     def is_published(self, model: ModelConfig, initialized: datetime, hour: float) -> bool:
         """Whether a forecast hour of a run has data over the model's region yet."""
         key = (model.source.dataset, initialized, hour)
-        if key not in self._published:
-            if self._init_index(model, initialized) is None:
-                return False  # not cached: the run may start before the next check
-            values, _ = self._read(model, REFERENCE_VARIABLE, initialized, hour)
-            self._published[key] = bool(np.isfinite(values).any())
-        return self._published[key]
+        with self._lock:
+            known = self._published.get(key)
+        if known is not None:
+            return known
+        if self._init_index(model, initialized) is None:
+            return False  # not cached: the run may start before the next check
+        values, _ = self._read(model, REFERENCE_VARIABLE, initialized, hour)
+        published = bool(np.isfinite(values).any())
+        with self._lock:
+            self._published[key] = published
+        return published
 
     def _require(self, model: ModelConfig, initialized: datetime, hours: list[float]) -> None:
         for hour in hours:
@@ -245,14 +284,17 @@ class DynamicalSource:
         if not isinstance(model.source, DynamicalSourceConfig):
             raise TypeError(f"model {model.id} isn't a dynamical.org model")
         dataset_id = model.source.dataset
-        if dataset_id not in self._datasets:
-            self._datasets[dataset_id] = self.open(dataset_id)
-        return self._datasets[dataset_id]
+        with self._lock:
+            if dataset_id not in self._datasets:
+                with log_duration(logger, f"opened {dataset_id}"):
+                    self._datasets[dataset_id] = self.open(dataset_id)
+            return self._datasets[dataset_id]
 
     def _window(self, model: ModelConfig) -> GridWindow:
-        if model.id not in self._windows:
-            self._windows[model.id] = grid_window(self._dataset(model), model.region)
-        return self._windows[model.id]
+        with self._lock:
+            if model.id not in self._windows:
+                self._windows[model.id] = grid_window(self._dataset(model), model.region)
+            return self._windows[model.id]
 
     def _init_index(self, model: ModelConfig, initialized: datetime) -> int | None:
         target = np.datetime64(initialized.astimezone(UTC).replace(tzinfo=None), "ns")
@@ -269,9 +311,10 @@ class DynamicalSource:
     def _read(self, model: ModelConfig, variable: str, initialized: datetime, hour: float) -> tuple[np.ndarray, str]:
         """A variable over the model's region at one forecast hour, north up, as float32 with its units."""
         key = (model.id, variable, initialized, hour)
-        if key in self._fields:
-            self._fields.move_to_end(key)
-            return self._fields[key]
+        with self._lock:
+            if key in self._fields:
+                self._fields.move_to_end(key)
+                return self._fields[key]
         dataset = self._dataset(model)
         if variable not in dataset:
             raise ValueError(f"{model.source.dataset} has no variable {variable!r}")
@@ -288,9 +331,10 @@ class DynamicalSource:
         if window.flip:
             values = values[::-1]
         result = (values, str(dataset[variable].attrs.get("units", "")))
-        self._fields[key] = result
-        if len(self._fields) > FIELD_CACHE_SIZE:
-            self._fields.popitem(last=False)
+        with self._lock:
+            self._fields[key] = result
+            if len(self._fields) > FIELD_CACHE_SIZE:
+                self._fields.popitem(last=False)
         return result
 
     # --- checking the config against the data

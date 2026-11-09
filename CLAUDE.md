@@ -26,7 +26,7 @@ cd python && uv run upslope --help
 cd python && uv add <pkg>     # add a dependency (updates pyproject.toml and uv.lock)
 ```
 
-`just py-export` / `just py-serve` / `just deploy` talk to real storage or
+`just py-export` / `just py-export-loop` / `just py-serve` / `just deploy` talk to real storage or
 production. Don't run them unless asked. `just up` runs everything locally
 against MinIO and is safe. Merging a PR to `main` deploys to production
 (`.github/workflows/deploy.yml`), so don't merge without being asked.
@@ -36,17 +36,18 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | Path | Role |
 | --- | --- |
 | `cli/` | Click commands; `cli/main.py` registers them. `cli/__init__.py` holds repo paths (`PROJECT_BASE`, `DEFAULT_MODELS_CONFIG`, `DEV_GEOREGISTRATION`) |
-| `server/app.py` | `create_app()`: Litestar app, lifespan, export job wiring |
+| `server/app.py` | `create_app()`: Litestar app and lifespan (the server doesn't export) |
 | `server/admin.py` | Admin API controller; maps `AnnotationError` subclasses to HTTP status codes |
-| `server/forecast.py`, `server/frontend.py`, `server/jobs.py` | Forecast API (`/fx/status`, `/fx/data`), webapp serving, periodic export loop |
+| `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status`, `/fx/data`, including the exporter's health), webapp serving |
+| `export_loop.py` | The exporter process (`upslope export-loop`): checks on the clock, time limits, `export-status.json` |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris; conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
 | `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` (manifests, frames, `latest.json`, retention) |
 | `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
-| `models/driver.py`, `models/source.py` | The export pipeline (`ForecastDriver`), the same for every model; the `ForecastSource` interface each kind of model implements |
-| `models/uw_wrf/` | UW WRF source (`source.py`), image download and run detection (`image_client.py`), fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |
+| `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
+| `models/uw_wrf/` | UW WRF source (`source.py`), throttled and retrying async image download and run detection (`image_client.py`), fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |
 | `models/dynamical/` | dynamical.org source: STAC/Icechunk dataset access (`catalog.py`), rendering gridded fields (`source.py`), color scales and unit conversion (`scales.py`) |
 | `raster.py` | Warping to Web Mercator, frame corners, PNG and value-image encoding; shared by every source |
 | `models/manifest.py` | Run manifest and `latest.json` schemas |
@@ -78,9 +79,16 @@ Match the surrounding code. Specifically:
 - **Async server, blocking libraries.** boto3, rasterio, httpx-sync and PIL work
   is blocking: call it through `asyncio.to_thread` from async code, as
   `annotation_service.py` and `server/jobs.py` do.
-- **Single machine.** Annotation edits are serialized by an in-process
-  `asyncio.Lock`, and the periodic export runs inside the server. Fly runs exactly
-  one machine (`--ha=false`). Don't add designs that assume multiple workers.
+- **One server, one exporter.** Annotation edits are serialized by an in-process
+  `asyncio.Lock` in the server. The export runs in a separate process
+  (`upslope export-loop`, the `exporter` Fly process group) that shares only the
+  bucket with the server. Exactly one of each runs (`--ha=false`): two exporters
+  would race on manifests. Don't add designs that assume multiple workers.
+- **The export is async; its blocking work goes to threads.** Sources and the
+  driver are async and models run concurrently, so code reached from a source
+  may run in several threads at once (guard shared caches; avoid
+  `warnings.catch_warnings`, which isn't thread-safe). Every upstream request
+  needs a timeout.
 - **Conditional writes.** Draft saves use ETag `If-Match` / `If-None-Match` so a
   concurrent writer is never silently overwritten. Every draft change increments
   `revision`; the admin API exposes it as the `ETag` and honours `If-Match`.

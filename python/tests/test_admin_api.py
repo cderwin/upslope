@@ -26,7 +26,7 @@ def store(memory_storage) -> AnnotationStore:
 
 @pytest.fixture
 def client(store: AnnotationStore, memory_storage, tmp_path: Path):
-    app = create_app(storage=memory_storage, webapp_dist=tmp_path, run_jobs=False, admin_token="secret")
+    app = create_app(storage=memory_storage, webapp_dist=tmp_path, admin_token="secret")
     with TestClient(app) as client:
         yield client
 
@@ -46,7 +46,7 @@ def test_wrong_token_is_403(client: TestClient) -> None:
 
 
 def test_disabled_without_token(memory_storage, tmp_path: Path) -> None:
-    with TestClient(create_app(storage=memory_storage, webapp_dist=tmp_path, run_jobs=False, admin_token="")) as client:
+    with TestClient(create_app(storage=memory_storage, webapp_dist=tmp_path, admin_token="")) as client:
         assert client.get(f"{BASE}/draft", headers=AUTH).status_code == 503
 
 
@@ -170,7 +170,7 @@ def test_discard(client: TestClient) -> None:
 
 def test_admin_paths_not_served_as_frontend(store, memory_storage, tmp_path: Path) -> None:
     (tmp_path / "index.html").write_text("<html>app</html>")
-    with TestClient(create_app(storage=memory_storage, webapp_dist=tmp_path, run_jobs=False, admin_token="secret")) as client:
+    with TestClient(create_app(storage=memory_storage, webapp_dist=tmp_path, admin_token="secret")) as client:
         assert client.get("/admin/nope", headers=AUTH).status_code == 404
         assert client.get("/annotation").text == "<html>app</html>"
 

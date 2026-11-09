@@ -472,23 +472,24 @@ class AnnotationService:
         if hour not in layer.hours.hours:
             raise Invalid(f"hour {hour} is not one of the {model}/{variable} forecast hours")
 
-        def download() -> tuple[datetime, bytes, tuple[int, int]]:
-            try:
-                initialized = self.image_client.latest_complete_run(model_config)
-                if initialized is None:
-                    raise UpstreamError(f"{model} has no complete run to download the frame from")
-                data = self.image_client.download_image(layer, initialized, hour)
-            except httpx.HTTPError as e:
-                raise UpstreamError(f"could not download the frame: {e}") from e
+        try:
+            initialized = await self.image_client.latest_complete_run(model_config)
+            if initialized is None:
+                raise UpstreamError(f"{model} has no complete run to download the frame from")
+            data = await self.image_client.download_image(layer, initialized, hour)
+        except httpx.HTTPError as e:
+            raise UpstreamError(f"could not download the frame: {e}") from e
+
+        def image_size() -> tuple[int, int]:
             try:
                 with Image.open(io.BytesIO(data)) as image:
                     if image.format != "GIF":
                         raise UpstreamError(f"the server returned a {image.format} image, not a GIF")
-                    return initialized, data, image.size
+                    return image.size
             except UnidentifiedImageError as e:
                 raise UpstreamError("the server did not return an image") from e
 
-        initialized, data, (width, height) = await asyncio.to_thread(download)
+        width, height = await asyncio.to_thread(image_size)
         maptype = layer.maptype
         image_id = f"{model}-{variable}-h{hour:02d}-{initialized:%Y%m%dT%H}Z"
         await asyncio.to_thread(self.store.put_image, maptype, image_id, data)

@@ -2,7 +2,7 @@
 
 from datetime import UTC, datetime
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 
@@ -66,7 +66,7 @@ def wrf_client(store: AnnotationStore):
     document = read_snapshot(DEV_GEOREGISTRATION)
     image = next(iter(document.maptypes.pop(PNW_HR).images))
     store.save_draft(document, create=True)
-    client = MagicMock()
+    client = AsyncMock()
     client.latest_complete_run.return_value = datetime(2026, 11, 5, tzinfo=UTC)
     client.download_image.return_value = (DEV_GEOREGISTRATION / f"images/{PNW_HR}/{image}.gif").read_bytes()
     with patch("upslope.annotation_service.ImageClient", return_value=client):

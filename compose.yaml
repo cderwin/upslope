@@ -1,6 +1,6 @@
 # Local end-to-end stack: MinIO as the S3 backend, seeded with the repo's annotation snapshot
-# (dev/georegistration), plus the upslope server, which exports the current WRF run at startup
-# and then hourly.
+# (dev/georegistration), plus the upslope server and the exporter, which checks every model for new frames
+# at startup and then every 15 minutes (as in production, separate processes sharing the bucket).
 #   just up      # build and start, then open http://localhost:8000/map
 #   just reset   # stop and wipe MinIO's data (the next `up` seeds the snapshot again)
 #
@@ -66,7 +66,7 @@ services:
   server:
     build: *upslope-build
     image: upslope:local
-    command: ["upslope", "serve", "--export-on-startup"]
+    command: ["upslope", "serve"]
     environment:
       <<: *s3-env
       # token for /admin and the annotation page; set ADMIN_TOKEN in .env.local to override
@@ -76,6 +76,18 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
+
+  exporter:
+    build: *upslope-build
+    image: upslope:local
+    command: ["upslope", "export-loop", "--run-immediately"]
+    environment: *s3-env
+    # the image's healthcheck is the server's
+    healthcheck:
+      disable: true
+    depends_on:
+      georegistration-seed:
+        condition: service_completed_successfully
 
 volumes:
   minio-data:

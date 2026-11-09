@@ -238,7 +238,13 @@ class StorageClient:
             aws_secret_access_key=config.secret_access_key,
             endpoint_url=config.endpoint_url,
             region_name=config.region,
-            # tigris requires virtual-hosted-style addressing
-            config=Config(s3={"addressing_style": "virtual"}),
+            config=Config(
+                # tigris requires virtual-hosted-style addressing
+                s3={"addressing_style": "virtual"},
+                # explicit limits, so a stalled request fails (and is retried) instead of hanging an export
+                connect_timeout=10,
+                read_timeout=60,
+                retries={"mode": "standard", "max_attempts": 5},
+            ),
         )
         return cls(s3=s3, bucket=config.bucket)

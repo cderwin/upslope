@@ -3,7 +3,7 @@
 import asyncio
 import io
 from datetime import UTC, datetime
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from PIL import Image
@@ -231,7 +231,7 @@ def gif_bytes(size: tuple[int, int]) -> bytes:
 
 @pytest.fixture
 def wrf_client() -> MagicMock:
-    client = MagicMock()
+    client = AsyncMock()
     client.latest_complete_run.return_value = datetime(2026, 10, 21, 12, tzinfo=UTC)
     client.download_image.return_value = (DEV_GEOREGISTRATION / "images/washington/legacy-hour06.gif").read_bytes()
     return client
