@@ -3,9 +3,12 @@
 A source knows how to find a model's runs and turn one forecast hour of a layer into a georeferenced
 image. Everything else (following runs, manifests, pointers, retention) is the driver's job, the same
 for every source.
+
+Sources are async: the driver runs every model at once, so a source's methods may be called for several
+models concurrently. Blocking work (reading datasets, warping, writing files) goes to a thread.
 """
 
-from contextlib import AbstractContextManager
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
 from pathlib import Path
 from typing import Protocol
@@ -42,11 +45,11 @@ class RenderedFrame:
 class ForecastSource(Protocol):
     """Finds a model's runs and renders their frames."""
 
-    def check(self) -> AbstractContextManager[None]:
+    def check(self) -> AbstractAsyncContextManager[None]:
         """Scope one export check: state read once per check (annotations, dataset snapshots) lives inside it."""
         ...
 
-    def latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
+    async def latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
         """The newest run of `model` with every layer's every hour published, or None.
 
         Raises SourceUnavailable if the source can't export this check, or another exception if upstream
@@ -61,7 +64,7 @@ class ForecastSource(Protocol):
         """
         ...
 
-    def render_frame(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
+    async def render_frame(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
         """Write one forecast hour of a layer as a GeoTIFF in Web Mercator (`upslope.raster.OUTPUT_CRS`).
 
         A single band is written paletted, with a colormap and a nodata index for pixels outside the frame.

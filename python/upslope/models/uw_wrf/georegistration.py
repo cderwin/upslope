@@ -23,6 +23,10 @@ WRF_LAMBERT_CRS = (
     "+proj=lcc +lat_1=30 +lat_2=60 +lat_0=45.66480255 +lon_0=-121 +x_0=0 +y_0=0 +R=6370000 +units=m +no_defs"
 )
 
+# Raw GIFs have no georeferencing by design; we supply the transform ourselves. Filtered for the whole process:
+# `warnings.catch_warnings` isn't thread-safe, and frames are georegistered in several threads at once.
+warnings.filterwarnings("ignore", category=NotGeoreferencedWarning)
+
 _to_projected = Transformer.from_crs("EPSG:4326", WRF_LAMBERT_CRS, always_xy=True)
 _to_geographic = Transformer.from_crs(WRF_LAMBERT_CRS, "EPSG:4326", always_xy=True)
 _geod = Geod(ellps="WGS84")
@@ -176,16 +180,13 @@ class Registration:
 
         src_transform = self.domain_transforms[domain]
 
-        # Raw GIFs have no georeferencing by design; we supply the transform ourselves.
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", NotGeoreferencedWarning)
-            with rasterio.open(forecast_image) as src:
-                data = src.read()  # shape: (bands, rows, cols); GIFs are usually 1 paletted band
-                try:
-                    cmap = src.colormap(1)
-                except ValueError:
-                    cmap = None
-                nodata = src.nodata if src.nodata is not None else unused_palette_index(data)
+        with rasterio.open(forecast_image) as src:
+            data = src.read()  # shape: (bands, rows, cols); GIFs are usually 1 paletted band
+            try:
+                cmap = src.colormap(1)
+            except ValueError:
+                cmap = None
+            nodata = src.nodata if src.nodata is not None else unused_palette_index(data)
 
         # nearest: palette indices can't be blended
         warped, dst_transform = warp_to_web_mercator(data, WRF_LAMBERT_CRS, src_transform, nodata, Resampling.nearest)

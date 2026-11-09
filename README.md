@@ -14,10 +14,10 @@ The core of the project is the **Python backend** in `python/`. The Vue webapp i
 UW WRF plots (GIF)          annotations in S3 (control points)
         │                              │
         ▼                              ▼
-  upslope export-web ── fit + warp to Web Mercator ── PNG frames + manifest.json ──► S3 / Tigris
+  upslope export-loop ─ fit + warp to Web Mercator ── PNG frames + manifest.json ──► S3 / Tigris
                                                                                        │
   upslope serve (Litestar) ◄───────────────────────────────────────────────────────────┘
-    ├── /fx/status      each model's latest and retained runs
+    ├── /fx/status      each model's latest and retained runs, and the exporter's health
     ├── /fx/data/...    run manifests and frames (forecasts/ in the bucket)
     ├── /admin/...      annotation editing API (bearer token)
     ├── /health
@@ -28,8 +28,12 @@ UW WRF plots (GIF)          annotations in S3 (control points)
   fits a pixel → Lambert-conformal transform per map type from the published
   control points, reprojects every frame to EPSG:3857, and uploads PNGs plus a
   `manifest.json`.
-- **Server** (`upslope/server/`): one Litestar process that serves the API and
-  webapp and also runs the export every 15 minutes, following runs as they're published.
+- **Server** (`upslope/server/`): a Litestar process that serves the API and webapp.
+- **Exporter** (`upslope/export_loop.py`, `upslope export-loop`): a separate
+  process, on its own Fly machine, that checks every model for new frames every
+  15 minutes, following runs as they're published. It shares only the bucket
+  with the server, and records its health in `forecasts/export-status.json`,
+  which `/fx/status` reports.
 - **Annotations** (`upslope/annotation_service.py`, `upslope/clients/annotations.py`):
   a versioned draft/publish workflow stored in S3, edited through the admin API
   and the webapp's `/annotation` page.

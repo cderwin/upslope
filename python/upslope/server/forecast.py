@@ -1,7 +1,7 @@
 """Forecast API for the webapp.
 
 - `GET /fx/status`: each model's latest run, in-progress run (with each layer's progress) and retained
-  runs, so the webapp can find manifests and show how a run is coming along.
+  runs, so the webapp can find manifests and show how a run is coming along; and the exporter's health.
 - `GET /fx/data/{path}`: objects under `forecasts/` in storage (manifests, frames, pointers), passed through.
 """
 
@@ -23,7 +23,7 @@ from litestar.response import Stream
 from upslope.clients.forecasts import PREFIX, ForecastStore
 from upslope.logging import get_logger
 from upslope.models.config import ModelConfig, ModelsConfig
-from upslope.models.manifest import InProgress, run_path
+from upslope.models.manifest import ExportStatus, InProgress, run_path
 
 logger = get_logger(__name__)
 
@@ -150,14 +150,20 @@ class ForecastStatus:
 
     Attributes:
         models: Status of each configured model, in config order.
+        export: The exporter's last written status (`export-status.json`): whether its last check failed, each
+            model's outcome and errors; None if it has never run.
+        export_overdue: The exporter should have written its status again by now: it's stuck or down.
     """
 
     models: list[ModelStatus]
+    export: ExportStatus | None = None
+    export_overdue: bool = False
 
 
 class StatusCache:
     """Cached `ForecastStatus`. Listing runs takes a few S3 requests, so it's refreshed when older than
-    `max_age` seconds, or on demand via `refresh` (e.g. right after this process exports a run).
+    `max_age` seconds, or on demand via `refresh`. The exporter is another process, so its changes show up
+    within `max_age`.
     """
 
     def __init__(
@@ -193,7 +199,11 @@ class StatusCache:
                     runs,
                 )
             )
-        return ForecastStatus(models)
+        export = self._store.read_export_status()
+        overdue = export is not None and self._now() > export.overdue_after
+        if overdue:
+            logger.warning("the exporter is overdue: its last status (check %d, %s) was due again by %s", export.check, export.state, export.overdue_after)
+        return ForecastStatus(models, export, overdue)
 
     async def _fetch(self) -> ForecastStatus:
         # callers hold self._lock

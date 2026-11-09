@@ -1,7 +1,8 @@
-"""What an export writes to storage for each model run (its manifest), and per model (`latest.json`, `in-progress.json`)."""
+"""What an export writes to storage: for each model run (its manifest), per model (`latest.json`,
+`in-progress.json`), and for the exporter as a whole (`export-status.json`)."""
 
 from datetime import datetime, timedelta
-from typing import Self
+from typing import Literal, Self
 
 from attrs import define, field
 from cattrs.preconf.json import make_converter
@@ -244,6 +245,66 @@ class InProgress:
     def layer(self, layer_id: str) -> LayerProgress | None:
         """Look up a layer by id."""
         return next((layer for layer in self.layers if layer.id == layer_id), None)
+
+    def to_json(self) -> bytes:
+        return converter.dumps(self).encode()
+
+    @classmethod
+    def from_json(cls, data: bytes | str) -> Self:
+        return converter.loads(data, cls)
+
+
+@define
+class ModelCheckStatus:
+    """What the exporter's last finished check did for one model.
+
+    Attributes:
+        id: Model id.
+        state: `ok` (checked, whether or not anything was new), `skipped` (its source can't export, e.g. no
+            annotations are published) or `failed`.
+        frames: Frames exported.
+        error: Why the model failed or was skipped.
+        layer_errors: Frames that failed and will be retried at the next check, e.g. `surface-temp hour 3: HTTP 503`.
+        seconds: How long the model took.
+    """
+
+    id: str
+    state: Literal["ok", "skipped", "failed"]
+    frames: int = 0
+    error: str | None = None
+    layer_errors: list[str] = field(factory=list)
+    seconds: float = 0.0
+
+
+@define
+class ExportStatus:
+    """The exporter's health: `forecasts/export-status.json`, written as each check starts and finishes.
+
+    Attributes:
+        state: `running` (a check is under way), `ok` (the last check finished and no model failed) or
+            `failed` (the last check failed, as a whole or for some model).
+        check: The check's number since the exporter started, as its log lines are tagged (`[check 12]`).
+        started_at: When the current or last check started.
+        finished_at: When the last check finished; None while one is running.
+        next_check_at: When the next check is due; None while one is running.
+        overdue_after: When to suspect the exporter is stuck or down: the running check's time limit, or a
+            little after the next check is due.
+        last_success_at: When a check last finished with no model failing.
+        consecutive_failures: Failed checks in a row.
+        error: Why the check as a whole failed (e.g. it hit its time limit).
+        models: Each model's outcome in the last finished check.
+    """
+
+    state: Literal["running", "ok", "failed"]
+    check: int
+    started_at: datetime
+    overdue_after: datetime
+    finished_at: datetime | None = None
+    next_check_at: datetime | None = None
+    last_success_at: datetime | None = None
+    consecutive_failures: int = 0
+    error: str | None = None
+    models: list[ModelCheckStatus] = field(factory=list)
 
     def to_json(self) -> bytes:
         return converter.dumps(self).encode()

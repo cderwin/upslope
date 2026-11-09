@@ -1,6 +1,7 @@
 """Exported forecast runs in the storage bucket, laid out like open-meteo's `data_spatial/`.
 
 ```
+forecasts/export-status.json                          the exporter's health (ExportStatus)
 forecasts/<model>/latest.json                         newest complete run (RunPointer)
 forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
@@ -20,7 +21,7 @@ from attrs import define
 
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
-from upslope.models.manifest import InProgress, RunManifest, RunPointer, run_path
+from upslope.models.manifest import ExportStatus, InProgress, RunManifest, RunPointer, run_path
 
 logger = get_logger(__name__)
 
@@ -28,6 +29,7 @@ PREFIX = "forecasts"
 LATEST = "latest.json"
 IN_PROGRESS = "in-progress.json"
 MANIFEST = "manifest.json"
+EXPORT_STATUS = f"{PREFIX}/export-status.json"
 
 # Prefixes of the storage layout before forecasts/; only `delete_legacy` touches them
 LEGACY_PREFIXES = ("web_exports/", "model_runs/")
@@ -98,6 +100,15 @@ class ForecastStore:
     def write_in_progress(self, progress: InProgress) -> None:
         """Write `in-progress.json`. Write the run's manifest first."""
         self.storage.put_bytes(f"{self.model_prefix(progress.model)}/{IN_PROGRESS}", progress.to_json(), "application/json")
+
+    def read_export_status(self) -> ExportStatus | None:
+        """The exporter's status, or None if it has never run."""
+        stored = self.storage.get_bytes(EXPORT_STATUS)
+        return None if stored is None else ExportStatus.from_json(stored.data)
+
+    def write_export_status(self, status: ExportStatus) -> None:
+        """Write the exporter's status."""
+        self.storage.put_bytes(EXPORT_STATUS, status.to_json(), "application/json")
 
     def list_runs(self, model: str) -> list[datetime]:
         """Initialization times of the model's runs that have a manifest, newest first."""

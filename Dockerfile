@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# The upslope server, with the built webapp baked in.
+# The upslope server and exporter, with the built webapp baked in. One image runs either process:
+# `upslope serve` (the default) or `upslope export-loop` (see fly.toml's [processes]).
 #   docker build -t upslope --build-arg VITE_MAPBOX_TOKEN=pk.... .
 # The image keeps the repo layout under /app (python/, webapp/dist/) so the
 # package finds its configs and the webapp relative to its own source.
@@ -52,6 +53,5 @@ USER upslope
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
     CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
-# Check for new frames at startup as well as every 15 minutes. Layers already exported with this image's
-# config are kept, so a deploy that changes the layers publishes them right away without redoing the rest.
-CMD ["upslope", "serve", "--export-on-startup"]
+# The healthcheck above is the server's; the exporter serves no HTTP (compose disables it there).
+CMD ["upslope", "serve"]

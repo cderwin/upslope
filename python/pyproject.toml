@@ -45,3 +45,6 @@ module-root = ""
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# georegistration filters this for the whole process (UW GIFs are placed by our own transform); pytest resets
+# warning filters per test, so mirror it here
+filterwarnings = ["ignore::rasterio.errors.NotGeoreferencedWarning"]

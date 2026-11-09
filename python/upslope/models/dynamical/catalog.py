@@ -19,6 +19,14 @@ STAC_COLLECTION_URL = "https://stac.dynamical.org/{dataset}/collection.json"
 # The collection asset holding the Icechunk repository, served over HTTPS
 ICECHUNK_ASSET = "icechunk-https"
 
+# Every request has a time limit, so a stalled upstream fails the frame (retried next check) instead of hanging
+# the export. Repository metadata comes over HTTPS (object_store options); chunks come through Icechunk's storage.
+HTTP_STORAGE_OPTIONS = {"timeout": "60s", "connect_timeout": "10s"}
+STORAGE_SETTINGS = icechunk.StorageSettings(
+    timeouts=icechunk.StorageTimeoutSettings(connect_timeout_ms=10_000, read_timeout_ms=60_000, operation_timeout_ms=180_000),
+    retries=icechunk.StorageRetriesSettings(max_tries=4, initial_backoff_ms=500, max_backoff_ms=10_000),
+)
+
 
 def store_url(dataset: str, client: httpx.Client) -> str:
     """The Icechunk repository URL of a catalog dataset. Raises httpx.HTTPError or KeyError if it can't be found."""
@@ -62,12 +70,12 @@ def open_dataset(dataset: str, client: httpx.Client) -> xr.Dataset:
         The dataset, as one consistent snapshot.
     """
     with log_duration(logger, f"opened {dataset}", logging.DEBUG):
-        storage = icechunk.http_storage(store_url(dataset, client))
-        config = icechunk.Repository.fetch_config(storage)
-        containers = (config.virtual_chunk_containers or {}) if config is not None else {}
+        storage = icechunk.http_storage(store_url(dataset, client), opts=HTTP_STORAGE_OPTIONS)
+        config = icechunk.Repository.fetch_config(storage) or icechunk.RepositoryConfig.default()
+        config.storage = STORAGE_SETTINGS
+        containers = config.virtual_chunk_containers or {}
         credentials = {prefix: anonymous_credentials(prefix) for prefix in containers}
-        if config is not None:
-            pin_aws_endpoints(config)
+        pin_aws_endpoints(config)
         repo = icechunk.Repository.open(
             storage, config=config, authorize_virtual_chunk_access=icechunk.containers_credentials(credentials) if credentials else None
         )

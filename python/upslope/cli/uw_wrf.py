@@ -39,11 +39,11 @@ def _uw_models(models: list["ModelConfig"], model_ids: tuple[str, ...]) -> list[
     return [model for model in models if model.source.kind == "uw_wrf"]
 
 
-def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | None, require_complete: bool) -> datetime:
+async def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | None, require_complete: bool) -> datetime:
     """The run to use: the one given, else the newest complete run, else (if allowed) the newest run."""
     if run is not None:
         return run.replace(tzinfo=UTC)
-    initialized = client.latest_complete_run(model)
+    initialized = await client.latest_complete_run(model)
     if initialized is not None:
         return initialized
     if require_complete:
@@ -63,16 +63,23 @@ def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | No
 )
 def download(config_path: Path, model_ids: tuple[str, ...], run: datetime | None, output_path: Path) -> None:
     """Download every configured layer's images of a model run."""
+    import asyncio
+
     from upslope.models.config import ModelsConfig
     from upslope.models.uw_wrf.image_client import ImageClient
 
-    client = ImageClient()
-    for model in _uw_models(_select_models(ModelsConfig.load(config_path), model_ids), model_ids):
-        initialized = _resolve_run(client, model, run, require_complete=True)
-        click.echo(f"Downloading {model.id} run initialized {initialized:%Y-%m-%d %HZ}")
-        for i, layer in enumerate(model.layers, start=1):
-            click.echo(f"Downloading layer {i} of {len(model.layers)}: {layer.id}")
-            client.download_layer(layer, initialized, output_path / model.id / layer.id)
+    models = _uw_models(_select_models(ModelsConfig.load(config_path), model_ids), model_ids)
+
+    async def download_all() -> None:
+        client = ImageClient()
+        for model in models:
+            initialized = await _resolve_run(client, model, run, require_complete=True)
+            click.echo(f"Downloading {model.id} run initialized {initialized:%Y-%m-%d %HZ}")
+            for i, layer in enumerate(model.layers, start=1):
+                click.echo(f"Downloading layer {i} of {len(model.layers)}: {layer.id}")
+                await client.download_layer(layer, initialized, output_path / model.id / layer.id)
+
+    asyncio.run(download_all())
 
 
 @click.command()
@@ -123,33 +130,35 @@ def check_layers(config_path: Path, model_ids: tuple[str, ...], run: datetime | 
     Checks the newest complete run unless --run is given. For dynamical.org models, also checks that each
     layer's variables, hours and units fit the dataset. Exits with an error if any layer has a problem.
     """
-    from concurrent.futures import ThreadPoolExecutor
+    import asyncio
 
     import httpx
 
     from upslope.cli.dynamical import check_model
     from upslope.models.config import ModelsConfig
-    from upslope.models.uw_wrf.image_client import ImageClient
+    from upslope.models.uw_wrf.image_client import ImageClient, Throttle
 
-    client = ImageClient()
+    async def uw_results(model: "ModelConfig") -> tuple[datetime, dict]:
+        # a one-off sweep of a few hundred HEADs: a little faster than the export's pace, still throttled
+        client = ImageClient(throttle=Throttle(concurrency=4, interval=0.1))
+        initialized = await _resolve_run(client, model, run, require_complete=False)
+
+        async def check(layer, hour) -> str:
+            try:
+                return "ok" if await client.image_exists(layer, initialized, hour) else "missing"
+            except httpx.HTTPError as e:
+                return f"error ({e.__class__.__name__})"
+
+        checks = [(layer, hour) for layer in model.layers for hour in layer.hours.hours]
+        return initialized, dict(zip(checks, await asyncio.gather(*(check(*c) for c in checks))))
+
     problems = 0
     for model in _select_models(ModelsConfig.load(config_path), model_ids):
         if model.source.kind == "dynamical":
             problems += check_model(model, run)
             continue
-        initialized = _resolve_run(client, model, run, require_complete=False)
+        initialized, results = asyncio.run(uw_results(model))
         click.echo(f"{model.id} run {initialized:%Y-%m-%d %HZ}:")
-
-        def check(layer_hour):
-            layer, hour = layer_hour
-            try:
-                return "ok" if client.image_exists(layer, initialized, hour) else "missing"
-            except httpx.HTTPError as e:
-                return f"error ({e.__class__.__name__})"
-
-        checks = [(layer, hour) for layer in model.layers for hour in layer.hours.hours]
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            results = dict(zip(checks, pool.map(check, checks)))
 
         for layer in model.layers:
             bad = {hour: results[(layer, hour)] for hour in layer.hours.hours if results[(layer, hour)] != "ok"}

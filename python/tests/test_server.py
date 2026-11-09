@@ -8,7 +8,7 @@ from litestar.testing import TestClient
 from upslope.clients.forecasts import ForecastStore
 from upslope.clients.storage import StoredObject
 from upslope.models.config import HourRange, LayerConfig, ModelConfig, ModelsConfig
-from upslope.models.manifest import InProgress, LayerProgress, RunManifest, RunPointer
+from upslope.models.manifest import ExportStatus, InProgress, LayerProgress, ModelCheckStatus, RunManifest, RunPointer
 from upslope.server.app import create_app
 from upslope.server.forecast import STALL_AFTER, StatusCache, in_progress_status
 
@@ -48,7 +48,7 @@ def storage(memory_storage):
 
 @pytest.fixture
 def client(storage, dist: Path):
-    with TestClient(create_app(storage=storage, webapp_dist=dist, run_jobs=False, config=CONFIG)) as client:
+    with TestClient(create_app(storage=storage, webapp_dist=dist, config=CONFIG)) as client:
         yield client
 
 
@@ -76,8 +76,32 @@ def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
                 ],
             },
             {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "in_progress": None, "runs": []},
-        ]
+        ],
+        "export": None,
+        "export_overdue": False,
     }
+
+
+def test_status_reports_the_exporters_health(memory_storage) -> None:
+    """The exporter (another process) records each check; the status shows failures and when it's overdue."""
+    store = ForecastStore(memory_storage)
+    finished = INITIALIZED + timedelta(minutes=3)
+    store.write_export_status(
+        ExportStatus(
+            "failed", 7, INITIALIZED, overdue_after=INITIALIZED + timedelta(minutes=25), finished_at=finished,
+            next_check_at=INITIALIZED + timedelta(minutes=15), consecutive_failures=2,
+            models=[ModelCheckStatus("uwwrf_4km", "failed", error="HTTP 503"), ModelCheckStatus("uwwrf_12km", "ok", frames=3)],
+        )
+    )
+
+    async def status_at(now: datetime):
+        return await StatusCache(store, CONFIG, now=lambda: now).get()
+
+    on_time = asyncio.run(status_at(INITIALIZED + timedelta(minutes=10)))
+    assert not on_time.export_overdue
+    assert (on_time.export.state, on_time.export.check, on_time.export.consecutive_failures) == ("failed", 7, 2)
+    assert on_time.export.models[0].error == "HTTP 503"
+    assert asyncio.run(status_at(INITIALIZED + timedelta(minutes=30))).export_overdue
 
 
 def test_status_cached_across_requests(client: TestClient, storage) -> None:
@@ -111,7 +135,10 @@ def test_status_cache_concurrent_stale_requests_share_one_lookup(memory_storage)
     cache._store = type(
         "Counting",
         (),
-        {"read_latest": staticmethod(counting_read_latest), "list_runs": store.list_runs, "read_in_progress": store.read_in_progress},
+        {
+            "read_latest": staticmethod(counting_read_latest), "list_runs": store.list_runs,
+            "read_in_progress": store.read_in_progress, "read_export_status": store.read_export_status,
+        },
     )()
 
     async def scenario() -> None:
@@ -147,7 +174,7 @@ def test_status_includes_in_progress_run(client: TestClient, storage) -> None:
     )
     export_run(storage, initialized=run, latest=False)
     # a fresh app, since the fixture's has already cached the status
-    with TestClient(create_app(storage=storage, webapp_dist=Path("/nonexistent"), run_jobs=False, config=CONFIG)) as fresh:
+    with TestClient(create_app(storage=storage, webapp_dist=Path("/nonexistent"), config=CONFIG)) as fresh:
         status = fresh.get("/fx/status").json()["models"][0]
     assert status["latest"]["path"] == "2026/10/21/1200Z"
     assert status["runs"][0]["path"] == "2026/10/22/0000Z"
@@ -254,7 +281,7 @@ def test_server_errors_are_logged(dist: Path, memory_storage) -> None:
             raise RuntimeError("storage exploded")
 
     with patch("upslope.server.app.logger") as logger:
-        with TestClient(create_app(storage=BrokenStorage(), webapp_dist=dist, run_jobs=False, config=CONFIG)) as client:
+        with TestClient(create_app(storage=BrokenStorage(), webapp_dist=dist, config=CONFIG)) as client:
             assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 500
             assert client.get("/fx/data/a/b/missing.png").status_code == 500
             assert logger.error.call_count == 2
@@ -301,41 +328,7 @@ def test_frontend_cannot_escape_dist(client: TestClient, dist: Path) -> None:
 
 
 def test_missing_dist_still_serves_api(tmp_path: Path, storage) -> None:
-    with TestClient(create_app(storage=storage, webapp_dist=tmp_path / "nope", run_jobs=False, config=CONFIG)) as client:
+    with TestClient(create_app(storage=storage, webapp_dist=tmp_path / "nope", config=CONFIG)) as client:
         assert client.get("/health").status_code == 200
         assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 200
         assert client.get("/").status_code == 404
-
-
-# --- hourly job
-
-
-def test_seconds_until_next() -> None:
-    from upslope.server.jobs import seconds_until_next
-
-    quarter = timedelta(minutes=15)
-    assert seconds_until_next(datetime(2026, 10, 21, 13, 59, 30), quarter) == 30
-    assert seconds_until_next(datetime(2026, 10, 21, 14, 0, 0), quarter) == 900
-    assert seconds_until_next(datetime(2026, 10, 21, 14, 7, 0), quarter) == 480
-    assert seconds_until_next(datetime(2026, 10, 21, 13, 59, 30), timedelta(hours=1)) == 30
-
-
-def test_run_periodically_runs_immediately_when_asked() -> None:
-    from unittest.mock import MagicMock, patch
-
-    from upslope.server import jobs
-
-    driver = MagicMock()
-    driver.run.return_value = None  # already exported
-
-    async def stop_on_sleep(seconds: float) -> None:
-        raise asyncio.CancelledError
-
-    with patch.object(jobs.asyncio, "sleep", stop_on_sleep), pytest.raises(asyncio.CancelledError):
-        asyncio.run(jobs.run_periodically(driver, run_immediately=True))
-    assert driver.run.call_count == 1
-
-    driver.reset_mock()
-    with patch.object(jobs.asyncio, "sleep", stop_on_sleep), pytest.raises(asyncio.CancelledError):
-        asyncio.run(jobs.run_periodically(driver))
-    assert driver.run.call_count == 0
