@@ -16,6 +16,8 @@ interface Settings {
   frameIntervalMs: number
   /** Model the map opens on, and switches to when the current one lacks a variable; null for the server's default. */
   defaultModel: string | null
+  /** Drape the map over 3D terrain and tilt the camera. */
+  terrain: boolean
 }
 
 function clampInterval(ms: number): number {
@@ -24,11 +26,12 @@ function clampInterval(ms: number): number {
 }
 
 function readStored(): Settings {
-  const settings: Settings = { frameIntervalMs: FRAME_INTERVAL_DEFAULT_MS, defaultModel: null }
+  const settings: Settings = { frameIntervalMs: FRAME_INTERVAL_DEFAULT_MS, defaultModel: null, terrain: false }
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<Settings>
     if (typeof stored.frameIntervalMs === 'number') settings.frameIntervalMs = clampInterval(stored.frameIntervalMs)
     if (typeof stored.defaultModel === 'string') settings.defaultModel = stored.defaultModel
+    if (typeof stored.terrain === 'boolean') settings.terrain = stored.terrain
   } catch {
     // Unreadable or blocked storage: use the defaults.
   }
@@ -54,4 +57,8 @@ export function setFrameInterval(ms: number): void {
 /** Null uses the server's default model. */
 export function setDefaultModel(model: string | null): void {
   state.defaultModel = model || null
+}
+
+export function setTerrain(enabled: boolean): void {
+  state.terrain = enabled
 }

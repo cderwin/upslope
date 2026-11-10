@@ -75,6 +75,7 @@ export function runLayers(base: string, manifest: RunManifest, run: RunRef, mode
       inProgress: model.in_progress?.path === run.path,
       dimensions: layer.dimensions,
       coordinates: layer.coordinates,
+      extent: layer.extent ?? null,
       frames: layer.frames
         .map((frame) => ({
           hour: frame.hour,
