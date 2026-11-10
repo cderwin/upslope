@@ -21,6 +21,8 @@ CONFIG = ModelsConfig([
     ModelConfig("uwwrf_12km", "UW WRF 12km", [0, 12], [LAYER]),
 ])
 RUN_KEY = "forecasts/uwwrf_4km/2026/10/21/1200Z"
+# PUBLIC_DATA_URL, as conftest sets it
+DATA_URL = "https://data.example/forecasts"
 
 
 def export_run(storage, model: str = "uwwrf_4km", initialized: datetime = INITIALIZED, latest: bool = True) -> None:
@@ -79,7 +81,7 @@ def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
             },
             {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "in_progress": None, "runs": []},
         ],
-        "data_url": "/fx/data",
+        "data_url": DATA_URL,
         "export": None,
         "export_overdue": False,
     }
@@ -98,7 +100,7 @@ def test_status_reports_the_exporters_health(memory_storage) -> None:
     )
 
     now = INITIALIZED + timedelta(minutes=10)
-    cache = StatusCache(store, CONFIG, now=lambda: now)
+    cache = StatusCache(store, CONFIG, DATA_URL, now=lambda: now)
     on_time = asyncio.run(cache.get())
     assert not on_time.export_overdue
     assert (on_time.export.state, on_time.export.check, on_time.export.consecutive_failures) == ("failed", 7, 2)
@@ -140,7 +142,7 @@ def test_status_comes_from_the_index(memory_storage) -> None:
     calls = counting_gets(memory_storage)
     memory_storage.list_keys = None  # listing would fail
 
-    status = asyncio.run(StatusCache(store, CONFIG).get())
+    status = asyncio.run(StatusCache(store, CONFIG, DATA_URL).get())
     assert [(m.id, m.latest, m.runs) for m in status.models] == [
         ("uwwrf_4km", None, []),
         ("uwwrf_12km", RunRef(INITIALIZED, "2026/10/21/1200Z"), [RunRef(INITIALIZED, "2026/10/21/1200Z")]),
@@ -151,7 +153,7 @@ def test_status_comes_from_the_index(memory_storage) -> None:
 def test_refresh_rereads_only_changed_files(memory_storage) -> None:
     store = ForecastStore(memory_storage)
     store.write_index(ForecastIndex([ModelIndex("uwwrf_4km")]))
-    cache = StatusCache(store, CONFIG)
+    cache = StatusCache(store, CONFIG, DATA_URL)
     calls = counting_gets(memory_storage)
 
     async def scenario() -> None:
@@ -170,7 +172,7 @@ def test_status_lists_runs_until_the_index_exists(memory_storage) -> None:
     """Before the exporter first writes the index, every model's files are read; then the index takes over."""
     export_run(memory_storage)
     store = ForecastStore(memory_storage)
-    cache = StatusCache(store, CONFIG)
+    cache = StatusCache(store, CONFIG, DATA_URL)
 
     async def scenario() -> None:
         assert (await cache.get()).models[0].latest.initialized == INITIALIZED
@@ -183,7 +185,7 @@ def test_status_lists_runs_until_the_index_exists(memory_storage) -> None:
 
 def test_requests_dont_wait_for_storage_once_loaded(memory_storage) -> None:
     """Concurrent first requests share one read; after that, requests are served from memory until a refresh."""
-    cache = StatusCache(ForecastStore(memory_storage), CONFIG)
+    cache = StatusCache(ForecastStore(memory_storage), CONFIG, DATA_URL)
     calls = counting_gets(memory_storage)
 
     async def scenario() -> None:
@@ -212,7 +214,7 @@ def test_background_refresh_keeps_going_after_failures(memory_storage) -> None:
     def broken(*args) -> None:
         raise RuntimeError("s3 down")
 
-    cache = StatusCache(store, CONFIG, sleep=sleep)
+    cache = StatusCache(store, CONFIG, DATA_URL, sleep=sleep)
 
     async def scenario() -> None:
         await cache.refresh()
@@ -274,59 +276,11 @@ def test_layer_states_for_new_and_finished_runs() -> None:
     assert done.complete and done.layers[0].name == "Surface temperature"
 
 
-# --- forecast data
-
-
-def test_manifest_and_pointer_served_uncached(client: TestClient) -> None:
-    response = client.get("/fx/data/uwwrf_4km/2026/10/21/1200Z/manifest.json")
-    assert response.status_code == 200
-    assert response.json()["initialized"] == "2026-10-21T12:00:00+00:00"
-    assert response.headers["cache-control"] == "no-cache"
-    assert response.headers["etag"]
-    latest = client.get("/fx/data/uwwrf_4km/latest.json")
-    assert latest.json()["path"] == "2026/10/21/1200Z"
-    assert latest.headers["cache-control"] == "no-cache"
-
-
-def test_frame_served_with_headers(client: TestClient) -> None:
-    response = client.get("/fx/data/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.png")
-    assert response.status_code == 200
-    assert response.content == b"png-bytes"
-    assert response.headers["content-type"] == "image/png"
-    assert response.headers["content-length"] == "9"
-    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
-
-
-def test_matching_etag_returns_304(client: TestClient) -> None:
-    path = "/fx/data/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.png"
-    etag = client.get(path).headers["etag"]
-    response = client.get(path, headers={"If-None-Match": etag})
-    assert response.status_code == 304
-    assert response.content == b""
-
-
-def test_missing_object_404(client: TestClient) -> None:
-    assert client.get("/fx/data/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T2100.png").status_code == 404
-    assert client.get("/fx/data/uwwrf_12km/latest.json").status_code == 404
-
-
-@pytest.mark.parametrize(
-    "path",
-    [
-        "/fx/data/uwwrf_4km/../georegistration/draft.json",
-        "/fx/data/uwwrf_4km/%2E%2E/%2E%2E/georegistration/draft.json",
-        "/fx/data/uwwrf_4km/a\\b.png",
-    ],
-)
-def test_path_traversal_rejected(client: TestClient, storage, path: str) -> None:
-    storage.put_bytes("georegistration/draft.json", b"secret", "application/json")
-    response = client.get(path)
-    assert response.status_code == 404
-    assert b"secret" not in response.content
+# --- other paths
 
 
 def test_unknown_fx_path_is_404_not_html(client: TestClient) -> None:
-    for path in ("/fx", "/fx/web/manifest.json", "/fx/data", "/fx/other/thing"):
+    for path in ("/fx", "/fx/web/manifest.json", "/fx/data/uwwrf_4km/latest.json", "/fx/other/thing"):
         response = client.get(path)
         assert response.status_code == 404, path
         assert "<html>" not in response.text
@@ -341,8 +295,9 @@ def test_server_errors_are_logged(dist: Path, memory_storage) -> None:
 
     with patch("upslope.server.app.logger") as logger:
         with TestClient(create_app(storage=BrokenStorage(), webapp_dist=dist, config=CONFIG)) as client:
-            assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 500
-            assert client.get("/fx/data/a/b/missing.png").status_code == 500
+            # the startup refresh failed, so each request tries storage again
+            assert client.get("/fx/status").status_code == 500
+            assert client.get("/fx/status").status_code == 500
             assert logger.error.call_count == 2
             assert all(isinstance(call.kwargs["exc_info"], RuntimeError) for call in logger.error.call_args_list)
             logger.error.reset_mock()
@@ -389,7 +344,7 @@ def test_frontend_cannot_escape_dist(client: TestClient, dist: Path) -> None:
 def test_missing_dist_still_serves_api(tmp_path: Path, storage) -> None:
     with TestClient(create_app(storage=storage, webapp_dist=tmp_path / "nope", config=CONFIG)) as client:
         assert client.get("/health").status_code == 200
-        assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 200
+        assert client.get("/fx/status").status_code == 200
         assert client.get("/").status_code == 404
 
 
@@ -406,7 +361,6 @@ def test_forecasts_come_from_the_public_bucket(memory_storage, public_storage, d
         status = client.get("/fx/status").json()
         assert status["data_url"] == "https://upslope-data-public.example/forecasts"
         assert status["models"][0]["latest"]["path"] == "2026/10/21/1200Z"
-        assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 200
     assert not any(key.startswith("forecasts/") for key in memory_storage.objects)
 
 
@@ -414,3 +368,9 @@ def test_data_url_from_the_environment(memory_storage, dist: Path, monkeypatch) 
     monkeypatch.setenv("PUBLIC_DATA_URL", "http://localhost:9000/upslope-data-public/forecasts")
     with TestClient(create_app(storage=memory_storage, webapp_dist=dist, config=CONFIG)) as client:
         assert client.get("/fx/status").json()["data_url"] == "http://localhost:9000/upslope-data-public/forecasts"
+
+
+def test_startup_needs_a_data_url(memory_storage, dist: Path, monkeypatch) -> None:
+    monkeypatch.delenv("PUBLIC_DATA_URL")
+    with pytest.raises(RuntimeError, match="PUBLIC_DATA_URL"):
+        create_app(storage=memory_storage, webapp_dist=dist, config=CONFIG)

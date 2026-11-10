@@ -74,6 +74,17 @@ class MemoryStorage:
         return StoredObject(body=iter([data]), content_type=content_type, content_length=len(data), etag=etag)
 
 
+# What tests' apps report as `data_url`, unless a test passes its own
+DATA_URL = "https://data.example/forecasts"
+
+
+@pytest.fixture(autouse=True)
+def data_url(monkeypatch) -> str:
+    """The server won't start without PUBLIC_DATA_URL."""
+    monkeypatch.setenv("PUBLIC_DATA_URL", DATA_URL)
+    return DATA_URL
+
+
 # Buckets made by the fixtures, by name, so a copy can find its source bucket
 BUCKETS: dict[str, MemoryStorage] = {}
 

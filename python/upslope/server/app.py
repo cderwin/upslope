@@ -23,7 +23,7 @@ from upslope.clients.storage import StorageClient
 from upslope.logging import configure_logging, get_logger
 from upslope.models.config import ModelsConfig
 from upslope.server.admin import AdminGeoregistrationController
-from upslope.server.forecast import DEFAULT_DATA_URL, ForecastController, StatusCache
+from upslope.server.forecast import ForecastController, StatusCache
 from upslope.server.frontend import create_frontend_router
 
 logger = get_logger(__name__)
@@ -63,14 +63,14 @@ def create_app(
         public_storage: The public bucket the exporter writes forecasts to. Defaults to `storage` if that's
             given, else built from the environment (`PUBLIC_BUCKET_NAME`) at startup.
         data_url: Where browsers load forecast files from (`forecasts/` in the public bucket), reported at
-            `/fx/status`. Defaults to `$PUBLIC_DATA_URL`, or `/fx/data` (served from the bucket by this server).
+            `/fx/status`. Defaults to `$PUBLIC_DATA_URL`; raises RuntimeError without one.
     """
     configure_logging()
 
     if data_url is None:
-        data_url = os.environ.get("PUBLIC_DATA_URL") or DEFAULT_DATA_URL
-    if data_url == DEFAULT_DATA_URL:
-        logger.warning("PUBLIC_DATA_URL is not set; forecast files are served through this server at %s", data_url)
+        data_url = os.environ.get("PUBLIC_DATA_URL", "")
+    if not data_url:
+        raise RuntimeError("PUBLIC_DATA_URL is not set: browsers need it to load forecasts from the public bucket")
 
     if admin_token is None:
         admin_token = os.environ.get("ADMIN_TOKEN", "")
@@ -85,9 +85,8 @@ def create_app(
         # build up front so missing config or credentials fail at startup, not on first use
         models = config or ModelsConfig.load(DEFAULT_MODELS_CONFIG)
         app.state.storage = storage or StorageClient.build()
-        app.state.public_storage = public_storage or storage or StorageClient.build_public()
         app.state.annotations = AnnotationService(AnnotationStore(app.state.storage), models)
-        forecasts = ForecastStore(app.state.public_storage)
+        forecasts = ForecastStore(public_storage or storage or StorageClient.build_public())
         status = app.state.forecast_status = StatusCache(forecasts, models, data_url)
         try:
             await status.refresh()

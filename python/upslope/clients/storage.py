@@ -11,9 +11,6 @@ from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from upslope.logging import get_logger
-
-logger = get_logger(__name__)
 
 _NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
 
@@ -83,7 +80,7 @@ class StorageConfig:
     Attributes:
         bucket: The private bucket (`BUCKET_NAME`): annotations, and anything not meant to be public.
         public_bucket: The publicly readable bucket for exported forecasts (`PUBLIC_BUCKET_NAME`), which
-            browsers read directly. None to keep forecasts in `bucket`, as before there were two.
+            browsers read directly; None if unset, which only commands that don't touch forecasts allow.
     """
 
     access_key_id: str
@@ -290,11 +287,8 @@ class StorageClient:
 
     @classmethod
     def build_public(cls) -> Self:
-        """Create a StorageClient for the public forecasts bucket (`PUBLIC_BUCKET_NAME`).
-
-        Falls back to the private bucket when `PUBLIC_BUCKET_NAME` is unset, as before there were two.
-        """
+        """Create a StorageClient for the public forecasts bucket (`PUBLIC_BUCKET_NAME`). Raises KeyError if unset."""
         config = StorageConfig.from_env()
         if config.public_bucket is None:
-            logger.warning("PUBLIC_BUCKET_NAME is not set; forecasts are read and written in %s", config.bucket)
+            raise KeyError("PUBLIC_BUCKET_NAME is not set: forecasts are read and written in the public bucket")
         return cls.build(config.public_bucket)

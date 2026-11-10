@@ -24,10 +24,10 @@ def test_public_bucket_from_the_environment(env) -> None:
     assert StorageClient.build_public().bucket == "upslope-data-public"
 
 
-def test_public_bucket_falls_back_to_the_private_one(env) -> None:
-    """Before the public bucket is set up, forecasts stay where they were."""
+def test_public_bucket_is_required(env) -> None:
     env.setenv("PUBLIC_BUCKET_NAME", "")
-    assert StorageClient.build_public().bucket == "upslope-storage"
+    with pytest.raises(KeyError, match="PUBLIC_BUCKET_NAME"):
+        StorageClient.build_public()
 
 
 def test_old_forecasts_kept_while_still_in_use(env) -> None:

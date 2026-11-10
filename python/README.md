@@ -179,8 +179,7 @@ S3/Tigris bucket. A model exports at most 400 frames per check
 (`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` (the private bucket, which annotations are
-read from), `PUBLIC_BUCKET_NAME` (the public bucket forecasts are written to;
-unset, `BUCKET_NAME`) and, optionally, `AWS_REGION`. Put them in
+read from), `PUBLIC_BUCKET_NAME` (the public bucket forecasts are written to) and, optionally, `AWS_REGION`. Put them in
 the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export`,
 `just py-export-loop` and `just py-serve` load it.
 
@@ -409,13 +408,11 @@ requires), shown on the map.
 | Method and path | Purpose |
 | --- | --- |
 | `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
-| `GET /fx/data/{path}` | `forecasts/{path}` from the public bucket, with the bucket's `Cache-Control` and ETags: for pages loaded before forecasts were served from the bucket, and setups without `PUBLIC_DATA_URL` |
 
 `data_url` is where the webapp loads manifests
 (`<data_url>/<model>/<run path>/manifest.json`) and frames (their paths are
 relative to the run's folder) from: `PUBLIC_DATA_URL`, the public bucket's
-`forecasts/`, or `/fx/data` if that's unset. A relative `data_url` is relative
-to the API.
+`forecasts/`. The server won't start without it.
 
 `in_progress` adds `checked_at`, `complete` and, per configured layer, `name`,
 `available_hour`, `last_hour`, `progressed_at`, `error` and a `state` the server
