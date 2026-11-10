@@ -5,12 +5,14 @@ from pathlib import Path
 import pytest
 from litestar.testing import TestClient
 
-from upslope.clients.forecasts import ForecastStore
+from upslope.clients.forecasts import EXPORT_STATUS, INDEX, ForecastStore
 from upslope.clients.storage import StoredObject
 from upslope.models.config import HourRange, LayerConfig, ModelConfig, ModelsConfig
-from upslope.models.manifest import ExportStatus, InProgress, LayerProgress, ModelCheckStatus, RunManifest, RunPointer
+from upslope.models.manifest import (
+    ExportStatus, ForecastIndex, InProgress, LayerProgress, ModelCheckStatus, ModelIndex, RunManifest, RunPointer,
+)
 from upslope.server.app import create_app
-from upslope.server.forecast import STALL_AFTER, StatusCache, in_progress_status
+from upslope.server.forecast import STALL_AFTER, RunRef, StatusCache, in_progress_status
 
 INITIALIZED = datetime(2026, 10, 21, 12, tzinfo=UTC)
 LAYER = LayerConfig("surface-temp", "Surface temperature", "https://x/{init:%Y%m%d%H}/{hour:02d}.gif", HourRange(last=3), "washington")
@@ -94,14 +96,15 @@ def test_status_reports_the_exporters_health(memory_storage) -> None:
         )
     )
 
-    async def status_at(now: datetime):
-        return await StatusCache(store, CONFIG, now=lambda: now).get()
-
-    on_time = asyncio.run(status_at(INITIALIZED + timedelta(minutes=10)))
+    now = INITIALIZED + timedelta(minutes=10)
+    cache = StatusCache(store, CONFIG, now=lambda: now)
+    on_time = asyncio.run(cache.get())
     assert not on_time.export_overdue
     assert (on_time.export.state, on_time.export.check, on_time.export.consecutive_failures) == ("failed", 7, 2)
     assert on_time.export.models[0].error == "HTTP 503"
-    assert asyncio.run(status_at(INITIALIZED + timedelta(minutes=30))).export_overdue
+    # worked out per request, without waiting for a refresh
+    now = INITIALIZED + timedelta(minutes=30)
+    assert asyncio.run(cache.get()).export_overdue
 
 
 def test_status_cached_across_requests(client: TestClient, storage) -> None:
@@ -110,60 +113,115 @@ def test_status_cached_across_requests(client: TestClient, storage) -> None:
     assert client.get("/fx/status").json()["models"][1]["latest"] is None
 
 
-def test_status_cache_refreshes_when_stale(memory_storage) -> None:
-    cache = StatusCache(ForecastStore(memory_storage), CONFIG, max_age=0)
+def counting_gets(storage) -> list[tuple[str, bool]]:
+    """Record each get_object call on `storage` as (key, not_modified)."""
+    calls: list[tuple[str, bool]] = []
+    original = storage.get_object
 
-    async def scenario() -> None:
-        assert (await cache.get()).models[0].latest is None
-        export_run(memory_storage)
-        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
+    def get_object(key: str, if_none_match: str | None = None):
+        obj = original(key, if_none_match)
+        calls.append((key, obj is not None and obj.not_modified))
+        return obj
 
-    asyncio.run(scenario())
+    storage.get_object = get_object
+    return calls
 
 
-def test_status_cache_concurrent_stale_requests_share_one_lookup(memory_storage) -> None:
+def test_status_comes_from_the_index(memory_storage) -> None:
+    """With an index, the server reads that one object instead of every model's files."""
     store = ForecastStore(memory_storage)
-    cache = StatusCache(store, CONFIG, max_age=60)
-    reads = 0
-    original = store.read_latest
+    pointer = RunPointer("uwwrf_12km", INITIALIZED, "2026/10/21/1200Z", INITIALIZED)
+    store.write_index(ForecastIndex([
+        ModelIndex("uwwrf_12km", pointer, None, [INITIALIZED]),
+        ModelIndex("retired", pointer, None, [INITIALIZED]),  # no longer configured: left out
+    ]))
+    export_run(memory_storage)  # in storage, but not yet in the index
+    calls = counting_gets(memory_storage)
+    memory_storage.list_keys = None  # listing would fail
 
-    def counting_read_latest(model: str):
-        nonlocal reads
-        reads += 1
-        return original(model)
-
-    cache._store = type(
-        "Counting",
-        (),
-        {
-            "read_latest": staticmethod(counting_read_latest), "list_runs": store.list_runs,
-            "read_in_progress": store.read_in_progress, "read_export_status": store.read_export_status,
-        },
-    )()
-
-    async def scenario() -> None:
-        await asyncio.gather(*(cache.get() for _ in range(10)))
-
-    asyncio.run(scenario())
-    assert reads == len(CONFIG.models)
+    status = asyncio.run(StatusCache(store, CONFIG).get())
+    assert [(m.id, m.latest, m.runs) for m in status.models] == [
+        ("uwwrf_4km", None, []),
+        ("uwwrf_12km", RunRef(INITIALIZED, "2026/10/21/1200Z"), [RunRef(INITIALIZED, "2026/10/21/1200Z")]),
+    ]
+    assert sorted(key for key, _ in calls) == [EXPORT_STATUS, INDEX]
 
 
-def test_status_cache_serves_cached_status_when_refresh_fails(memory_storage) -> None:
-    export_run(memory_storage)
-    cache = StatusCache(ForecastStore(memory_storage), CONFIG, max_age=0)
+def test_refresh_rereads_only_changed_files(memory_storage) -> None:
+    store = ForecastStore(memory_storage)
+    store.write_index(ForecastIndex([ModelIndex("uwwrf_4km")]))
+    cache = StatusCache(store, CONFIG)
+    calls = counting_gets(memory_storage)
 
     async def scenario() -> None:
         await cache.refresh()
-
-        def fail(model: str) -> None:
-            raise RuntimeError("s3 down")
-
-        cache._store = type(
-            "Broken", (), {"read_latest": staticmethod(fail), "list_runs": staticmethod(fail), "read_in_progress": staticmethod(fail)}
-        )()
-        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
+        await cache.refresh()
+        assert set(calls[-2:]) == {(INDEX, True), (EXPORT_STATUS, False)}  # no export status: re-read until there is one
+        store.write_index(ForecastIndex([ModelIndex("uwwrf_4km", runs=[INITIALIZED])]))
+        await cache.refresh()
+        assert set(calls[-2:]) == {(INDEX, False), (EXPORT_STATUS, False)}
+        assert (await cache.get()).models[0].runs == [RunRef(INITIALIZED, "2026/10/21/1200Z")]
 
     asyncio.run(scenario())
+
+
+def test_status_lists_runs_until_the_index_exists(memory_storage) -> None:
+    """Before the exporter first writes the index, every model's files are read; then the index takes over."""
+    export_run(memory_storage)
+    store = ForecastStore(memory_storage)
+    cache = StatusCache(store, CONFIG)
+
+    async def scenario() -> None:
+        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
+        store.write_index(ForecastIndex([ModelIndex("uwwrf_4km")]))
+        await cache.refresh()
+        assert (await cache.get()).models[0].latest is None
+
+    asyncio.run(scenario())
+
+
+def test_requests_dont_wait_for_storage_once_loaded(memory_storage) -> None:
+    """Concurrent first requests share one read; after that, requests are served from memory until a refresh."""
+    cache = StatusCache(ForecastStore(memory_storage), CONFIG)
+    calls = counting_gets(memory_storage)
+
+    async def scenario() -> None:
+        await asyncio.gather(*(cache.get() for _ in range(10)))
+        reads = len(calls)
+        export_run(memory_storage)
+        assert (await cache.get()).models[0].latest is None
+        assert len(calls) == reads == 2  # the index (missing) and the export status
+
+    asyncio.run(scenario())
+
+
+def test_background_refresh_keeps_going_after_failures(memory_storage) -> None:
+    store = ForecastStore(memory_storage)
+    sleeps: list[float] = []
+    original = memory_storage.get_object
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if len(sleeps) == 2:  # storage fails during the first background refresh
+            memory_storage.get_object = original
+            store.write_index(ForecastIndex([ModelIndex("uwwrf_4km", runs=[INITIALIZED])]))
+        if len(sleeps) == 3:
+            raise asyncio.CancelledError
+
+    def broken(*args) -> None:
+        raise RuntimeError("s3 down")
+
+    cache = StatusCache(store, CONFIG, sleep=sleep)
+
+    async def scenario() -> None:
+        await cache.refresh()
+        memory_storage.get_object = broken
+        with pytest.raises(asyncio.CancelledError):
+            await cache.run_forever()
+        assert (await cache.get()).models[0].runs == [RunRef(INITIALIZED, "2026/10/21/1200Z")]
+
+    asyncio.run(scenario())
+    assert sleeps == [60.0, 60.0, 60.0]
 
 
 def test_status_includes_in_progress_run(client: TestClient, storage) -> None:

@@ -38,8 +38,8 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `cli/` | Click commands; `cli/main.py` registers them. `cli/__init__.py` holds repo paths (`PROJECT_BASE`, `DEFAULT_MODELS_CONFIG`, `DEV_GEOREGISTRATION`) |
 | `server/app.py` | `create_app()`: Litestar app and lifespan (the server doesn't export) |
 | `server/admin.py` | Admin API controller; maps `AnnotationError` subclasses to HTTP status codes |
-| `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status`, `/fx/data`, including the exporter's health), webapp serving |
-| `export_loop.py` | The exporter process (`upslope export-loop`): checks on the clock, time limits, `export-status.json` |
+| `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status` from `forecasts/index.json`, refreshed in the background; `/fx/data`), webapp serving |
+| `export_loop.py` | The exporter process (`upslope export-loop`): checks on the clock, time limits, `export-status.json` (the driver writes `index.json`) |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris; conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |

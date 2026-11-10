@@ -19,11 +19,11 @@ from PIL import Image
 
 from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot, snapshot_image_path
-from upslope.clients.forecasts import ForecastStore
+from upslope.clients.forecasts import INDEX, ForecastStore
 from upslope.cli.main import main
 from upslope.models.config import ConfigError, DynamicalLayerConfig, DynamicalSourceConfig, FieldConfig, HourRange, LayerConfig, ModelConfig, ModelsConfig
 from upslope.models.driver import CheckReport, ForecastDriver
-from upslope.models.manifest import Legend, LegendStop, RunManifest, RunPointer, ValueEncoding
+from upslope.models.manifest import ForecastIndex, Legend, LegendStop, ModelIndex, RunManifest, RunPointer, ValueEncoding
 from upslope.models.source import NotPublished, RenderedFrame, SourceUnavailable
 from upslope.models.uw_wrf.image_client import ImageClient, Throttle
 from upslope.models.uw_wrf.source import UwWrfSource
@@ -1016,3 +1016,101 @@ def test_frame_errors_are_reported_for_retry(memory_storage, published) -> None:
     upstream.fail, upstream.status = "2026102200/images_d3/wa_tsfc.03", 503
     (model,) = check(driver).models
     assert (model.state, model.layer_errors) == ("ok", ["surface-temp hour 3: HTTP 503"])
+
+
+# --- the index the server reads (forecasts/index.json)
+
+
+def index_writes(memory_storage) -> list[ForecastIndex]:
+    """Record each index written to `memory_storage`."""
+    writes: list[ForecastIndex] = []
+    original = memory_storage.put_bytes
+
+    def put_bytes(key: str, data: bytes, *args, **kwargs):
+        if key == INDEX:
+            writes.append(ForecastIndex.from_json(data))
+        return original(key, data, *args, **kwargs)
+
+    memory_storage.put_bytes = put_bytes
+    return writes
+
+
+def test_index_matches_each_models_files_after_a_check(memory_storage) -> None:
+    store = ForecastStore(memory_storage)
+    store.write_index(ForecastIndex([ModelIndex("retired")]))  # no longer configured: dropped
+    driver = ForecastDriver(
+        ModelsConfig(TWO_MODELS), {"uw_wrf": FakeSource({INITIALIZED: 999, NEXT: 0})}, store, now=lambda: NEXT + timedelta(hours=1)
+    )
+    writes = index_writes(memory_storage)
+    check(driver)
+    # once up front, adding the models it lacked (empty: nothing exported yet), then as each model finished
+    assert len(writes) == 3 and [m.runs for m in writes[0].models] == [[], []]
+    index = store.read_index()
+    assert [m.id for m in index.models] == ["uwwrf_4km", "uwwrf_12km"]
+    assert index.models == [store.read_model_index("uwwrf_4km"), store.read_model_index("uwwrf_12km")]
+    assert (index.models[0].latest.initialized, index.models[0].in_progress.initialized) == (INITIALIZED, NEXT)
+    assert index.models[0].runs == [NEXT, INITIALIZED]
+    assert index.updated_at == NEXT + timedelta(hours=1)
+
+    # nothing new: the index isn't rewritten
+    check(driver)
+    assert len(writes) == 3
+
+
+def test_index_includes_what_a_failed_model_exported(memory_storage) -> None:
+    source = SlowSource({INITIALIZED: 999}, stuck="uwwrf_12km")
+    store = ForecastStore(memory_storage)
+    driver = ForecastDriver(ModelsConfig(TWO_MODELS), {"uw_wrf": source}, store, now=lambda: NOW, model_timeout=0.2)
+    check(driver)
+    assert store.read_index().models == [store.read_model_index("uwwrf_4km"), ModelIndex("uwwrf_12km")]
+
+
+def test_index_write_failures_dont_fail_the_check_and_are_retried(memory_storage) -> None:
+    store = ForecastStore(memory_storage)
+    driver = make_fake_driver(memory_storage, FakeSource({INITIALIZED: 999}))
+    original = memory_storage.put_bytes
+
+    def broken(key: str, *args, **kwargs):
+        if key == INDEX:
+            raise RuntimeError("s3 down")
+        return original(key, *args, **kwargs)
+
+    memory_storage.put_bytes = broken
+    report = check(driver)
+    assert not report.failed and store.read_index() is None
+
+    memory_storage.put_bytes = original
+    check(driver)  # nothing new to export, but the index is still behind storage
+    assert store.read_index().models == [store.read_model_index("uwwrf_4km")]
+
+
+def test_index_is_reread_at_each_check(memory_storage) -> None:
+    """Another writer (`upslope export-web`, run by hand) may have changed the index; it's compared against storage."""
+    store = ForecastStore(memory_storage)
+    driver = ForecastDriver(ModelsConfig(TWO_MODELS), {"uw_wrf": FakeSource({INITIALIZED: 999})}, store, now=lambda: NOW)
+    check(driver)
+    expected = store.read_index().models
+    store.write_index(ForecastIndex(expected[:1]))  # written by a process with only uwwrf_4km configured
+    check(driver)
+    assert store.read_index().models == expected
+
+
+def test_models_missing_from_the_index_are_added_before_checking(memory_storage) -> None:
+    """When the index is first written, models still being checked aren't left out of it meanwhile."""
+    store = ForecastStore(memory_storage)
+    without_index = ForecastDriver(
+        ModelsConfig(TWO_MODELS), {"uw_wrf": FakeSource({INITIALIZED: 999})}, store, now=lambda: NOW, publish_index=False
+    )
+    check(without_index)
+    assert store.read_index() is None
+    seen: list[ForecastIndex | None] = []
+
+    class Watching(FakeSource):
+        async def render_frame(self, *args) -> RenderedFrame:
+            seen.append(store.read_index())
+            return await super().render_frame(*args)
+
+    driver = ForecastDriver(ModelsConfig(TWO_MODELS), {"uw_wrf": Watching({INITIALIZED: 999, NEXT: 999})}, store, now=lambda: NEXT + timedelta(hours=1))
+    check(driver)
+    assert [m.id for m in seen[0].models] == ["uwwrf_4km", "uwwrf_12km"]
+    assert all(m.latest.initialized == INITIALIZED for m in seen[0].models)

@@ -6,8 +6,7 @@
 """
 
 import asyncio
-import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 from email.utils import format_datetime
@@ -20,10 +19,10 @@ from litestar.exceptions import NotFoundException
 from litestar.params import FromPath
 from litestar.response import Stream
 
-from upslope.clients.forecasts import PREFIX, ForecastStore
+from upslope.clients.forecasts import EXPORT_STATUS, INDEX, PREFIX, ForecastStore
 from upslope.logging import get_logger
 from upslope.models.config import ModelConfig, ModelsConfig
-from upslope.models.manifest import ExportStatus, InProgress, run_path
+from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, ModelIndex, run_path
 
 logger = get_logger(__name__)
 
@@ -161,77 +160,120 @@ class ForecastStatus:
 
 
 class StatusCache:
-    """Cached `ForecastStatus`. Listing runs takes a few S3 requests, so it's refreshed when older than
-    `max_age` seconds, or on demand via `refresh`. The exporter is another process, so its changes show up
-    within `max_age`.
+    """The forecast status, kept in memory and refreshed in the background, so a request never waits on storage.
+
+    It's built from `forecasts/index.json`, which the exporter (another process) rewrites as each model's
+    check finishes, and `export-status.json`. Both are re-read every `refresh_interval` seconds with their
+    ETags, so an unchanged file costs one small request. Until the exporter has written the index (e.g. right
+    after it's first deployed), every model's files are read instead, which is slow but still in the background.
+    Only the first request, if the startup refresh failed, waits for storage.
+
+    The parts that depend on the time (stalled layers, an overdue exporter) are worked out per request.
     """
 
     def __init__(
         self,
         store: ForecastStore,
         config: ModelsConfig,
-        max_age: float = 60.0,
+        refresh_interval: float = 60.0,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._store = store
         self._config = config
-        self._max_age = max_age
+        self._refresh_interval = refresh_interval
         self._now = now
-        self._status: ForecastStatus | None = None
-        self._fetched_at: float | None = None
+        self._sleep = sleep
+        self._index: ForecastIndex | None = None
+        self._export: ExportStatus | None = None
+        self._etags: dict[str, str | None] = {}
+        self._loaded = False
         self._lock = asyncio.Lock()
 
-    def _stale(self) -> bool:
-        return self._fetched_at is None or time.monotonic() - self._fetched_at > self._max_age
+    def _read_changed(self, key: str) -> tuple[bool, bytes | None, str | None]:
+        """Read an object unless it's unchanged since the last read.
 
-    def _read(self) -> ForecastStatus:
+        Returns:
+            Whether it changed, its data (None if missing or unchanged) and its ETag, to record once parsed.
+        """
+        obj = self._store.storage.get_object(key, self._etags.get(key))
+        if obj is None:
+            return True, None, None
+        if obj.not_modified:
+            return False, None, obj.etag
+        return True, b"".join(obj.body or ()), obj.etag
+
+    async def _read_index(self) -> ForecastIndex | None:
+        changed, data, etag = await asyncio.to_thread(self._read_changed, INDEX)
+        if not changed:
+            return self._index
+        if data is not None:
+            index = ForecastIndex.from_json(data)
+            self._etags[INDEX] = etag
+            return index
+        logger.warning("the exporter hasn't written %s yet; reading every model's runs instead", INDEX)
+        entries = await asyncio.gather(
+            *(asyncio.to_thread(self._store.read_model_index, model.id) for model in self._config.models)
+        )
+        self._etags.pop(INDEX, None)
+        return ForecastIndex(list(entries), self._now())
+
+    async def _read_export(self) -> ExportStatus | None:
+        changed, data, etag = await asyncio.to_thread(self._read_changed, EXPORT_STATUS)
+        if not changed:
+            return self._export
+        export = None if data is None else ExportStatus.from_json(data)
+        self._etags[EXPORT_STATUS] = etag
+        return export
+
+    async def _refresh(self) -> None:
+        # callers hold self._lock
+        index, export = await asyncio.gather(self._read_index(), self._read_export())
+        self._index, self._export, self._loaded = index, export, True
+        if export is not None and self._now() > export.overdue_after:
+            logger.warning("the exporter is overdue: its last status (check %d, %s) was due again by %s", export.check, export.state, export.overdue_after)
+
+    async def refresh(self) -> None:
+        """Read the index and the exporter's status from storage now. Raises if storage can't be read."""
+        async with self._lock:
+            await self._refresh()
+
+    async def run_forever(self) -> None:
+        """Refresh every `refresh_interval` seconds until cancelled; a failed refresh is logged and retried."""
+        while True:
+            await self._sleep(self._refresh_interval)
+            try:
+                await self.refresh()
+            except Exception:
+                logger.exception("could not refresh the forecast status; serving the last one read")
+
+    async def get(self) -> ForecastStatus:
+        """The status as of the last refresh. Reads storage first only if nothing has been read yet."""
+        if not self._loaded:
+            async with self._lock:
+                # requests that queued behind another's first refresh reuse its result
+                if not self._loaded:
+                    await self._refresh()
+        return self._status()
+
+    def _status(self) -> ForecastStatus:
+        now = self._now()
+        index = self._index or ForecastIndex()
         models = []
         for model in self._config.models:
-            latest = self._store.read_latest(model.id)
-            progress = self._store.read_in_progress(model.id)
-            runs = [RunRef(initialized, run_path(initialized)) for initialized in self._store.list_runs(model.id)]
+            entry = index.model(model.id) or ModelIndex(model.id)
+            latest, progress = entry.latest, entry.in_progress
             models.append(
                 ModelStatus(
                     model.id,
                     model.name,
                     None if latest is None else RunRef(latest.initialized, latest.path),
-                    None if progress is None else in_progress_status(model, progress, self._now()),
-                    runs,
+                    None if progress is None else in_progress_status(model, progress, now),
+                    [RunRef(initialized, run_path(initialized)) for initialized in entry.runs],
                 )
             )
-        export = self._store.read_export_status()
-        overdue = export is not None and self._now() > export.overdue_after
-        if overdue:
-            logger.warning("the exporter is overdue: its last status (check %d, %s) was due again by %s", export.check, export.state, export.overdue_after)
-        return ForecastStatus(models, export, overdue)
-
-    async def _fetch(self) -> ForecastStatus:
-        # callers hold self._lock
-        status = await asyncio.to_thread(self._read)
-        self._status, self._fetched_at = status, time.monotonic()
-        return status
-
-    async def refresh(self) -> ForecastStatus:
-        """Read the status from storage now."""
-        async with self._lock:
-            return await self._fetch()
-
-    async def get(self) -> ForecastStatus:
-        """The status, refreshing first if the cached copy is stale.
-
-        If a refresh fails but a status is already cached, the cached one is returned and the error logged.
-        """
-        if not self._stale() and self._status is not None:
-            return self._status
-        try:
-            async with self._lock:
-                # requests that queued behind another's refresh reuse its result
-                return await self._fetch() if self._stale() or self._status is None else self._status
-        except Exception:
-            if self._status is None:
-                raise
-            logger.exception("could not refresh forecast status; serving cached status")
-            return self._status
+        export = self._export
+        return ForecastStatus(models, export, export is not None and now > export.overdue_after)
 
 
 def _validate_path(path: str) -> None:

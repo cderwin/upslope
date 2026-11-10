@@ -8,6 +8,9 @@ come from is up to each model's source (`upslope.models.source`); everything els
 Models are checked concurrently, each in its own task: a slow or failing model never holds up the others.
 Within a model, runs, layers and hours go in order, since each layer resumes after its newest frame. Storage
 and raster work is blocking, so it runs in threads.
+
+As each model's check finishes, its entry in `forecasts/index.json` is refreshed from its files in storage, and
+the index is written if the entry changed. The server reads that one object instead of every model's files.
 """
 
 import asyncio
@@ -24,12 +27,14 @@ import rasterio
 from attrs import define, evolve, field
 
 from upslope.clients.forecasts import ForecastStore
-from upslope.logging import get_logger, log_context
+from upslope.logging import get_logger, log_context, log_duration
 from upslope.models.config import AnyLayerConfig, ModelConfig, ModelsConfig
 from upslope.models.manifest import (
+    ForecastIndex,
     Frame,
     InProgress,
     LayerProgress,
+    ModelIndex,
     RunLayer,
     RunManifest,
     RunPointer,
@@ -152,6 +157,7 @@ class ForecastDriver:
             model, a config change, an outage) then takes several checks, while every model keeps advancing.
         model_timeout: Most seconds one model may take in a check, or None for no limit. A model that takes
             longer is stopped and reported as failed; what it exported so far is kept, and it resumes at the next check.
+        publish_index: Refresh `forecasts/index.json` as each model's check finishes.
     """
 
     config: ModelsConfig
@@ -160,6 +166,10 @@ class ForecastDriver:
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
     frames_per_model: int | None = None
     model_timeout: float | None = None
+    publish_index: bool = True
+    # the index as last read or written; models finish concurrently, so updates take the lock
+    _index: ForecastIndex | None = field(default=None, init=False)
+    _index_lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
 
     async def run(self, force: bool = False) -> CheckReport:
         """Check every configured model for new frames and export them, all models at once.
@@ -183,10 +193,75 @@ class ForecastDriver:
                 except Exception as e:
                     logger.exception("could not start the %s check", kind)
                     unavailable[kind] = f"could not start the check: {describe(e)}"
+            if self.publish_index:
+                await self._load_index()
             reports = await asyncio.gather(
-                *(self._check_model(model, force, unavailable.get(model.source.kind)) for model in self.config.models)
+                *(self._check_and_index(model, force, unavailable.get(model.source.kind)) for model in self.config.models)
             )
         return CheckReport(list(reports))
+
+    async def _check_and_index(self, model: ModelConfig, force: bool, unavailable: str | None) -> ModelReport:
+        report = await self._check_model(model, force, unavailable)
+        if self.publish_index:
+            with log_context(model.id):
+                await self.update_index(model)
+        return report
+
+    async def _load_index(self) -> None:
+        # read at the start of every check, so a write by anything else (e.g. `upslope export-web`) is kept
+        try:
+            self._index = await asyncio.to_thread(self.store.read_index)
+        except Exception:
+            logger.exception("could not read the index; it will be rewritten as models finish")
+            self._index = None
+            return
+        # Models missing from the index (it's new, or so is the model) would be missing from /fx/status until
+        # their check finishes, which can take a while; add what storage has for them first.
+        index = self._index or ForecastIndex()
+        missing = [model for model in self.config.models if index.model(model.id) is None]
+        if not missing:
+            return
+        try:
+            with log_duration(logger, f"added {len(missing)} models to the index"):
+                entries = await asyncio.gather(*(asyncio.to_thread(self.store.read_model_index, m.id) for m in missing))
+                updated = self._build_index({m.id: m for m in index.models} | {entry.id: entry for entry in entries})
+                await asyncio.to_thread(self.store.write_index, updated)
+            self._index = updated
+        except Exception:
+            logger.exception("could not add models to the index; they'll be added as their checks finish")
+
+    def _build_index(self, entries: Mapping[str, ModelIndex]) -> ForecastIndex:
+        # in config order; models no longer configured are dropped
+        return ForecastIndex([entries[m.id] for m in self.config.models if m.id in entries], self.now())
+
+    async def update_index(self, model: ModelConfig) -> bool:
+        """Refresh a model's entry in `forecasts/index.json` from its files in storage, writing the index if it changed.
+
+        Whatever the model's check did (even if it failed partway), the entry then matches storage. Errors are
+        logged, not raised: the entry is retried after the model's next check.
+
+        Args:
+            model: The model whose check just finished.
+
+        Returns:
+            Whether the index was written.
+        """
+        try:
+            entry = await asyncio.to_thread(self.store.read_model_index, model.id)
+            async with self._index_lock:
+                current = self._index or ForecastIndex()
+                configured = {m.id for m in self.config.models}
+                unconfigured = any(m.id not in configured for m in current.models)
+                if self._index is not None and current.model(model.id) == entry and not unconfigured:
+                    return False
+                updated = self._build_index({m.id: m for m in current.models} | {model.id: entry})
+                await asyncio.to_thread(self.store.write_index, updated)
+                self._index = updated
+            logger.info("updated the index")
+            return True
+        except Exception:
+            logger.exception("could not update the index")
+            return False
 
     async def _check_model(self, model: ModelConfig, force: bool, unavailable: str | None) -> ModelReport:
         """Check one model, turning whatever goes wrong into its report rather than raising."""
