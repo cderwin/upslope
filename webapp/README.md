@@ -30,7 +30,7 @@ the URL and can be shared.
 The **Annotation** nav link appears only while an admin token is stored; the
 page itself still works by URL and asks for the token. The gear button in the
 navbar opens **Settings** (`src/settings/`): log in or out (store or clear the
-token) and set the playback speed. Settings are kept in `localStorage`.
+token), set the playback speed and pick a default model for the map. Settings are kept in `localStorage`.
 
 ## Where the data comes from
 
@@ -54,10 +54,18 @@ VITE_MAPBOX_TOKEN=pk....
 # VITE_FORECAST_BASE_URL=https://forecast-api.example  # defaults to /fx
 ```
 
-The page fetches `<base>/status`, then each model's run manifest
-(`<base>/data/<model>/<run>/manifest.json`), and shows every layer of every
-model in one list, labeled with the model and layer names from the server's
-config. By default each model's latest complete run is shown. `?run=2026-10-29T00Z`
+The page fetches `<base>/status`, which lists the variables (layer ids shared
+across models, from the server's config) and each model's layers, then the
+selected model's run manifest (`<data_url>/<model>/<run>/manifest.json`), and
+the other models' in the background so switching is instant. The controls pick
+a **Variable** (under its group heading) and then a **Model** among those that
+have it, each labeled with its run; ones with no frames in the run shown are
+disabled. Switching to a variable the current model lacks switches to the
+viewer's default model (set in Settings), else the config's `default_model`,
+else the first model that has it; `/map` with no model opens on the same
+default. Switching models keeps the valid time, not the forecast hour, since
+models' runs start at different times. `/map/<model>/<variable>` URLs are
+unchanged. By default each model's latest complete run is shown. `?run=2026-10-29T00Z`
 shows that run instead (any run kept in storage, a week by default), with a
 banner linking back to the latest; an unknown run lists the available ones.
 `?run=in-progress` previews each model's newest run while it's still being
@@ -118,6 +126,7 @@ src/views/                     One component per route
 src/forecast/
   types.ts                     Forecast API types (status, run manifests) and map layers
   api.ts                       Forecast API (VITE_FORECAST_BASE_URL), ?run= parsing
+  selection.ts                 Which variable and model to show; the pickers' options
   usePlayback.ts               Frame selection, playback, preloading
   components/                  ForecastMap (Mapbox), MapControls, RunStatusDialog
 src/admin/
@@ -126,7 +135,7 @@ src/admin/
   TokenDialog.vue              Token prompt
 src/settings/
   settings.ts                  Viewer preferences (localStorage)
-  SettingsDialog.vue           Login/logout and playback speed
+  SettingsDialog.vue           Login/logout, playback speed and default model
 src/annotation/
   types.ts                     Admin API document and dialog payload types
   api.ts                       /admin/georegistration client

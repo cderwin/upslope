@@ -40,6 +40,8 @@ export interface InProgressStatus {
 export interface ModelStatus {
   id: string
   name: string
+  /** Ids of the variables the model is configured with. */
+  layers: string[]
   /** Newest complete run, if any has been exported. */
   latest: RunRef | null
   /** Newest run that has started, and how far it has got. */
@@ -48,9 +50,22 @@ export interface ModelStatus {
   runs: RunRef[]
 }
 
+/** Something layers show, whichever model they come from (python `VariableConfig`). */
+export interface Variable {
+  /** The id of every layer showing it, e.g. `freezing-level`. */
+  id: string
+  name: string
+  /** Heading it's listed under, e.g. `Snow`. */
+  group: string | null
+}
+
 /** `GET <base>/status` (python `ForecastStatus`). */
 export interface ForecastStatus {
   models: ModelStatus[]
+  /** In display order. */
+  variables: Variable[]
+  /** Model to show when the viewer hasn't picked one, or theirs lacks a variable. */
+  default_model: string | null
   /** Base URL of the forecast files (manifests and frames) in the public bucket. */
   data_url: string
 }

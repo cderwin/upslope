@@ -14,6 +14,8 @@ export const FRAME_INTERVAL_MAX_MS = 4000
 interface Settings {
   /** Playback delay between forecast frames. */
   frameIntervalMs: number
+  /** Model the map opens on, and switches to when the current one lacks a variable; null for the server's default. */
+  defaultModel: string | null
 }
 
 function clampInterval(ms: number): number {
@@ -22,10 +24,11 @@ function clampInterval(ms: number): number {
 }
 
 function readStored(): Settings {
-  const settings: Settings = { frameIntervalMs: FRAME_INTERVAL_DEFAULT_MS }
+  const settings: Settings = { frameIntervalMs: FRAME_INTERVAL_DEFAULT_MS, defaultModel: null }
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<Settings>
     if (typeof stored.frameIntervalMs === 'number') settings.frameIntervalMs = clampInterval(stored.frameIntervalMs)
+    if (typeof stored.defaultModel === 'string') settings.defaultModel = stored.defaultModel
   } catch {
     // Unreadable or blocked storage: use the defaults.
   }
@@ -46,4 +49,9 @@ export const settings = readonly(state)
 
 export function setFrameInterval(ms: number): void {
   state.frameIntervalMs = clampInterval(ms)
+}
+
+/** Null uses the server's default model. */
+export function setDefaultModel(model: string | null): void {
+  state.defaultModel = model || null
 }

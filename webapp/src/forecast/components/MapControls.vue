@@ -1,16 +1,24 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { layerKey, layerLabel, runLabel as formatRun } from '@/forecast/api'
+import { runLabel as formatRun } from '@/forecast/api'
+import type { ModelChoice, Selection, VariableGroup } from '@/forecast/selection'
 import type { ForecastLayer } from '@/forecast/types'
 
 const props = defineProps<{
-  layers: ForecastLayer[]
+  variables: VariableGroup[]
+  models: ModelChoice[]
+  selection: Selection
   layer: ForecastLayer
   hours: number[]
   loadProgress: number
 }>()
 
-const emit = defineEmits<{ selectLayer: [key: string]; step: [delta: number] }>()
+const emit = defineEmits<{ selectVariable: [id: string]; selectModel: [id: string]; step: [delta: number] }>()
+
+/** e.g. `HRRR 3km · Nov 9 12Z`, or `HRRR 3km · no run` for a model without the run being shown. */
+function modelLabel(model: ModelChoice): string {
+  return `${model.name} · ${model.initialized ? formatRun(model.initialized) : 'no run'}`
+}
 
 const index = defineModel<number>('index', { required: true })
 const opacity = defineModel<number>('opacity', { required: true })
@@ -54,18 +62,38 @@ const framesLabel = computed(() =>
 <template>
   <div class="map-controls card shadow-sm">
     <div class="card-body vstack gap-3">
-      <div>
-        <label class="form-label small mb-1" for="forecast-layer">Layer</label>
-        <select
-          id="forecast-layer"
-          class="form-select form-select-sm"
-          :value="layerKey(layer)"
-          @change="emit('selectLayer', ($event.target as HTMLSelectElement).value)"
-        >
-          <option v-for="option in layers" :key="layerKey(option)" :value="layerKey(option)">
-            {{ layerLabel(option) }}
-          </option>
-        </select>
+      <div class="vstack gap-2">
+        <div>
+          <label class="form-label small mb-1" for="forecast-variable">Variable</label>
+          <select
+            id="forecast-variable"
+            class="form-select form-select-sm"
+            :value="selection.variable"
+            @change="emit('selectVariable', ($event.target as HTMLSelectElement).value)"
+          >
+            <template v-for="group in variables" :key="group.name ?? ''">
+              <optgroup v-if="group.name" :label="group.name">
+                <option v-for="v in group.variables" :key="v.id" :value="v.id" :disabled="v.disabled">{{ v.name }}</option>
+              </optgroup>
+              <template v-else>
+                <option v-for="v in group.variables" :key="v.id" :value="v.id" :disabled="v.disabled">{{ v.name }}</option>
+              </template>
+            </template>
+          </select>
+        </div>
+        <div>
+          <label class="form-label small mb-1" for="forecast-model">Model</label>
+          <select
+            id="forecast-model"
+            class="form-select form-select-sm"
+            :value="selection.model"
+            @change="emit('selectModel', ($event.target as HTMLSelectElement).value)"
+          >
+            <option v-for="model in models" :key="model.id" :value="model.id" :disabled="model.disabled">
+              {{ modelLabel(model) }}
+            </option>
+          </select>
+        </div>
       </div>
 
       <div>
