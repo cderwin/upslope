@@ -22,7 +22,10 @@ from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot, snapshot_image_path
 from upslope.clients.forecasts import IMMUTABLE_CACHE_CONTROL, INDEX, ForecastStore
 from upslope.cli.main import main
-from upslope.models.config import ConfigError, DynamicalLayerConfig, DynamicalSourceConfig, FieldConfig, HourRange, LayerConfig, ModelConfig, ModelsConfig
+from upslope.models.config import (
+    ConfigError, DynamicalLayerConfig, DynamicalSourceConfig, FieldConfig, HourRange, LayerConfig, ModelConfig, ModelsConfig,
+    VariableConfig,
+)
 from upslope.models.driver import CheckReport, ForecastDriver
 from upslope.models.manifest import ForecastIndex, Legend, content_digest, LegendStop, ModelIndex, RunManifest, RunPointer, ValueEncoding
 from upslope.models.source import NotPublished, RenderedFrame, SourceUnavailable
@@ -83,7 +86,7 @@ def test_configured_ids_match_existing_map_urls() -> None:
     assert model is not None
     assert {layer.id for layer in model.layers} >= {
         "surface-temp", "10m-wind-speed", "integrated-cloud", "longwave", "3-hour-precip", "snow", "model-snow",
-        "accumulated-snowfall", "freezing-level-terrain", "freezing-level", "snow-depth",
+        "accumulated-snowfall", "freezing-level", "snow-depth",
     }
 
 
@@ -138,15 +141,59 @@ def test_invalid_config_raises(build) -> None:
         build()
 
 
+# The top of a minimal config file: one variable, `a`, and model `m` as the default
+HEADER = "default_model: m\nvariables:\n  - {id: a, name: A, group: G}\n"
+LAYER_YAML = "{id: a, url: 'https://x/{init:%Y}/{hour}.gif', hours: {last: 3}, maptype: w}"
+
+
+def test_layers_take_their_variables_names(tmp_path: Path) -> None:
+    path = tmp_path / "models.yaml"
+    path.write_text(HEADER + f"models:\n  - {{id: m, name: M, start_times: [0], layers: [{LAYER_YAML}]}}\n")
+    config = ModelsConfig.load(path)
+    assert config.models[0].layers[0].name == "A"
+    assert config.variables == [VariableConfig("a", "A", "G")] and config.default_model == "m"
+
+
+@pytest.mark.parametrize(
+    ("text", "problem"),
+    [
+        # a layer that isn't a variable
+        (HEADER.replace("{id: a,", "{id: b,") + f"models:\n  - {{id: m, name: M, start_times: [0], layers: [{LAYER_YAML}]}}\n", "isn't one of the variables"),
+        # a layer named in the file
+        (HEADER + f"models:\n  - {{id: m, name: M, start_times: [0], layers: [{LAYER_YAML.replace('{id: a,', '{id: a, name: X,')}]}}\n", "remove `name`"),
+        # a default model that isn't configured
+        (HEADER.replace("default_model: m", "default_model: z") + f"models:\n  - {{id: m, name: M, start_times: [0], layers: [{LAYER_YAML}]}}\n", "default_model"),
+        # no default model, no variables
+        (f"variables: []\nmodels:\n  - {{id: m, name: M, start_times: [0], layers: []}}\n", "default_model"),
+        (f"default_model: m\nmodels:\n  - {{id: m, name: M, start_times: [0], layers: []}}\n", "variables"),
+        # the same variable twice
+        (HEADER + "  - {id: a, name: B}\n" + f"models:\n  - {{id: m, name: M, start_times: [0], layers: [{LAYER_YAML}]}}\n", "duplicate variable"),
+    ],
+)
+def test_variables_are_checked(tmp_path: Path, text: str, problem: str) -> None:
+    path = tmp_path / "models.yaml"
+    path.write_text(text)
+    with pytest.raises(ConfigError, match=problem):
+        ModelsConfig.load(path)
+
+
+def test_configured_variables_cover_every_layer() -> None:
+    config = ModelsConfig.load(DEFAULT_MODELS_CONFIG)
+    used = {layer.id for model in config.models for layer in model.layers}
+    assert used == {variable.id for variable in config.variables}
+    assert all(variable.group for variable in config.variables)
+    assert config.model(config.default_model) is not None
+
+
 def test_load_reports_the_problem_and_where(tmp_path: Path) -> None:
     path = tmp_path / "models.yaml"
     path.write_text(
-        "models:\n"
-        "  - {id: m, name: M, start_times: [0], layers: [{id: a, name: A, url: 'https://x/{init:%Y}/{hr}.gif', hours: {last: 3}, maptype: w}]}\n"
+        HEADER + "models:\n"
+        "  - {id: m, name: M, start_times: [0], layers: [{id: a, url: 'https://x/{init:%Y}/{hr}.gif', hours: {last: 3}, maptype: w}]}\n"
     )
     with pytest.raises(ConfigError, match=r"\['hr', 'init'\].*models\[0\]\.layers\[0\]"):
         ModelsConfig.load(path)
-    path.write_text("models:\n  - {id: m, name: M, start_times: [0], layers: [], typo: 1}\n")
+    path.write_text(HEADER + "models:\n  - {id: m, name: M, start_times: [0], layers: [], typo: 1}\n")
     with pytest.raises(ConfigError):
         ModelsConfig.load(path)
 
@@ -178,8 +225,8 @@ def test_initializations_follow_start_times() -> None:
 def test_configured_fingerprints_are_stable() -> None:
     """A changed fingerprint re-exports every retained run of the model, so config refactors must keep them."""
     config = ModelsConfig.load(DEFAULT_MODELS_CONFIG)
-    assert config.model("uwwrf_4km").fingerprint() == "e1359839afb6d730"
-    assert config.model("uwwrf_1.33km").fingerprint() == "4ac7afb08cb8b50b"
+    assert config.model("uwwrf_4km").fingerprint() == "7ff57d2ef37f7c7a"
+    assert config.model("uwwrf_1.33km").fingerprint() == "b22d7d5b7d40dcd4"
 
 
 def test_model_source_defaults_to_uw_wrf(tmp_path: Path) -> None:
@@ -187,9 +234,9 @@ def test_model_source_defaults_to_uw_wrf(tmp_path: Path) -> None:
     assert {model.source.kind for model in ModelsConfig.load(DEFAULT_MODELS_CONFIG).models} == {"uw_wrf", "dynamical"}
     path = tmp_path / "models.yaml"
     path.write_text(
-        "models:\n"
+        HEADER + "models:\n"
         "  - {id: m, name: M, start_times: [0], source: {kind: elsewhere},"
-        " layers: [{id: a, name: A, url: 'https://x/{init:%Y}/{hour}.gif', hours: {last: 3}, maptype: w}]}\n"
+        " layers: [{id: a, url: 'https://x/{init:%Y}/{hour}.gif', hours: {last: 3}, maptype: w}]}\n"
     )
     with pytest.raises(ConfigError, match="source"):
         ModelsConfig.load(path)

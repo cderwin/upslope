@@ -1,6 +1,8 @@
 """Forecast models and their image layers, loaded from `python/config/models.yaml`.
 
-Each model names its source (where its frames come from). A UW WRF layer names a URL template for its
+The config lists the variables layers can show (`variables`), and each model's layers. A layer's id is a
+variable's id, and its display name is the variable's, so the same variable from two models is one choice
+on the map. Each model names its source (where its frames come from). A UW WRF layer names a URL template for its
 images; a dynamical.org layer names the dataset variables it shows and how to color them. So adding a
 layer or a model takes only config. Everything is validated at load time, so a typo fails at startup
 rather than during an export (a variable missing from a dataset is the exception: it shows up as the
@@ -15,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal, Self
 
+import yaml
 from attrs import define, field
 from cattrs import transform_error
 from cattrs.preconf.pyyaml import make_converter
@@ -325,20 +328,62 @@ class ModelConfig:
 
 
 @define(frozen=True)
+class VariableConfig:
+    """Something layers show, whichever model they come from: the map's variable choices.
+
+    Attributes:
+        id: Stable identifier: the id of every layer showing it.
+        name: Display name, which its layers take.
+        group: Heading it's listed under on the map, e.g. `Snow`.
+    """
+
+    id: str
+    name: str
+    group: str | None = None
+
+    def __attrs_post_init__(self) -> None:
+        _check_id("variable", self.id)
+
+
+@define(frozen=True)
 class ModelsConfig:
-    """Every configured model.
+    """Every configured model, and the variables their layers show.
 
     Attributes:
         models: The models, in display order.
+        variables: The variables, in display order. Loaded configs list every layer's; a config built in
+            code may leave them out.
+        default_model: Model the map shows when the viewer hasn't picked one, or the one picked lacks a variable.
     """
 
     models: list[ModelConfig] = field()
+    variables: list[VariableConfig] = field(factory=list)
+    default_model: str | None = None
 
     @models.validator
     def _check_models(self, _attribute, models: list[ModelConfig]) -> None:
         ids = [model.id for model in models]
         if duplicates := sorted({i for i in ids if ids.count(i) > 1}):
             raise ConfigError(f"duplicate model ids {duplicates}")
+
+    def __attrs_post_init__(self) -> None:
+        ids = [variable.id for variable in self.variables]
+        if duplicates := sorted({i for i in ids if ids.count(i) > 1}):
+            raise ConfigError(f"duplicate variable ids {duplicates}")
+        if self.variables:
+            names = {variable.id: variable.name for variable in self.variables}
+            for model in self.models:
+                for layer in model.layers:
+                    if layer.id not in names:
+                        raise ConfigError(f"model {model.id}: layer {layer.id} isn't one of the variables")
+                    if layer.name != names[layer.id]:
+                        raise ConfigError(f"model {model.id}: layer {layer.id} must be named {names[layer.id]!r}, as its variable")
+        if self.default_model is not None and self.model(self.default_model) is None:
+            raise ConfigError(f"default_model {self.default_model!r} isn't a configured model")
+
+    def variable(self, variable_id: str) -> VariableConfig | None:
+        """Look up a variable by id."""
+        return next((variable for variable in self.variables if variable.id == variable_id), None)
 
     def model(self, model_id: str) -> ModelConfig | None:
         """Look up a model by id."""
@@ -365,9 +410,29 @@ class ModelsConfig:
             FieldConfig, lambda value, type_: FieldConfig((value,)) if isinstance(value, str) else structure_field(value, type_)
         )
         try:
-            return converter.loads(path.read_text(), cls)
+            return converter.structure(_name_layers(yaml.safe_load(path.read_text())), cls)
         except BaseExceptionGroup as e:
             raise ConfigError(f"invalid {path.name}: " + "; ".join(transform_error(e, format_exception=_format_error))) from e
+
+
+def _name_layers(data: object) -> object:
+    """Give each layer of a raw config its variable's name; a config file names variables, not layers."""
+    if not isinstance(data, dict):
+        raise ConfigError("the config must be a mapping")
+    for key in ("variables", "default_model"):
+        if key not in data:
+            raise ConfigError(f"the config needs `{key}`")
+    names = {v.get("id"): v.get("name") for v in data["variables"] or () if isinstance(v, dict)}
+    for model in data.get("models") or ():
+        for layer in (model.get("layers") or ()) if isinstance(model, dict) else ():
+            if not isinstance(layer, dict):
+                continue
+            if "name" in layer:
+                raise ConfigError(f"layer {layer.get('id')}: layers take their name from `variables`; remove `name`")
+            if layer.get("id") not in names:
+                raise ConfigError(f"model {model.get('id')}: layer {layer.get('id')} isn't one of the variables")
+            layer["name"] = names[layer["id"]]
+    return data
 
 
 def _format_error(exc: BaseException, type_: type | None) -> str:

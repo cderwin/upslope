@@ -44,7 +44,7 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `clients/storage.py` | `StorageClient` over S3/Tigris (`build()` the private bucket, `build_public()` the public one); conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
 | `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control) |
-| `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
+| `config/models.yaml` (in `python/`) | The variables layers show, the default model, and forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
 | `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
 | `models/uw_wrf/` | UW WRF source (`source.py`), throttled and retrying async image download and run detection (`image_client.py`), fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |

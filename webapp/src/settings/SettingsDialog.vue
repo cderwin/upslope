@@ -1,17 +1,38 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBootstrapModal } from '@/annotation/useBootstrapModal'
 import { adminToken, clearToken, requestToken } from '@/admin/token'
+import { fetchStatus } from '@/forecast/api'
+import type { ModelStatus } from '@/forecast/types'
 import {
   FRAME_INTERVAL_DEFAULT_MS,
   FRAME_INTERVAL_MAX_MS,
   FRAME_INTERVAL_MIN_MS,
+  setDefaultModel,
   setFrameInterval,
   settings,
 } from './settings'
 
 const open = defineModel<boolean>('open', { required: true })
+
+// The models to choose a default from, fetched when the dialog opens (the status is served from memory).
+const models = ref<ModelStatus[]>([])
+const serverDefault = ref<string | null>(null)
+const modelsError = ref('')
+watch(open, async (isOpen) => {
+  if (!isOpen || models.value.length) return
+  try {
+    const status = await fetchStatus()
+    models.value = status.models
+    serverDefault.value = status.default_model
+    modelsError.value = ''
+  } catch (e) {
+    modelsError.value = e instanceof Error ? e.message : String(e)
+  }
+})
+
+const serverDefaultName = computed(() => models.value.find((model) => model.id === serverDefault.value)?.name)
 
 const element = ref<HTMLElement | null>(null)
 useBootstrapModal(element, open, () => (open.value = false))
@@ -73,6 +94,30 @@ function logIn() {
               </button>
               <span>Slower</span>
             </div>
+          </section>
+
+          <section>
+            <h6>Default model</h6>
+            <label class="form-label small mb-1" for="settings-model">
+              The model the map opens on, and switches to when the one you're viewing doesn't have a variable.
+            </label>
+            <select
+              id="settings-model"
+              class="form-select form-select-sm"
+              :value="settings.defaultModel ?? ''"
+              @change="setDefaultModel(($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">Upslope's default{{ serverDefaultName ? ` (${serverDefaultName})` : '' }}</option>
+              <option v-for="model in models" :key="model.id" :value="model.id">{{ model.name }}</option>
+              <!-- a saved model that's no longer configured -->
+              <option
+                v-if="settings.defaultModel && models.length && !models.some((model) => model.id === settings.defaultModel)"
+                :value="settings.defaultModel"
+              >
+                {{ settings.defaultModel }} (no longer available)
+              </option>
+            </select>
+            <div v-if="modelsError" class="small text-danger mt-1">Could not load the models: {{ modelsError }}</div>
           </section>
 
           <section>

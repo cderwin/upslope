@@ -7,7 +7,7 @@ from litestar.testing import TestClient
 
 from upslope.clients.forecasts import EXPORT_STATUS, INDEX, ForecastStore
 from upslope.clients.storage import StoredObject
-from upslope.models.config import HourRange, LayerConfig, ModelConfig, ModelsConfig
+from upslope.models.config import HourRange, LayerConfig, ModelConfig, ModelsConfig, VariableConfig
 from upslope.models.manifest import (
     ExportStatus, ForecastIndex, InProgress, LayerProgress, ModelCheckStatus, ModelIndex, RunManifest, RunPointer,
 )
@@ -16,10 +16,11 @@ from upslope.server.forecast import STALL_AFTER, RunRef, StatusCache, in_progres
 
 INITIALIZED = datetime(2026, 10, 21, 12, tzinfo=UTC)
 LAYER = LayerConfig("surface-temp", "Surface temperature", "https://x/{init:%Y%m%d%H}/{hour:02d}.gif", HourRange(last=3), "washington")
-CONFIG = ModelsConfig([
-    ModelConfig("uwwrf_4km", "UW WRF 4km", [0, 12], [LAYER]),
-    ModelConfig("uwwrf_12km", "UW WRF 12km", [0, 12], [LAYER]),
-])
+CONFIG = ModelsConfig(
+    [ModelConfig("uwwrf_4km", "UW WRF 4km", [0, 12], [LAYER]), ModelConfig("uwwrf_12km", "UW WRF 12km", [0, 12], [LAYER])],
+    [VariableConfig("surface-temp", "Surface temperature", "Temperature")],
+    default_model="uwwrf_12km",
+)
 RUN_KEY = "forecasts/uwwrf_4km/2026/10/21/1200Z"
 # PUBLIC_DATA_URL, as conftest sets it
 DATA_URL = "https://data.example/forecasts"
@@ -77,6 +78,7 @@ def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
             {
                 "id": "uwwrf_4km",
                 "name": "UW WRF 4km",
+                "layers": ["surface-temp"],
                 "latest": {"initialized": "2026-10-21T12:00:00+00:00", "path": "2026/10/21/1200Z"},
                 "in_progress": None,
                 "runs": [
@@ -84,8 +86,10 @@ def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
                     {"initialized": "2026-10-21T00:00:00+00:00", "path": "2026/10/21/0000Z"},
                 ],
             },
-            {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "in_progress": None, "runs": []},
+            {"id": "uwwrf_12km", "name": "UW WRF 12km", "layers": ["surface-temp"], "latest": None, "in_progress": None, "runs": []},
         ],
+        "variables": [{"id": "surface-temp", "name": "Surface temperature", "group": "Temperature"}],
+        "default_model": "uwwrf_12km",
         "data_url": DATA_URL,
         "export": None,
         "export_overdue": False,

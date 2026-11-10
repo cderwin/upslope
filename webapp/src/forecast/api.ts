@@ -92,10 +92,6 @@ export function runLayers(base: string, manifest: RunManifest, run: RunRef, mode
   return layers
 }
 
-export function layerKey(layer: Pick<ForecastLayer, 'model' | 'id'>): string {
-  return `${layer.model}/${layer.id}`
-}
-
 /** e.g. `Oct 22 06Z`, the convention for model run times. */
 export function runLabel(initialized: string): string {
   const date = new Date(initialized)
@@ -121,8 +117,4 @@ export function ago(time: string | null, now: number = Date.now()): string {
   if (minutes < 90) return `${minutes} min ago`
   const hours = Math.round(minutes / 60)
   return hours < 48 ? `${hours} h ago` : `${Math.round(hours / 24)} days ago`
-}
-
-export function layerLabel(layer: Pick<ForecastLayer, 'modelName' | 'name'>): string {
-  return `${layer.modelName} · ${layer.name}`
 }

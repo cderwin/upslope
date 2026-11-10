@@ -11,20 +11,28 @@ import {
   dataBaseUrl,
   fetchRunManifest,
   fetchStatus,
-  layerKey,
   runLayers,
   runParam,
   runLabel,
   runPathFromParam,
   selectRun,
 } from '@/forecast/api'
+import {
+  modelChoices,
+  pickModel,
+  resolveSelection,
+  sameValidHour,
+  variableGroups,
+  type Choices,
+  type LoadedLayers,
+} from '@/forecast/selection'
 import type { ForecastLayer, ForecastStatus, RunRef } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
 import { adminToken } from '@/admin/token'
 import { useAnnotationStore } from '@/annotation/store'
 import { settings } from '@/settings/settings'
 
-/** Route params, so the selected layer is a shareable URL under /map. */
+/** Route params, so the selected model and variable (layer) are a shareable URL under /map. */
 const props = defineProps<{ model?: string; layer?: string }>()
 
 const DEFAULT_OPACITY = 0.7
@@ -35,16 +43,52 @@ const route = useRoute()
 const router = useRouter()
 const token = import.meta.env.VITE_MAPBOX_TOKEN ?? ''
 
-const layers = ref<ForecastLayer[]>([])
-const error = ref('')
-/** Retained runs, when `?run=` names one that isn't available. */
-const availableRuns = ref<RunRef[]>([])
 const status = ref<ForecastStatus | null>(null)
+/** Map-ready layers of each model's run, for the models whose manifest has loaded. */
+const modelLayers = ref<Record<string, ForecastLayer[]>>({})
+const error = ref('')
 const statusOpen = ref(false)
 
 /** `?run=`: a run other than the latest, e.g. `2026-10-29T00Z`, or `in-progress` to preview the newest run. */
 const runQuery = computed(() => (typeof route.query.run === 'string' ? route.query.run : undefined))
 const previewing = computed(() => runQuery.value === IN_PROGRESS)
+const runPath = computed(() => (runQuery.value === undefined ? null : runPathFromParam(runQuery.value)))
+
+const choices = computed<Choices | null>(() => {
+  if (!status.value) return null
+  const loaded: LoadedLayers = {}
+  for (const [model, layers] of Object.entries(modelLayers.value)) loaded[model] = new Set(layers.map((l) => l.id))
+  return { status: status.value, runPath: runPath.value, loaded, preferred: settings.defaultModel }
+})
+const selection = computed(() => (choices.value ? resolveSelection(choices.value, props.model, props.layer) : null))
+const variableOptions = computed(() => (choices.value ? variableGroups(choices.value) : []))
+const modelOptions = computed(() =>
+  choices.value && selection.value ? modelChoices(choices.value, selection.value.variable) : [],
+)
+
+/** The selected layer, once its model's manifest has loaded. */
+const selectedLayer = computed(() => {
+  const current = selection.value
+  return current ? modelLayers.value[current.model]?.find((l) => l.id === current.variable) : undefined
+})
+/** What the map shows: the selected layer, or the one before it while the selected model's manifest loads. */
+const layer = ref<ForecastLayer>()
+watch(selectedLayer, (next) => next && (layer.value = next), { immediate: true })
+
+/** Why nothing can be shown, once the status has loaded. */
+const noForecast = computed(() => {
+  if (!status.value || selection.value) return ''
+  if (runPath.value === IN_PROGRESS) return 'No model run is in progress with any frames yet.'
+  if (runPath.value !== null) return `No forecast is available for the ${runQuery.value} run. Runs are kept for a week.`
+  return 'No forecast has been exported yet.'
+})
+/** Retained runs, when `?run=` names one that isn't available. */
+const availableRuns = computed<RunRef[]>(() =>
+  noForecast.value && runPath.value !== null && runPath.value !== IN_PROGRESS
+    ? (status.value?.models ?? []).flatMap((model) => model.runs)
+    : [],
+)
+const problem = computed(() => error.value || noForecast.value)
 
 /** Status button color: blue while a run is coming in, amber if a layer is stuck, red on errors. */
 const statusTone = computed(() => {
@@ -65,10 +109,6 @@ const previewLabel = computed(() => {
   return `Previewing the ${runLabel(current.initialized)} run${done < total ? `, still coming in (${done} of ${total} frames of this layer)` : ''}.`
 })
 
-const layer = computed(
-  () => layers.value.find((l) => l.model === props.model && l.id === props.layer) ?? layers.value[0],
-)
-
 const { index, frames, frame, url, playing, loadProgress, seekHour, step } = usePlayback(
   layer,
   computed(() => settings.frameIntervalMs),
@@ -83,16 +123,21 @@ function queryNumber(name: string): number | undefined {
 const opacity = ref(Math.min(Math.max(queryNumber('opacity') ?? DEFAULT_OPACITY, 0), 1))
 const terrain = ref(route.query.terrain === '1')
 
-// Keep the hour when switching layers (nearest available), seeded from ?hour= on first load.
-// `index` still points into the previous layer's frames when this runs.
-watch(layer, (_next, previous) => {
-  const hour = previous ? previous.frames[index.value]?.hour : queryNumber('hour')
-  seekHour(hour ?? 0)
+// On a new layer, show the same valid time as before (the nearest frame), seeded from ?hour= on first load.
+// Models' runs start at different times, so keeping the forecast hour would jump in time.
+let lastView: { initialized: string; hour: number } | null = null
+watch(layer, (next) => {
+  if (!next) return
+  seekHour((lastView ? sameValidHour(lastView.initialized, lastView.hour, next.initialized) : queryNumber('hour')) ?? 0)
+})
+// After the watcher above, so it reads the view before the switch.
+watch([layer, () => frame.value?.hour], ([current, hour]) => {
+  if (current && hour !== undefined) lastView = { initialized: current.initialized, hour }
 })
 
-// Mirror the view state into the URL (replace, so playback doesn't flood history).
-watch([layer, () => frame.value?.hour, opacity, terrain], ([current, hour, alpha, is3d]) => {
-  if (!current) return
+// Mirror the view state into the URL (replace, so playback doesn't flood history), once the selection shows.
+watch([selectedLayer, () => frame.value?.hour, opacity, terrain], ([current, hour, alpha, is3d]) => {
+  if (!current || current !== layer.value) return
   void router.replace({
     name: 'map-layer',
     params: { model: current.model, layer: current.id },
@@ -119,14 +164,18 @@ async function annotateFrame() {
   else annotateError.value = annotations.state.error || 'Could not add the frame.'
 }
 
-function selectLayer(key: string) {
-  const next = layers.value.find((l) => layerKey(l) === key)
-  if (!next) return
-  void router.replace({
-    name: 'map-layer',
-    params: { model: next.model, layer: next.id },
-    query: route.query,
-  })
+function show(model: string, variable: string) {
+  void router.replace({ name: 'map-layer', params: { model, layer: variable }, query: route.query })
+}
+
+/** Switch variable, keeping the model if it has the variable (else the viewer's, or the config's, default). */
+function selectVariable(variable: string) {
+  const model = choices.value && pickModel(choices.value, variable, selection.value?.model)
+  if (model) show(model.id, variable)
+}
+
+function selectModel(model: string) {
+  if (selection.value) show(model, selection.value.variable)
 }
 
 function showLatest() {
@@ -134,38 +183,68 @@ function showLatest() {
 }
 
 let abort = new AbortController()
+/** Bumped by each `load`, so manifests fetched for an older status are dropped. */
+let generation = 0
+const pending = new Map<string, Promise<void>>()
 
-/** Load each model's latest run, or the run `?run=` names. A refresh keeps showing the map meanwhile. */
+/** Load a model's manifest for the run shown, unless it's loaded; a load already under way is shared. */
+function loadModel(id: string, gen: number, signal: AbortSignal): Promise<void> {
+  const current = status.value
+  const model = current?.models.find((m) => m.id === id)
+  const run = model ? selectRun(model, runPath.value) : null
+  const key = `${gen}/${id}`
+  if (!current || !model || !run || modelLayers.value[id]) return Promise.resolve()
+  let loading = pending.get(key)
+  if (!loading) {
+    const base = dataBaseUrl(current)
+    loading = fetchRunManifest(base, id, run, signal)
+      .then((manifest) => {
+        if (gen === generation) modelLayers.value = { ...modelLayers.value, [id]: runLayers(base, manifest, run, model) }
+      })
+      .finally(() => pending.delete(key))
+    pending.set(key, loading)
+  }
+  return loading
+}
+
+/** Load the selected model's manifest, then the others', so switching models doesn't wait. */
+async function loadSelected(id: string) {
+  const gen = generation
+  const { signal } = abort
+  try {
+    await loadModel(id, gen, signal)
+  } catch (e) {
+    if (!signal.aborted && gen === generation) error.value = e instanceof Error ? e.message : String(e)
+    return
+  }
+  for (const model of status.value?.models ?? []) {
+    loadModel(model.id, gen, signal).catch(() => {
+      // Tried again, with the error shown, if the model is selected.
+    })
+  }
+}
+
+watch(
+  () => selection.value?.model,
+  (id) => id && void loadSelected(id),
+)
+
+/** Load the status, then the selected model's manifest. A refresh keeps showing the map meanwhile. */
 async function load() {
   abort.abort()
   abort = new AbortController()
   const { signal } = abort
+  const gen = ++generation
   error.value = ''
-  availableRuns.value = []
   try {
-    const runPath = runQuery.value === undefined ? null : runPathFromParam(runQuery.value)
-    if (runQuery.value !== undefined && runPath === null) {
+    if (runQuery.value !== undefined && runPath.value === null) {
       throw new Error(`"${runQuery.value}" is not a model run; use a time like 2026-10-29T00Z.`)
     }
     const current = await fetchStatus(signal)
+    if (gen !== generation) return
     status.value = current
-    const selected = current.models.flatMap((model) => {
-      const run = selectRun(model, runPath)
-      return run ? [{ model, run }] : []
-    })
-    const base = dataBaseUrl(current)
-    const manifests = await Promise.all(selected.map(({ model, run }) => fetchRunManifest(base, model.id, run, signal)))
-    const next = manifests.flatMap((manifest, i) => runLayers(base, manifest, selected[i].run, selected[i].model))
-    if (signal.aborted) return
-    layers.value = next
-    if (!next.length && runPath === IN_PROGRESS) {
-      error.value = 'No model run is in progress with any frames yet.'
-    } else if (!next.length && runPath !== null) {
-      availableRuns.value = current.models.flatMap((model) => model.runs)
-      error.value = `No forecast is available for the ${runQuery.value} run. Runs are kept for a week.`
-    } else if (!next.length) {
-      error.value = 'No forecast has been exported yet.'
-    }
+    modelLayers.value = {}
+    if (selection.value) await loadSelected(selection.value.model)
   } catch (e) {
     if (!signal.aborted) error.value = e instanceof Error ? e.message : String(e)
   }
@@ -213,9 +292,9 @@ onBeforeUnmount(() => {
         Set <code>VITE_MAPBOX_TOKEN</code> in the repo-root <code>.env.local</code> and restart the dev server to use the map.
       </div>
     </div>
-    <div v-else-if="error" class="container py-4">
+    <div v-else-if="problem" class="container py-4">
       <div class="alert alert-danger">
-        <p class="mb-1">{{ error }}</p>
+        <p class="mb-1">{{ problem }}</p>
         <div v-if="availableRuns.length || runQuery !== undefined" class="small">
           <template v-if="availableRuns.length">
             Available runs:
@@ -243,7 +322,7 @@ onBeforeUnmount(() => {
         </small>
       </div>
     </div>
-    <template v-else-if="layer && url">
+    <template v-else-if="layer && url && selection">
       <div v-if="previewing" class="run-banner alert alert-info py-1 px-2 mb-0 small shadow-sm">
         {{ previewLabel }}
         <a href="#" class="alert-link" @click.prevent="showLatest">Show the latest complete run</a>
@@ -266,11 +345,14 @@ onBeforeUnmount(() => {
         v-model:opacity="opacity"
         v-model:playing="playing"
         v-model:terrain="terrain"
-        :layers="layers"
+        :variables="variableOptions"
+        :models="modelOptions"
+        :selection="selection"
         :layer="layer"
         :hours="hours"
         :load-progress="loadProgress"
-        @select-layer="selectLayer"
+        @select-variable="selectVariable"
+        @select-model="selectModel"
         @step="step"
       >
         <button
