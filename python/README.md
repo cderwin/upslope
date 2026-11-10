@@ -1,12 +1,10 @@
 # upslope
 
-Command-line tooling for downloading and georegistering forecast map images
-(currently UW WRF).
+The exporter, server and command-line tooling: UW WRF images georegistered with
+hand-placed annotations, and dynamical.org models rendered from gridded data.
 
 ```sh
 uv run upslope check-layers        # check every configured layer's images exist upstream (--model, --run)
-uv run upslope download            # forecast/raw/<model>/<layer>/hourNN.gif (--model, --run)
-uv run upslope reproject           # forecast/georegistered/<model>/<layer>/hourNN.tiff
 uv run upslope export-web          # one export check of every model; uploads PNGs + manifest.json to storage
 uv run upslope export-loop         # the exporter: a check every 15 min, forever (--interval, --run-immediately)
 uv run upslope registration-error  # per-maptype fit error, in meters (--draft, --snapshot DIR)
@@ -17,7 +15,7 @@ uv run upslope georegistration promote-examples  # draft an image for each confi
 uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.png  # preview a dynamical.org frame
 ```
 
-`reproject` and `registration-error` read the annotations published in storage;
+`registration-error` reads the annotations published in storage;
 pass `--snapshot ../dev/georegistration` to use the repo's snapshot instead.
 
 ## Models config
@@ -95,7 +93,7 @@ against the live dataset and lists hours not published yet;
 The UW WRF plots are drawn on the model's native grid, a Lambert conformal conic
 projection on a 6370 km sphere (WPS namelist: `truelat1=30`, `truelat2=60`,
 `stand_lon=-121`; see `WRF_LAMBERT_CRS` in `georegistration.py`). Because each
-plot is axis-aligned with that grid, `reproject` fits only a scale and offset per
+plot is axis-aligned with that grid, the export fits only a scale and offset per
 axis for each map type from the published annotations (pixel -> Lambert meters;
 see below), then warps
 every frame to Web Mercator (EPSG:3857) with nearest-neighbour resampling, so the
@@ -150,7 +148,7 @@ accept `If-Match: "<revision>"` to fail with 412 if the draft has moved on.
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /draft`, `GET /published` | Documents (the draft with `published_revision`) |
+| `GET /draft` | The draft, with `published_revision` |
 | `POST /draft/discard` | Reset the draft to the published document |
 | `POST /draft/points`, `PUT`/`DELETE /draft/points/{key}` | Landmarks (delete also removes their annotations) |
 | `PUT`/`DELETE /draft/maptypes/{m}/images/{i}/annotations/{point}` | A landmark's pixel on an image (`{pixel_x, pixel_y, replaces?}`) |
@@ -179,8 +177,7 @@ S3/Tigris bucket. A model exports at most 400 frames per check
 (`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` (the private bucket, which annotations are
-read from), `PUBLIC_BUCKET_NAME` (the public bucket forecasts are written to;
-unset, `BUCKET_NAME`) and, optionally, `AWS_REGION`. Put them in
+read from), `PUBLIC_BUCKET_NAME` (the public bucket forecasts are written to) and, optionally, `AWS_REGION`. Put them in
 the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export`,
 `just py-export-loop` and `just py-serve` load it.
 
@@ -337,20 +334,9 @@ takes effect right away.
 After each check, runs initialized more than the model's `retention_days`
 (7 by default) ago are deleted, except the ones `latest.json` and
 `in-progress.json` point at.
-`georegistration/` is never touched. `upslope delete-legacy-exports` deletes the
-layout used before `forecasts/` (`web_exports/` and `model_runs/`) from the
-private bucket; with `--old-forecasts`, also `forecasts/` there, which refuses
-unless `PUBLIC_BUCKET_NAME` names another bucket.
+`georegistration/` is never touched.
 
-#### Moving forecasts to the public bucket
-
-Forecasts used to live in the private bucket. `upslope migrate-forecasts`
-copies `forecasts/` from `BUCKET_NAME` to `PUBLIC_BUCKET_NAME` (or
-`--source`/`--destination`), server side, setting each copy's `Cache-Control`.
-It copies frames, then manifests, then pointers, so the destination never
-points at a missing file, and only copies keys the destination lacks: the
-exporter's files there are never overwritten, and running it again copies only
-what's new. `--dry-run` lists what it would copy.
+#### The public bucket
 
 The public bucket needs public read, and a CORS rule allowing `GET` and `HEAD`
 from the app's origin (and `http://localhost:5173` for the dev server), exposing
@@ -409,13 +395,11 @@ requires), shown on the map.
 | Method and path | Purpose |
 | --- | --- |
 | `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
-| `GET /fx/data/{path}` | `forecasts/{path}` from the public bucket, with the bucket's `Cache-Control` and ETags: for pages loaded before forecasts were served from the bucket, and setups without `PUBLIC_DATA_URL` |
 
 `data_url` is where the webapp loads manifests
 (`<data_url>/<model>/<run path>/manifest.json`) and frames (their paths are
 relative to the run's folder) from: `PUBLIC_DATA_URL`, the public bucket's
-`forecasts/`, or `/fx/data` if that's unset. A relative `data_url` is relative
-to the API.
+`forecasts/`. The server won't start without it.
 
 `in_progress` adds `checked_at`, `complete` and, per configured layer, `name`,
 `available_hour`, `last_hour`, `progressed_at`, `error` and a `state` the server
@@ -427,8 +411,8 @@ measured from the run's first frame); or `error` when the last attempt failed
 The server builds the status from `index.json` and `export-status.json`, which
 a background task re-reads every 60 seconds with their ETags, so a request
 never waits on storage and an unchanged file costs one small request. Until
-the exporter first writes the index, the server lists every model's runs
-instead (slow, but still in the background). With the index written once per
+the exporter first writes the index (in a new bucket), no runs are listed. With
+the index written once per
 model check, a running check's progress shows up when that model finishes.
 
 `export` is `export-status.json` (see [The exporter](#the-exporter)), or null if

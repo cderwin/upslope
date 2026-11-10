@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import click
 from cattrs.preconf.json import make_converter
 
-from upslope.cli import DEFAULT_MODELS_CONFIG, PROJECT_BASE, load_annotations
+from upslope.cli import DEFAULT_MODELS_CONFIG, load_annotations
 
 if TYPE_CHECKING:
     from upslope.models.config import ModelConfig, ModelsConfig
@@ -32,92 +32,16 @@ def _select_models(config: "ModelsConfig", model_ids: tuple[str, ...]) -> list["
     return [model for model in config.models if model.id in model_ids]
 
 
-def _uw_models(models: list["ModelConfig"], model_ids: tuple[str, ...]) -> list["ModelConfig"]:
-    """The UW WRF models among `models`; naming another kind of model explicitly is an error."""
-    if named := [model.id for model in models if model.source.kind != "uw_wrf" and model.id in model_ids]:
-        raise click.ClickException(f"{', '.join(named)}: only UW WRF models have images to download")
-    return [model for model in models if model.source.kind == "uw_wrf"]
-
-
-async def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | None, require_complete: bool) -> datetime:
-    """The run to use: the one given, else the newest complete run, else (if allowed) the newest run."""
+async def _resolve_run(client: "ImageClient", model: "ModelConfig", run: datetime | None) -> datetime:
+    """The run to use: the one given, else the newest complete run, else the newest run."""
     if run is not None:
         return run.replace(tzinfo=UTC)
     initialized = await client.latest_complete_run(model)
     if initialized is not None:
         return initialized
-    if require_complete:
-        raise click.ClickException(f"{model.id} has no complete run to download; pass --run")
     newest = model.initializations(datetime.now(UTC))[0]
     click.echo(f"{model.id} has no complete run; checking the newest run")
     return newest
-
-
-@click.command()
-@config_option
-@model_option
-@run_option
-@click.option(
-    "-o", "--output", "output_path", type=click.Path(path_type=Path), default=(PROJECT_BASE / "forecast/raw"),
-    help="Directory to write <model>/<layer>/hourNN.gif to.",
-)
-def download(config_path: Path, model_ids: tuple[str, ...], run: datetime | None, output_path: Path) -> None:
-    """Download every configured layer's images of a model run."""
-    import asyncio
-
-    from upslope.models.config import ModelsConfig
-    from upslope.models.uw_wrf.image_client import ImageClient
-
-    models = _uw_models(_select_models(ModelsConfig.load(config_path), model_ids), model_ids)
-
-    async def download_all() -> None:
-        client = ImageClient()
-        for model in models:
-            initialized = await _resolve_run(client, model, run, require_complete=True)
-            click.echo(f"Downloading {model.id} run initialized {initialized:%Y-%m-%d %HZ}")
-            for i, layer in enumerate(model.layers, start=1):
-                click.echo(f"Downloading layer {i} of {len(model.layers)}: {layer.id}")
-                await client.download_layer(layer, initialized, output_path / model.id / layer.id)
-
-    asyncio.run(download_all())
-
-
-@click.command()
-@config_option
-@click.option(
-    "-i", "--input", "input_path", type=click.Path(path_type=Path), default=(PROJECT_BASE / "forecast/raw"),
-    help="Directory written by `download`.",
-)
-@click.option(
-    "-o", "--output", "output_path", type=click.Path(path_type=Path), default=(PROJECT_BASE / "forecast/georegistered"),
-)
-@click.option(
-    "--snapshot",
-    type=click.Path(path_type=Path, file_okay=False, exists=True),
-    help="Read annotations from a snapshot directory (e.g. dev/georegistration) instead of storage.",
-)
-def reproject(config_path: Path, input_path: Path, output_path: Path, snapshot: Path | None) -> None:
-    """Georegister downloaded GIFs, with the published annotations (or a snapshot's)."""
-    from tqdm import tqdm
-
-    from upslope.models.config import ModelsConfig
-    from upslope.models.uw_wrf.image_client import raw_image_name
-    from upslope.models.uw_wrf.georegistration import Registration
-
-    config = ModelsConfig.load(config_path)
-    registration = Registration.build(load_annotations(snapshot))
-
-    for model in _uw_models(config.models, ()):
-        for layer in tqdm(model.layers, desc=model.id):
-            for hour in layer.hours.hours:
-                raw_gif_path = input_path / model.id / layer.id / raw_image_name(hour)
-                if not raw_gif_path.exists():
-                    click.echo(f"forecast gif does not exist: {raw_gif_path}", err=True)
-                    continue
-
-                output_tiff_path = (output_path / raw_gif_path.relative_to(input_path)).with_suffix(".tiff")
-                output_tiff_path.parent.mkdir(exist_ok=True, parents=True)
-                registration.georegister(raw_gif_path, output_tiff_path, layer.maptype)
 
 
 @click.command()
@@ -141,7 +65,7 @@ def check_layers(config_path: Path, model_ids: tuple[str, ...], run: datetime | 
     async def uw_results(model: "ModelConfig") -> tuple[datetime, dict]:
         # a one-off sweep of a few hundred HEADs: a little faster than the export's pace, still throttled
         client = ImageClient(throttle=Throttle(concurrency=4, interval=0.1))
-        initialized = await _resolve_run(client, model, run, require_complete=False)
+        initialized = await _resolve_run(client, model, run)
 
         async def check(layer, hour) -> str:
             try:

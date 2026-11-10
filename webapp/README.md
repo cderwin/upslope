@@ -39,8 +39,9 @@ Annotations come from the server's admin API (`/admin/georegistration`; see
 the local stack (`just up`, admin token `upslope-local-admin`) alongside
 `npm run dev`.
 
-Forecasts come from the server's forecast API (`/fx/status` and `/fx/data/...`;
-see `python/README.md`), which the dev server also proxies to `localhost:8000`.
+The forecast status comes from the server (`/fx/status`; see `python/README.md`),
+which the dev server also proxies to `localhost:8000`. Manifests and frames load
+straight from the public bucket, at the status's `data_url`.
 
 ## Forecast map
 

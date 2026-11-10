@@ -1,27 +1,19 @@
-"""Forecast API for the webapp.
-
-- `GET /fx/status`: each model's latest run, in-progress run (with each layer's progress) and retained
-  runs, so the webapp can find manifests and show how a run is coming along; and the exporter's health.
-- `GET /fx/data/{path}`: objects under `forecasts/` in the public bucket (manifests, frames, pointers), passed
-  through. Browsers read the bucket directly at `data_url` instead; this serves pages loaded before that, and
-  setups without a public URL (`PUBLIC_DATA_URL` unset).
+"""Forecast API for the webapp: `GET /fx/status`, each model's latest run, in-progress run (with each layer's
+progress) and retained runs, so the webapp can find manifests and show how a run is coming along; the exporter's
+health; and `data_url`, where browsers read the forecast files from the public bucket.
 """
 
 import asyncio
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Literal
-from email.utils import format_datetime
 
 from attrs import define
 from cattrs.preconf.json import make_converter
-from litestar import Controller, Request, Response, get
+from litestar import Controller, Response, get
 from litestar.datastructures import State
-from litestar.exceptions import NotFoundException
-from litestar.params import FromPath
-from litestar.response import Stream
 
-from upslope.clients.forecasts import EXPORT_STATUS, INDEX, PREFIX, ForecastStore, cache_control
+from upslope.clients.forecasts import EXPORT_STATUS, INDEX, ForecastStore
 from upslope.logging import get_logger
 from upslope.models.config import ModelConfig, ModelsConfig
 from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, ModelIndex, run_path
@@ -29,9 +21,6 @@ from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, Mod
 logger = get_logger(__name__)
 
 converter = make_converter()
-
-# Where browsers load forecast files from when the public bucket has no URL configured
-DEFAULT_DATA_URL = "/fx/data"
 
 STATUS_CACHE_CONTROL = "no-cache"
 
@@ -47,7 +36,7 @@ class RunRef:
 
     Attributes:
         initialized: Initialization time (UTC).
-        path: Folder under the model's data prefix: `/fx/data/<model>/<path>/manifest.json`.
+        path: Folder under the model's data prefix: `<data_url>/<model>/<path>/manifest.json`.
     """
 
     initialized: datetime
@@ -158,7 +147,7 @@ class ForecastStatus:
     """
 
     models: list[ModelStatus]
-    data_url: str = DEFAULT_DATA_URL
+    data_url: str
     export: ExportStatus | None = None
     export_overdue: bool = False
 
@@ -168,9 +157,9 @@ class StatusCache:
 
     It's built from `forecasts/index.json`, which the exporter (another process) rewrites as each model's
     check finishes, and `export-status.json`. Both are re-read every `refresh_interval` seconds with their
-    ETags, so an unchanged file costs one small request. Until the exporter has written the index (e.g. right
-    after it's first deployed), every model's files are read instead, which is slow but still in the background.
-    Only the first request, if the startup refresh failed, waits for storage.
+    ETags, so an unchanged file costs one small request. The exporter writes the index as each check starts, so
+    it's missing only from a new bucket, until the first check. Only the first request, if the startup refresh
+    failed, waits for storage.
 
     The parts that depend on the time (stalled layers, an overdue exporter) are worked out per request.
     """
@@ -179,7 +168,7 @@ class StatusCache:
         self,
         store: ForecastStore,
         config: ModelsConfig,
-        data_url: str = DEFAULT_DATA_URL,
+        data_url: str,
         refresh_interval: float = 60.0,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
@@ -213,16 +202,12 @@ class StatusCache:
         changed, data, etag = await asyncio.to_thread(self._read_changed, INDEX)
         if not changed:
             return self._index
-        if data is not None:
-            index = ForecastIndex.from_json(data)
-            self._etags[INDEX] = etag
-            return index
-        logger.warning("the exporter hasn't written %s yet; reading every model's runs instead", INDEX)
-        entries = await asyncio.gather(
-            *(asyncio.to_thread(self._store.read_model_index, model.id) for model in self._config.models)
-        )
-        self._etags.pop(INDEX, None)
-        return ForecastIndex(list(entries), self._now())
+        index = None if data is None else ForecastIndex.from_json(data)
+        if index is None:
+            logger.warning("the exporter hasn't written %s yet; no runs to list", INDEX)
+        # recorded once parsed, so a file that failed to parse is read again
+        self._etags[INDEX] = etag
+        return index
 
     async def _read_export(self) -> ExportStatus | None:
         changed, data, etag = await asyncio.to_thread(self._read_changed, EXPORT_STATUS)
@@ -282,18 +267,8 @@ class StatusCache:
         return ForecastStatus(models, self._data_url, export, export is not None and now > export.overdue_after)
 
 
-def _validate_path(path: str) -> None:
-    """Reject paths that could step outside `forecasts/`."""
-    for segment in path.split("/"):
-        if segment in ("", ".", "..") or "\\" in segment:
-            raise NotFoundException()
-
-
 class ForecastController(Controller):
-    """Serves forecast status and exported runs.
-
-    Expects `state.public_storage` (StorageClient) and `state.forecast_status` (StatusCache).
-    """
+    """Serves the forecast status. Expects `state.forecast_status` (StatusCache)."""
 
     path = "/fx"
 
@@ -301,24 +276,3 @@ class ForecastController(Controller):
     async def status(self, state: State) -> Response:
         status = await state.forecast_status.get()
         return Response(converter.unstructure(status), headers={"Cache-Control": STATUS_CACHE_CONTROL})
-
-    @get("/data/{path:path}")
-    async def data(self, request: Request, state: State, path: FromPath[str]) -> Response:
-        path = path.lstrip("/")
-        _validate_path(path)
-        obj = await asyncio.to_thread(state.public_storage.get_object, f"{PREFIX}/{path}", request.headers.get("if-none-match"))
-        if obj is None:
-            raise NotFoundException()
-
-        # the same headers the bucket serves them with: frames are named by content and never change
-        headers = {"Cache-Control": cache_control(path)}
-        if obj.etag:
-            headers["ETag"] = obj.etag
-        if obj.not_modified:
-            return Response(content=None, status_code=304, headers=headers)
-        if obj.last_modified:
-            headers["Last-Modified"] = format_datetime(obj.last_modified, usegmt=True)
-        if obj.content_length is not None:
-            headers["Content-Length"] = str(obj.content_length)
-        # boto's body is a blocking iterator; Litestar pulls each chunk in a worker thread
-        return Stream(obj.body, media_type=obj.content_type or "application/octet-stream", headers=headers)

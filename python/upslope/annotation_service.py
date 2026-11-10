@@ -209,13 +209,6 @@ class AnnotationService:
 
         return await asyncio.to_thread(load)
 
-    async def published(self) -> AnnotationDocument:
-        """The published document. Raises NotFound if nothing is published."""
-        document = await asyncio.to_thread(self.store.load_published)
-        if document is None:
-            raise NotFound("nothing has been published")
-        return document
-
     async def fit(self) -> dict[str, MaptypeFit]:
         """How well each maptype in the draft fits."""
         state = await self.draft()

@@ -11,9 +11,6 @@ from botocore.client import BaseClient
 from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from upslope.logging import get_logger
-
-logger = get_logger(__name__)
 
 _NOT_FOUND_CODES = ("404", "NoSuchKey", "NotFound")
 
@@ -83,7 +80,7 @@ class StorageConfig:
     Attributes:
         bucket: The private bucket (`BUCKET_NAME`): annotations, and anything not meant to be public.
         public_bucket: The publicly readable bucket for exported forecasts (`PUBLIC_BUCKET_NAME`), which
-            browsers read directly. None to keep forecasts in `bucket`, as before there were two.
+            browsers read directly; None if unset, which only commands that don't touch forecasts allow.
     """
 
     access_key_id: str
@@ -230,19 +227,6 @@ class StorageClient:
             extra["CacheControl"] = cache_control
         self.s3.upload_file(str(path), self.bucket, key, ExtraArgs=extra)
 
-    def copy_from(self, source_bucket: str, key: str, cache_control: str | None = None) -> None:
-        """Copy an object from another bucket to the same key in this one, server side.
-
-        Args:
-            source_bucket: Bucket to copy from (the same credentials must read it).
-            key: Key to copy.
-            cache_control: `Cache-Control` for the copy; its media type is guessed from the key.
-        """
-        extra = {"MetadataDirective": "REPLACE", "ContentType": _guess_type(key)}
-        if cache_control is not None:
-            extra["CacheControl"] = cache_control
-        self.s3.copy_object(Bucket=self.bucket, Key=key, CopySource={"Bucket": source_bucket, "Key": key}, **extra)
-
     def delete_keys(self, keys: list[str]) -> None:
         """Delete objects. Keys that don't exist are ignored.
 
@@ -282,7 +266,7 @@ class StorageClient:
                 connect_timeout=10,
                 read_timeout=60,
                 retries={"mode": "standard", "max_attempts": 5},
-                # enough connections for the exporter's and migration's worker threads (boto's default is 10)
+                # enough connections for the exporter's worker threads (boto's default is 10)
                 max_pool_connections=32,
             ),
         )
@@ -290,11 +274,8 @@ class StorageClient:
 
     @classmethod
     def build_public(cls) -> Self:
-        """Create a StorageClient for the public forecasts bucket (`PUBLIC_BUCKET_NAME`).
-
-        Falls back to the private bucket when `PUBLIC_BUCKET_NAME` is unset, as before there were two.
-        """
+        """Create a StorageClient for the public forecasts bucket (`PUBLIC_BUCKET_NAME`). Raises KeyError if unset."""
         config = StorageConfig.from_env()
         if config.public_bucket is None:
-            logger.warning("PUBLIC_BUCKET_NAME is not set; forecasts are read and written in %s", config.bucket)
+            raise KeyError("PUBLIC_BUCKET_NAME is not set: forecasts are read and written in the public bucket")
         return cls.build(config.public_bucket)

@@ -78,8 +78,6 @@ just reset     # stop and wipe MinIO so the next `up` starts fresh
 ```sh
 cd python
 uv run upslope --help
-uv run upslope download                            # raw GIFs into forecast/raw/
-uv run upslope reproject --snapshot ../dev/georegistration
 uv run upslope registration-error --snapshot ../dev/georegistration
 just py-export                                     # full export against the bucket in .env.local
 just py-serve                                      # server against the bucket in .env.local
@@ -94,8 +92,8 @@ All settings come from the environment (see [`.env.example`](.env.example)):
 | Variable | Used for |
 | --- | --- |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `BUCKET_NAME` | S3/Tigris storage; `BUCKET_NAME` is the private bucket, for annotations |
-| `PUBLIC_BUCKET_NAME` | The publicly readable bucket the exporter writes forecasts to (unset: `BUCKET_NAME`) |
-| `PUBLIC_DATA_URL` | Where browsers load forecast files from: the public bucket's `forecasts/` (unset: `/fx/data`, through the server) |
+| `PUBLIC_BUCKET_NAME` | The publicly readable bucket the exporter writes forecasts to (required) |
+| `PUBLIC_DATA_URL` | Where browsers load forecast files from: the public bucket's `forecasts/` (required) |
 | `ADMIN_TOKEN` | Bearer token for `/admin` and the annotation page; unset disables them |
 | `VITE_MAPBOX_TOKEN` | Public Mapbox token, baked into the webapp at build time |
 | `UPSLOPE_WEBAPP_DIST` | Where the server finds the built webapp (set in the Docker image) |

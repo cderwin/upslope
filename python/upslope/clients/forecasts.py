@@ -19,8 +19,6 @@ missing file.
 """
 
 import re
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -43,15 +41,7 @@ INDEX = f"{PREFIX}/index.json"
 IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 MUTABLE_CACHE_CONTROL = "no-cache"
 
-# Prefixes of the storage layout before forecasts/; only `delete_legacy` touches them
-LEGACY_PREFIXES = ("web_exports/", "model_runs/")
-
 _RUN_PATH = re.compile(r"^(\d{4})/(\d{2})/(\d{2})/(\d{2})(\d{2})Z$")
-
-
-def cache_control(key: str) -> str:
-    """The `Cache-Control` a forecasts object is served with: frames are immutable, JSON files aren't."""
-    return MUTABLE_CACHE_CONTROL if key.endswith(".json") else IMMUTABLE_CACHE_CONTROL
 
 
 def parse_run_path(path: str) -> datetime | None:
@@ -181,85 +171,3 @@ class ForecastStore:
             self.storage.delete_keys(keys)
             logger.info("deleted %s run %s (%d objects), older than %d days", model, run_path(initialized), len(keys), retention_days)
         return sorted(doomed)
-
-    def delete_legacy(self) -> int:
-        """Delete everything under the storage layout's old prefixes (`web_exports/`, `model_runs/`).
-
-        Returns:
-            How many objects were deleted.
-        """
-        deleted = 0
-        for prefix in LEGACY_PREFIXES:
-            keys = self.storage.list_keys(prefix)
-            if keys:
-                self.storage.delete_keys(keys)
-                logger.info("deleted %d objects under %s", len(keys), prefix)
-            deleted += len(keys)
-        return deleted
-
-
-@define
-class Migration:
-    """What `migrate` copied, or would copy.
-
-    Attributes:
-        copied: Keys copied (or to copy, on a dry run), in the order they were copied.
-        skipped: Keys already in the destination, left alone.
-    """
-
-    copied: list[str]
-    skipped: int
-
-
-def _migration_phase(key: str) -> int:
-    """Copy order: frames, then run manifests, then the files that point at runs, so no reader of the
-    destination ever finds a pointer to a missing file."""
-    if not key.endswith(".json"):
-        return 0
-    return 1 if key.endswith(f"/{MANIFEST}") else 2
-
-
-def migrate(
-    source: StorageClient,
-    destination: StorageClient,
-    dry_run: bool = False,
-    threads: int = 16,
-    progress: Callable[[int, int], None] | None = None,
-) -> Migration:
-    """Copy everything under `forecasts/` that the destination bucket lacks, server side.
-
-    Keys the destination already has are never overwritten: after the exporter has switched buckets, its
-    files are newer than the source's. Running it again copies only what's new in the source. Copies get the
-    `Cache-Control` the exporter would have set.
-
-    Args:
-        source: Bucket to copy from (the private bucket, where forecasts were before).
-        destination: The public bucket.
-        dry_run: List what would be copied without copying.
-        threads: Copies in flight at once.
-        progress: Called with (copied so far, total) as copies finish.
-
-    Returns:
-        What was copied and skipped.
-    """
-    if source.bucket == destination.bucket:
-        raise ValueError(f"source and destination are the same bucket ({source.bucket})")
-    present = set(destination.list_keys(f"{PREFIX}/"))
-    keys = source.list_keys(f"{PREFIX}/")
-    todo = sorted((key for key in keys if key not in present), key=lambda key: (_migration_phase(key), key))
-    logger.info(
-        "%s %d of %d objects from %s to %s (%d already there)",
-        "would copy" if dry_run else "copying", len(todo), len(keys), source.bucket, destination.bucket, len(keys) - len(todo),
-    )
-    if dry_run:
-        return Migration(todo, len(keys) - len(todo))
-    done = 0
-    with ThreadPoolExecutor(max_workers=threads) as pool:
-        for phase in range(3):
-            batch = [key for key in todo if _migration_phase(key) == phase]
-            # each phase finishes, and its errors surface, before the next starts
-            for _ in pool.map(lambda key: destination.copy_from(source.bucket, key, cache_control(key)), batch):
-                done += 1
-                if progress is not None:
-                    progress(done, len(todo))
-    return Migration(todo, len(keys) - len(todo))

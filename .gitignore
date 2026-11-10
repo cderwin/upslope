@@ -17,5 +17,4 @@ wheels/
 
 .DS_Store
 
-/forecast/
 .env.local

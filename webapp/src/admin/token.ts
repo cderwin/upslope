@@ -14,13 +14,7 @@ export type PromptReason = 'missing' | 'rejected'
 
 function readStored(): string {
   try {
-    const stored = localStorage.getItem(STORAGE_KEY)
-    if (stored !== null) return stored
-    // Earlier builds kept the token per tab; carry it over once.
-    const legacy = sessionStorage.getItem(STORAGE_KEY)
-    sessionStorage.removeItem(STORAGE_KEY)
-    if (legacy) localStorage.setItem(STORAGE_KEY, legacy)
-    return legacy ?? ''
+    return localStorage.getItem(STORAGE_KEY) ?? ''
   } catch {
     return ''
   }

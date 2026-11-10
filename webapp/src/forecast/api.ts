@@ -6,13 +6,9 @@ import type { ForecastLayer, ForecastStatus, ModelStatus, RunManifest, RunRef } 
  */
 export const FORECAST_BASE_URL = (import.meta.env.VITE_FORECAST_BASE_URL ?? '/fx').replace(/\/+$/, '')
 
-/**
- * Where a status says forecast files are: the public bucket's `forecasts/` (`data_url`), which the browser
- * reads directly. A relative `data_url` (`/fx/data`, served by the upslope server) is relative to the API.
- */
+/** Where a status says forecast files are: the public bucket's `forecasts/`, which the browser reads directly. */
 export function dataBaseUrl(status: ForecastStatus): string {
-  const api = new URL(`${FORECAST_BASE_URL}/status`, window.location.href)
-  return new URL(status.data_url ?? `${FORECAST_BASE_URL}/data`, api).href.replace(/\/+$/, '')
+  return status.data_url.replace(/\/+$/, '')
 }
 
 function dataUrl(base: string, path: string): string {

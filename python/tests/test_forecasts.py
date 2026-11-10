@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from upslope.clients.forecasts import IMMUTABLE_CACHE_CONTROL, ForecastStore, migrate, parse_run_path
+from upslope.clients.forecasts import IMMUTABLE_CACHE_CONTROL, ForecastStore, parse_run_path
 from upslope.models.manifest import Frame, RunLayer, RunManifest, RunPointer, frame_name, run_path
 
 MODEL = "uwwrf_4km"
@@ -134,70 +134,3 @@ def test_prune_leaves_other_models(store: ForecastStore, memory_storage, tmp_pat
     export(store, tmp_path, other)
     store.prune(MODEL, retention_days=7, now=NOW)
     assert store.list_runs("uwwrf_4km2") == [old]
-
-
-def test_delete_legacy_only_touches_old_prefixes(store: ForecastStore, memory_storage, tmp_path: Path) -> None:
-    for key in (
-        "web_exports/20261021T130000/manifest.json",
-        "web_exports/20261021T130000/uwwrf_4km/surface-temp/hour_06.png",
-        "model_runs/uwwrf/20261021T1200Z.json",
-        "georegistration/published.json",
-        "georegistration/history/x.json",
-        "georegistration/images/washington/a.gif",
-    ):
-        memory_storage.put_bytes(key, b"x", "application/octet-stream")
-    export(store, tmp_path, manifest())
-
-    assert store.delete_legacy() == 3
-    assert not any(key.startswith(("web_exports/", "model_runs/")) for key in memory_storage.objects)
-    assert sum(key.startswith("georegistration/") for key in memory_storage.objects) == 3
-    assert store.list_runs(MODEL) == [INITIALIZED]
-
-
-# --- moving forecasts to the public bucket
-
-
-def test_migrate_copies_what_the_destination_lacks(memory_storage, public_storage, tmp_path: Path) -> None:
-    source = ForecastStore(memory_storage)
-    export(source, tmp_path, manifest())
-    source.write_latest(RunPointer.to(manifest(), NOW))
-    # the exporter has already written a newer pointer in the public bucket: it's kept
-    newer = RunPointer.to(manifest(INITIALIZED + timedelta(hours=6)), NOW)
-    ForecastStore(public_storage).write_latest(newer)
-    order: list[str] = []
-    original = public_storage.copy_from
-
-    def recording(source_bucket: str, key: str, cache_control: str | None = None) -> None:
-        order.append(key)
-        original(source_bucket, key, cache_control)
-
-    public_storage.copy_from = recording
-    result = migrate(memory_storage, public_storage, threads=1)
-    frames = [
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.png",
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png",
-    ]
-    # frames before the manifest that lists them
-    assert order == result.copied == [*frames, "forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json"]
-    assert result.skipped == 1
-    assert ForecastStore(public_storage).read_latest(MODEL) == newer
-    assert public_storage.objects[frames[0]] == memory_storage.objects[frames[0]]
-    assert public_storage.cache_control[frames[0]] == IMMUTABLE_CACHE_CONTROL
-    assert public_storage.cache_control["forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json"] == "no-cache"
-
-    # run again: nothing left to copy
-    assert migrate(memory_storage, public_storage).copied == []
-
-
-def test_migrate_dry_run_copies_nothing(memory_storage, public_storage, tmp_path: Path) -> None:
-    export(ForecastStore(memory_storage), tmp_path, manifest())
-    memory_storage.put_bytes("georegistration/published.json", b"{}", "application/json")
-    result = migrate(memory_storage, public_storage, dry_run=True)
-    assert len(result.copied) == 3 and public_storage.objects == {}
-    # only forecasts/ is ever copied
-    assert not any(key.startswith("georegistration/") for key in result.copied)
-
-
-def test_migrate_refuses_the_same_bucket(memory_storage) -> None:
-    with pytest.raises(ValueError, match="same bucket"):
-        migrate(memory_storage, memory_storage)

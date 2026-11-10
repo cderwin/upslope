@@ -40,8 +40,10 @@ import { RouterLink } from 'vue-router'
         forecast model and publishes the forecast imagery that Upslope maps.
       </dd>
 
-      <dt><a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a></dt>
-      <dd>Open weather forecast data, planned as an additional forecast source.</dd>
+      <dt><a href="https://dynamical.org/" target="_blank" rel="noopener">dynamical.org</a></dt>
+      <dd>
+        Publishes the GFS, HRRR, RRFS, ECMWF AIFS and HRDPS forecast data that Upslope renders, as open datasets.
+      </dd>
 
       <dt><a href="https://nwac.us/" target="_blank" rel="noopener">Northwest Avalanche Center (NWAC)</a></dt>
       <dd>
@@ -52,7 +54,7 @@ import { RouterLink } from 'vue-router'
 
     <p class="small text-body-secondary mt-5">
       Upslope is an independent project and is not affiliated with or endorsed by the University of Washington,
-      Open-Meteo or NWAC. Forecasts are model output and can be wrong.
+      dynamical.org or NWAC. Forecasts are model output and can be wrong.
     </p>
   </div>
 </template>

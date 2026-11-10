@@ -51,8 +51,8 @@ export interface ModelStatus {
 /** `GET <base>/status` (python `ForecastStatus`). */
 export interface ForecastStatus {
   models: ModelStatus[]
-  /** Base URL of the forecast files (manifests and frames); relative to the API if not absolute. */
-  data_url?: string
+  /** Base URL of the forecast files (manifests and frames) in the public bucket. */
+  data_url: string
 }
 
 /** python `Frame`. */

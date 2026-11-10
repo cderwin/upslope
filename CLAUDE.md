@@ -38,12 +38,12 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `cli/` | Click commands; `cli/main.py` registers them. `cli/__init__.py` holds repo paths (`PROJECT_BASE`, `DEFAULT_MODELS_CONFIG`, `DEV_GEOREGISTRATION`) |
 | `server/app.py` | `create_app()`: Litestar app and lifespan (the server doesn't export) |
 | `server/admin.py` | Admin API controller; maps `AnnotationError` subclasses to HTTP status codes |
-| `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status` from `forecasts/index.json`, refreshed in the background; `/fx/data`), webapp serving |
+| `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status` from `forecasts/index.json`, refreshed in the background), webapp serving |
 | `export_loop.py` | The exporter process (`upslope export-loop`): checks on the clock, time limits, `export-status.json` (the driver writes `index.json`) |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris (`build()` the private bucket, `build_public()` the public one); conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
-| `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control); `migrate` from the private bucket |
+| `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control) |
 | `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
 | `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
@@ -52,8 +52,6 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `raster.py` | Warping to Web Mercator, frame corners, PNG and value-image encoding; shared by every source |
 | `models/manifest.py` | Run manifest and `latest.json` schemas |
 | `logging.py` | `get_logger`, `configure_logging`, `log_duration` |
-
-`models/openmeteo/` is an empty placeholder.
 
 ## Python conventions
 
