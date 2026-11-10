@@ -14,11 +14,11 @@ The core of the project is the **Python backend** in `python/`. The Vue webapp i
 UW WRF plots (GIF)          annotations in S3 (control points)
         │                              │
         ▼                              ▼
-  upslope export-loop ─ fit + warp to Web Mercator ── PNG frames + manifest.json ──► S3 / Tigris
-                                                                                       │
-  upslope serve (Litestar) ◄───────────────────────────────────────────────────────────┘
-    ├── /fx/status      each model's latest and retained runs, and the exporter's health
-    ├── /fx/data/...    run manifests and frames (forecasts/ in the bucket)
+  upslope export-loop ─ fit + warp to Web Mercator ── PNG frames + manifest.json ──► public bucket
+                                                                                       │      │
+  upslope serve (Litestar) ◄── index.json, export-status.json ─────────────────────────┘      │
+    ├── /fx/status      each model's latest and retained runs, the exporter's health and      │
+    │                   data_url, where the browser loads manifests and frames from ◄─────────┘
     ├── /admin/...      annotation editing API (bearer token)
     ├── /health
     └── /               built webapp (/map, /annotation)
@@ -93,7 +93,9 @@ All settings come from the environment (see [`.env.example`](.env.example)):
 
 | Variable | Used for |
 | --- | --- |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `BUCKET_NAME` | S3/Tigris storage for exports and annotations |
+| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_ENDPOINT_URL_S3`, `AWS_REGION`, `BUCKET_NAME` | S3/Tigris storage; `BUCKET_NAME` is the private bucket, for annotations |
+| `PUBLIC_BUCKET_NAME` | The publicly readable bucket the exporter writes forecasts to (unset: `BUCKET_NAME`) |
+| `PUBLIC_DATA_URL` | Where browsers load forecast files from: the public bucket's `forecasts/` (unset: `/fx/data`, through the server) |
 | `ADMIN_TOKEN` | Bearer token for `/admin` and the annotation page; unset disables them |
 | `VITE_MAPBOX_TOKEN` | Public Mapbox token, baked into the webapp at build time |
 | `UPSLOPE_WEBAPP_DIST` | Where the server finds the built webapp (set in the Docker image) |
@@ -110,13 +112,14 @@ Backend tests use an in-memory S3 stand-in (`python/tests/conftest.py`) and the
 
 ## Deployment
 
-Production runs on Fly.io as a single always-on machine, which matters: the
-server runs the periodic export itself and serializes annotation edits with an
-in-process lock.
+Production runs on Fly.io: one always-on web machine (it serializes annotation
+edits with an in-process lock) and one exporter machine (`fly.toml`).
 
 ```sh
 fly storage create                # once: provisions Tigris and sets the AWS_* secrets
 fly secrets set ADMIN_TOKEN=...   # once
+# once: the public forecasts bucket (public read, CORS for GET/HEAD from the app's origin; see python/README.md)
+fly secrets set PUBLIC_BUCKET_NAME=upslope-data-public PUBLIC_DATA_URL=https://upslope-data-public.t3.tigrisfiles.io/forecasts
 ```
 
 **Merging to `main` deploys.** GitHub Actions (`.github/workflows/`) runs:

@@ -1,7 +1,8 @@
 # Fly.io deployment: merging to main deploys via .github/workflows/deploy.yml;
 # `just deploy` does the same by hand.
 # Storage: `fly storage create` provisions a Tigris bucket and sets the AWS_* and
-# BUCKET_NAME secrets that StorageClient reads.
+# BUCKET_NAME secrets that StorageClient reads. Forecasts go to a second, public bucket:
+# PUBLIC_BUCKET_NAME and PUBLIC_DATA_URL secrets (see README.md).
 
 app = "upslope"
 primary_region = "sjc"
@@ -14,7 +15,8 @@ primary_region = "sjc"
 # - web serves the API and webapp;
 # - exporter checks for and exports new frames every 15 minutes. Exactly one may run (two would race on
 #   manifests and retention), so deploys pass --ha=false; Fly keeps a standby that starts only if it fails.
-# They share only the bucket: the exporter writes forecasts/export-status.json, which /fx/status reports.
+# They share only storage: the exporter writes forecasts/ (including export-status.json, which /fx/status
+# reports) to the public bucket (PUBLIC_BUCKET_NAME), which browsers read directly at PUBLIC_DATA_URL.
 [processes]
   web = "upslope serve"
   # also checks once at startup, so a deploy that changes the layers publishes them right away

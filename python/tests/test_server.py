@@ -79,6 +79,7 @@ def test_status_lists_latest_and_retained_runs(client: TestClient) -> None:
             },
             {"id": "uwwrf_12km", "name": "UW WRF 12km", "latest": None, "in_progress": None, "runs": []},
         ],
+        "data_url": "/fx/data",
         "export": None,
         "export_overdue": False,
     }
@@ -293,7 +294,7 @@ def test_frame_served_with_headers(client: TestClient) -> None:
     assert response.content == b"png-bytes"
     assert response.headers["content-type"] == "image/png"
     assert response.headers["content-length"] == "9"
-    assert response.headers["cache-control"] == "public, max-age=300"
+    assert response.headers["cache-control"] == "public, max-age=31536000, immutable"
 
 
 def test_matching_etag_returns_304(client: TestClient) -> None:
@@ -390,3 +391,26 @@ def test_missing_dist_still_serves_api(tmp_path: Path, storage) -> None:
         assert client.get("/health").status_code == 200
         assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 200
         assert client.get("/").status_code == 404
+
+
+# --- the public bucket
+
+
+def test_forecasts_come_from_the_public_bucket(memory_storage, public_storage, dist: Path) -> None:
+    export_run(public_storage)
+    app = create_app(
+        storage=memory_storage, public_storage=public_storage, webapp_dist=dist, config=CONFIG,
+        data_url="https://upslope-data-public.example/forecasts",
+    )
+    with TestClient(app) as client:
+        status = client.get("/fx/status").json()
+        assert status["data_url"] == "https://upslope-data-public.example/forecasts"
+        assert status["models"][0]["latest"]["path"] == "2026/10/21/1200Z"
+        assert client.get("/fx/data/uwwrf_4km/latest.json").status_code == 200
+    assert not any(key.startswith("forecasts/") for key in memory_storage.objects)
+
+
+def test_data_url_from_the_environment(memory_storage, dist: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PUBLIC_DATA_URL", "http://localhost:9000/upslope-data-public/forecasts")
+    with TestClient(create_app(storage=memory_storage, webapp_dist=dist, config=CONFIG)) as client:
+        assert client.get("/fx/status").json()["data_url"] == "http://localhost:9000/upslope-data-public/forecasts"

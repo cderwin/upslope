@@ -65,6 +65,10 @@ class StoredBytes:
     etag: str | None
 
 
+def _guess_type(key: str) -> str:
+    return mimetypes.guess_type(key)[0] or "application/octet-stream"
+
+
 def _iter_body(body, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
     try:
         yield from body.iter_chunks(chunk_size)
@@ -74,11 +78,20 @@ def _iter_body(body, chunk_size: int = 64 * 1024) -> Iterator[bytes]:
 
 @define
 class StorageConfig:
+    """S3 settings from the environment.
+
+    Attributes:
+        bucket: The private bucket (`BUCKET_NAME`): annotations, and anything not meant to be public.
+        public_bucket: The publicly readable bucket for exported forecasts (`PUBLIC_BUCKET_NAME`), which
+            browsers read directly. None to keep forecasts in `bucket`, as before there were two.
+    """
+
     access_key_id: str
     secret_access_key: str
     endpoint_url: str
     bucket: str
     region: str = "auto"
+    public_bucket: str | None = None
 
     @classmethod
     def from_env(cls) -> Self:
@@ -88,6 +101,7 @@ class StorageConfig:
             endpoint_url=os.environ["AWS_ENDPOINT_URL_S3"],
             bucket=os.environ.get("BUCKET_NAME", "upslope-storage"),
             region=os.environ.get("AWS_REGION", "auto"),
+            public_bucket=os.environ.get("PUBLIC_BUCKET_NAME") or None,
         )
 
 
@@ -157,6 +171,7 @@ class StorageClient:
         content_type: str,
         if_match: str | None = None,
         if_none_match: bool = False,
+        cache_control: str | None = None,
     ) -> str | None:
         """Write an object, optionally only if it is unchanged or does not exist yet.
 
@@ -166,11 +181,14 @@ class StorageClient:
             content_type: Media type to store with the object.
             if_match: Only write if the stored object still has this ETag.
             if_none_match: Only write if no object exists at `key`.
+            cache_control: `Cache-Control` to serve the object with, for objects browsers read directly.
 
         Returns:
             The new object's ETag. Raises PreconditionFailed if a condition does not hold.
         """
         kwargs = {"Bucket": self.bucket, "Key": key, "Body": data, "ContentType": content_type}
+        if cache_control is not None:
+            kwargs["CacheControl"] = cache_control
         if if_match is not None:
             kwargs["IfMatch"] = if_match
         if if_none_match:
@@ -198,16 +216,32 @@ class StorageClient:
             keys.extend(item["Key"] for item in page.get("Contents", []))
         return sorted(keys)
 
-    def upload_file(self, path: Path, key: str, content_type: str | None = None) -> None:
+    def upload_file(self, path: Path, key: str, content_type: str | None = None, cache_control: str | None = None) -> None:
         """Upload a local file.
 
         Args:
             path: File to upload.
             key: Bucket key to write.
             content_type: Media type; guessed from the file name if omitted.
+            cache_control: `Cache-Control` to serve the object with, for objects browsers read directly.
         """
-        content_type = content_type or mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-        self.s3.upload_file(str(path), self.bucket, key, ExtraArgs={"ContentType": content_type})
+        extra = {"ContentType": content_type or _guess_type(key)}
+        if cache_control is not None:
+            extra["CacheControl"] = cache_control
+        self.s3.upload_file(str(path), self.bucket, key, ExtraArgs=extra)
+
+    def copy_from(self, source_bucket: str, key: str, cache_control: str | None = None) -> None:
+        """Copy an object from another bucket to the same key in this one, server side.
+
+        Args:
+            source_bucket: Bucket to copy from (the same credentials must read it).
+            key: Key to copy.
+            cache_control: `Cache-Control` for the copy; its media type is guessed from the key.
+        """
+        extra = {"MetadataDirective": "REPLACE", "ContentType": _guess_type(key)}
+        if cache_control is not None:
+            extra["CacheControl"] = cache_control
+        self.s3.copy_object(Bucket=self.bucket, Key=key, CopySource={"Bucket": source_bucket, "Key": key}, **extra)
 
     def delete_keys(self, keys: list[str]) -> None:
         """Delete objects. Keys that don't exist are ignored.
@@ -225,8 +259,11 @@ class StorageClient:
                 raise RuntimeError(f"could not delete {len(errors)} objects, e.g. {errors[0].get('Key')}: {errors[0].get('Message')}")
 
     @classmethod
-    def build(cls) -> Self:
+    def build(cls, bucket: str | None = None) -> Self:
         """Create a StorageClient from S3 settings in environment variables.
+
+        Args:
+            bucket: Bucket to use instead of `BUCKET_NAME`.
 
         Returns:
             The configured StorageClient.
@@ -245,6 +282,19 @@ class StorageClient:
                 connect_timeout=10,
                 read_timeout=60,
                 retries={"mode": "standard", "max_attempts": 5},
+                # enough connections for the exporter's and migration's worker threads (boto's default is 10)
+                max_pool_connections=32,
             ),
         )
-        return cls(s3=s3, bucket=config.bucket)
+        return cls(s3=s3, bucket=bucket or config.bucket)
+
+    @classmethod
+    def build_public(cls) -> Self:
+        """Create a StorageClient for the public forecasts bucket (`PUBLIC_BUCKET_NAME`).
+
+        Falls back to the private bucket when `PUBLIC_BUCKET_NAME` is unset, as before there were two.
+        """
+        config = StorageConfig.from_env()
+        if config.public_bucket is None:
+            logger.warning("PUBLIC_BUCKET_NAME is not set; forecasts are read and written in %s", config.bucket)
+        return cls.build(config.public_bucket)

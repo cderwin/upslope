@@ -1,6 +1,7 @@
 """What an export writes to storage: for each model run (its manifest), per model (`latest.json`,
 `in-progress.json`), and for the exporter as a whole (`export-status.json`, `index.json`)."""
 
+import hashlib
 from datetime import datetime, timedelta
 from typing import Literal, Self
 
@@ -15,14 +16,21 @@ def run_path(initialized: datetime) -> str:
     return f"{initialized:%Y/%m/%d/%H%M}Z"
 
 
-def frame_name(valid: datetime) -> str:
-    """A frame's file name: its valid time in UTC, e.g. `2026-10-29T0600.png` (open-meteo style)."""
-    return f"{valid:%Y-%m-%dT%H%M}.png"
+def content_digest(data: bytes) -> str:
+    """A short hash of a file's content, to name it by: a new file always gets a new name."""
+    return hashlib.sha256(data).hexdigest()[:16]
 
 
-def values_name(valid: datetime) -> str:
-    """A frame's value image name, beside its image: e.g. `2026-10-29T0600.values.png`."""
-    return f"{valid:%Y-%m-%dT%H%M}.values.png"
+def frame_name(valid: datetime, digest: str) -> str:
+    """A frame's file name: its valid time in UTC (open-meteo style) and content digest, e.g.
+    `2026-10-29T0600-3f9a1c2b7d4e5f60.png`. Browsers cache frames for good, so a re-exported frame needs a
+    new name."""
+    return f"{valid:%Y-%m-%dT%H%M}-{digest}.png"
+
+
+def values_name(valid: datetime, digest: str) -> str:
+    """A frame's value image name, beside its image: e.g. `2026-10-29T0600-9b0e4d7a1c2f3e45.values.png`."""
+    return f"{valid:%Y-%m-%dT%H%M}-{digest}.values.png"
 
 
 @define
@@ -32,7 +40,7 @@ class Frame:
     Attributes:
         hour: Forecast hour.
         valid: Time the frame is valid for (UTC): the run's initialization time plus `hour`.
-        path: Image path relative to the run's folder, e.g. `surface-temp/2026-10-29T0600.png`.
+        path: Image path relative to the run's folder, e.g. `surface-temp/2026-10-29T0600-3f9a1c2b7d4e5f60.png`.
         values: Path of the frame's value image (see `ValueEncoding`), for layers with numeric data.
     """
 

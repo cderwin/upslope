@@ -23,7 +23,7 @@ from upslope.clients.storage import StorageClient
 from upslope.logging import configure_logging, get_logger
 from upslope.models.config import ModelsConfig
 from upslope.server.admin import AdminGeoregistrationController
-from upslope.server.forecast import ForecastController, StatusCache
+from upslope.server.forecast import DEFAULT_DATA_URL, ForecastController, StatusCache
 from upslope.server.frontend import create_frontend_router
 
 logger = get_logger(__name__)
@@ -50,16 +50,27 @@ def create_app(
     webapp_dist: Path | None = None,
     admin_token: str | None = None,
     config: ModelsConfig | None = None,
+    public_storage: StorageClient | None = None,
+    data_url: str | None = None,
 ) -> Litestar:
     """Build the app.
 
     Args:
-        storage: Storage to read exports and annotations from. Built from the environment at startup if omitted.
+        storage: The private bucket, for annotations. Built from the environment at startup if omitted.
         webapp_dist: Built webapp to serve at `/`. Defaults to `$UPSLOPE_WEBAPP_DIST` or `<repo>/webapp/dist`.
         admin_token: Bearer token for the admin API. Defaults to `$ADMIN_TOKEN`; empty disables the API.
         config: Models config. Loaded from `python/config/models.yaml` at startup if omitted.
+        public_storage: The public bucket the exporter writes forecasts to. Defaults to `storage` if that's
+            given, else built from the environment (`PUBLIC_BUCKET_NAME`) at startup.
+        data_url: Where browsers load forecast files from (`forecasts/` in the public bucket), reported at
+            `/fx/status`. Defaults to `$PUBLIC_DATA_URL`, or `/fx/data` (served from the bucket by this server).
     """
     configure_logging()
+
+    if data_url is None:
+        data_url = os.environ.get("PUBLIC_DATA_URL") or DEFAULT_DATA_URL
+    if data_url == DEFAULT_DATA_URL:
+        logger.warning("PUBLIC_DATA_URL is not set; forecast files are served through this server at %s", data_url)
 
     if admin_token is None:
         admin_token = os.environ.get("ADMIN_TOKEN", "")
@@ -74,9 +85,10 @@ def create_app(
         # build up front so missing config or credentials fail at startup, not on first use
         models = config or ModelsConfig.load(DEFAULT_MODELS_CONFIG)
         app.state.storage = storage or StorageClient.build()
+        app.state.public_storage = public_storage or storage or StorageClient.build_public()
         app.state.annotations = AnnotationService(AnnotationStore(app.state.storage), models)
-        forecasts = ForecastStore(app.state.storage)
-        status = app.state.forecast_status = StatusCache(forecasts, models)
+        forecasts = ForecastStore(app.state.public_storage)
+        status = app.state.forecast_status = StatusCache(forecasts, models, data_url)
         try:
             await status.refresh()
         except Exception:

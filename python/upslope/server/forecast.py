@@ -2,7 +2,9 @@
 
 - `GET /fx/status`: each model's latest run, in-progress run (with each layer's progress) and retained
   runs, so the webapp can find manifests and show how a run is coming along; and the exporter's health.
-- `GET /fx/data/{path}`: objects under `forecasts/` in storage (manifests, frames, pointers), passed through.
+- `GET /fx/data/{path}`: objects under `forecasts/` in the public bucket (manifests, frames, pointers), passed
+  through. Browsers read the bucket directly at `data_url` instead; this serves pages loaded before that, and
+  setups without a public URL (`PUBLIC_DATA_URL` unset).
 """
 
 import asyncio
@@ -19,7 +21,7 @@ from litestar.exceptions import NotFoundException
 from litestar.params import FromPath
 from litestar.response import Stream
 
-from upslope.clients.forecasts import EXPORT_STATUS, INDEX, PREFIX, ForecastStore
+from upslope.clients.forecasts import EXPORT_STATUS, INDEX, PREFIX, ForecastStore, cache_control
 from upslope.logging import get_logger
 from upslope.models.config import ModelConfig, ModelsConfig
 from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, ModelIndex, run_path
@@ -28,10 +30,9 @@ logger = get_logger(__name__)
 
 converter = make_converter()
 
-# Pointers and manifests change in place, so always revalidate them (cheap with ETags). Frames keep their
-# URL unless a run is re-exported (after an annotation publish), so cache them briefly.
-JSON_CACHE_CONTROL = "no-cache"
-FRAME_CACHE_CONTROL = "public, max-age=300"
+# Where browsers load forecast files from when the public bucket has no URL configured
+DEFAULT_DATA_URL = "/fx/data"
+
 STATUS_CACHE_CONTROL = "no-cache"
 
 # A layer that hasn't gained a frame for this long, while incomplete, is reported as stalled
@@ -149,12 +150,15 @@ class ForecastStatus:
 
     Attributes:
         models: Status of each configured model, in config order.
+        data_url: Base URL of the forecast files (`forecasts/` in the public bucket): a run's manifest is at
+            `<data_url>/<model>/<run path>/manifest.json`, and its frames' paths are relative to the run's folder.
         export: The exporter's last written status (`export-status.json`): whether its last check failed, each
             model's outcome and errors; None if it has never run.
         export_overdue: The exporter should have written its status again by now: it's stuck or down.
     """
 
     models: list[ModelStatus]
+    data_url: str = DEFAULT_DATA_URL
     export: ExportStatus | None = None
     export_overdue: bool = False
 
@@ -175,12 +179,14 @@ class StatusCache:
         self,
         store: ForecastStore,
         config: ModelsConfig,
+        data_url: str = DEFAULT_DATA_URL,
         refresh_interval: float = 60.0,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
     ) -> None:
         self._store = store
         self._config = config
+        self._data_url = data_url
         self._refresh_interval = refresh_interval
         self._now = now
         self._sleep = sleep
@@ -273,7 +279,7 @@ class StatusCache:
                 )
             )
         export = self._export
-        return ForecastStatus(models, export, export is not None and now > export.overdue_after)
+        return ForecastStatus(models, self._data_url, export, export is not None and now > export.overdue_after)
 
 
 def _validate_path(path: str) -> None:
@@ -286,7 +292,7 @@ def _validate_path(path: str) -> None:
 class ForecastController(Controller):
     """Serves forecast status and exported runs.
 
-    Expects `state.storage` (StorageClient) and `state.forecast_status` (StatusCache).
+    Expects `state.public_storage` (StorageClient) and `state.forecast_status` (StatusCache).
     """
 
     path = "/fx"
@@ -300,11 +306,12 @@ class ForecastController(Controller):
     async def data(self, request: Request, state: State, path: FromPath[str]) -> Response:
         path = path.lstrip("/")
         _validate_path(path)
-        obj = await asyncio.to_thread(state.storage.get_object, f"{PREFIX}/{path}", request.headers.get("if-none-match"))
+        obj = await asyncio.to_thread(state.public_storage.get_object, f"{PREFIX}/{path}", request.headers.get("if-none-match"))
         if obj is None:
             raise NotFoundException()
 
-        headers = {"Cache-Control": JSON_CACHE_CONTROL if path.endswith(".json") else FRAME_CACHE_CONTROL}
+        # the same headers the bucket serves them with: frames are named by content and never change
+        headers = {"Cache-Control": cache_control(path)}
         if obj.etag:
             headers["ETag"] = obj.etag
         if obj.not_modified:

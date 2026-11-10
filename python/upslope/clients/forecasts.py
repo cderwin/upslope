@@ -1,4 +1,4 @@
-"""Exported forecast runs in the storage bucket, laid out like open-meteo's `data_spatial/`.
+"""Exported forecast runs in the public bucket, laid out like open-meteo's `data_spatial/`.
 
 ```
 forecasts/export-status.json                          the exporter's health (ExportStatus)
@@ -6,8 +6,12 @@ forecasts/index.json                                  every model's pointers and
 forecasts/<model>/latest.json                         newest complete run (RunPointer)
 forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
-forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>.png   frames, named by valid time
+forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.png   frames, by valid time and content
 ```
+
+Browsers read these straight from the bucket (`PUBLIC_BUCKET_NAME`), so only forecasts ever go in it. Frames
+are named by their content and never change, so they're cached for good; the JSON files are rewritten in
+place, so browsers revalidate them every time (cheap, with ETags).
 
 A run's manifest is rewritten as its frames arrive. Frames are uploaded before the manifest that lists them,
 and a run is complete before `latest.json` points at it, so a reader that follows the pointers never finds a
@@ -15,6 +19,8 @@ missing file.
 """
 
 import re
+from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -33,10 +39,19 @@ MANIFEST = "manifest.json"
 EXPORT_STATUS = f"{PREFIX}/export-status.json"
 INDEX = f"{PREFIX}/index.json"
 
+# Frames are named by their content, so a cached copy is never stale. JSON files change in place.
+IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+MUTABLE_CACHE_CONTROL = "no-cache"
+
 # Prefixes of the storage layout before forecasts/; only `delete_legacy` touches them
 LEGACY_PREFIXES = ("web_exports/", "model_runs/")
 
 _RUN_PATH = re.compile(r"^(\d{4})/(\d{2})/(\d{2})/(\d{2})(\d{2})Z$")
+
+
+def cache_control(key: str) -> str:
+    """The `Cache-Control` a forecasts object is served with: frames are immutable, JSON files aren't."""
+    return MUTABLE_CACHE_CONTROL if key.endswith(".json") else IMMUTABLE_CACHE_CONTROL
 
 
 def parse_run_path(path: str) -> datetime | None:
@@ -70,6 +85,9 @@ class ForecastStore:
         """Key prefix of a run's folder, e.g. `forecasts/uwwrf_4km/2026/10/29/0000Z`."""
         return f"{cls.model_prefix(model)}/{run_path(initialized)}"
 
+    def _put_json(self, key: str, data: bytes) -> None:
+        self.storage.put_bytes(key, data, "application/json", cache_control=MUTABLE_CACHE_CONTROL)
+
     def read_manifest(self, model: str, initialized: datetime) -> RunManifest | None:
         """A run's manifest, or None if the run hasn't been exported."""
         stored = self.storage.get_bytes(f"{self.run_prefix(model, initialized)}/{MANIFEST}")
@@ -78,11 +96,11 @@ class ForecastStore:
     def write_manifest(self, manifest: RunManifest) -> None:
         """Write a run's manifest. Upload every frame it lists first."""
         key = f"{self.run_prefix(manifest.model, manifest.initialized)}/{MANIFEST}"
-        self.storage.put_bytes(key, manifest.to_json(), "application/json")
+        self._put_json(key, manifest.to_json())
 
     def upload_frame(self, model: str, initialized: datetime, relative_path: str, local_path: Path) -> None:
         """Upload a frame image to `<run folder>/<relative_path>`."""
-        self.storage.upload_file(local_path, f"{self.run_prefix(model, initialized)}/{relative_path}")
+        self.storage.upload_file(local_path, f"{self.run_prefix(model, initialized)}/{relative_path}", cache_control=IMMUTABLE_CACHE_CONTROL)
 
     def read_latest(self, model: str) -> RunPointer | None:
         """The model's newest complete run, or None if none has been exported."""
@@ -91,7 +109,7 @@ class ForecastStore:
 
     def write_latest(self, pointer: RunPointer) -> None:
         """Point `latest.json` at a run. Write the run's manifest first."""
-        self.storage.put_bytes(f"{self.model_prefix(pointer.model)}/{LATEST}", pointer.to_json(), "application/json")
+        self._put_json(f"{self.model_prefix(pointer.model)}/{LATEST}", pointer.to_json())
         logger.info("%s latest run is now %s", pointer.model, pointer.path)
 
     def read_in_progress(self, model: str) -> InProgress | None:
@@ -101,7 +119,7 @@ class ForecastStore:
 
     def write_in_progress(self, progress: InProgress) -> None:
         """Write `in-progress.json`. Write the run's manifest first."""
-        self.storage.put_bytes(f"{self.model_prefix(progress.model)}/{IN_PROGRESS}", progress.to_json(), "application/json")
+        self._put_json(f"{self.model_prefix(progress.model)}/{IN_PROGRESS}", progress.to_json())
 
     def read_export_status(self) -> ExportStatus | None:
         """The exporter's status, or None if it has never run."""
@@ -110,7 +128,7 @@ class ForecastStore:
 
     def write_export_status(self, status: ExportStatus) -> None:
         """Write the exporter's status."""
-        self.storage.put_bytes(EXPORT_STATUS, status.to_json(), "application/json")
+        self._put_json(EXPORT_STATUS, status.to_json())
 
     def read_model_index(self, model: str) -> ModelIndex:
         """A model's index entry, from its pointers and a listing of its runs (slow: it lists every frame)."""
@@ -123,7 +141,7 @@ class ForecastStore:
 
     def write_index(self, index: ForecastIndex) -> None:
         """Write the index."""
-        self.storage.put_bytes(INDEX, index.to_json(), "application/json")
+        self._put_json(INDEX, index.to_json())
 
     def list_runs(self, model: str) -> list[datetime]:
         """Initialization times of the model's runs that have a manifest, newest first."""
@@ -178,3 +196,70 @@ class ForecastStore:
                 logger.info("deleted %d objects under %s", len(keys), prefix)
             deleted += len(keys)
         return deleted
+
+
+@define
+class Migration:
+    """What `migrate` copied, or would copy.
+
+    Attributes:
+        copied: Keys copied (or to copy, on a dry run), in the order they were copied.
+        skipped: Keys already in the destination, left alone.
+    """
+
+    copied: list[str]
+    skipped: int
+
+
+def _migration_phase(key: str) -> int:
+    """Copy order: frames, then run manifests, then the files that point at runs, so no reader of the
+    destination ever finds a pointer to a missing file."""
+    if not key.endswith(".json"):
+        return 0
+    return 1 if key.endswith(f"/{MANIFEST}") else 2
+
+
+def migrate(
+    source: StorageClient,
+    destination: StorageClient,
+    dry_run: bool = False,
+    threads: int = 16,
+    progress: Callable[[int, int], None] | None = None,
+) -> Migration:
+    """Copy everything under `forecasts/` that the destination bucket lacks, server side.
+
+    Keys the destination already has are never overwritten: after the exporter has switched buckets, its
+    files are newer than the source's. Running it again copies only what's new in the source. Copies get the
+    `Cache-Control` the exporter would have set.
+
+    Args:
+        source: Bucket to copy from (the private bucket, where forecasts were before).
+        destination: The public bucket.
+        dry_run: List what would be copied without copying.
+        threads: Copies in flight at once.
+        progress: Called with (copied so far, total) as copies finish.
+
+    Returns:
+        What was copied and skipped.
+    """
+    if source.bucket == destination.bucket:
+        raise ValueError(f"source and destination are the same bucket ({source.bucket})")
+    present = set(destination.list_keys(f"{PREFIX}/"))
+    keys = source.list_keys(f"{PREFIX}/")
+    todo = sorted((key for key in keys if key not in present), key=lambda key: (_migration_phase(key), key))
+    logger.info(
+        "%s %d of %d objects from %s to %s (%d already there)",
+        "would copy" if dry_run else "copying", len(todo), len(keys), source.bucket, destination.bucket, len(keys) - len(todo),
+    )
+    if dry_run:
+        return Migration(todo, len(keys) - len(todo))
+    done = 0
+    with ThreadPoolExecutor(max_workers=threads) as pool:
+        for phase in range(3):
+            batch = [key for key in todo if _migration_phase(key) == phase]
+            # each phase finishes, and its errors surface, before the next starts
+            for _ in pool.map(lambda key: destination.copy_from(source.bucket, key, cache_control(key)), batch):
+                done += 1
+                if progress is not None:
+                    progress(done, len(todo))
+    return Migration(todo, len(keys) - len(todo))

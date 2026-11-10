@@ -29,6 +29,9 @@ export function usePlayback(layer: Ref<ForecastLayer | undefined>, intervalMs: R
       failed.value = new Set()
       next.forEach((f, i) => {
         const image = new Image()
+        // Frames come from another origin (the public bucket) and Mapbox fetches them with CORS. Preload them
+        // the same way, or the browser may cache a copy without CORS headers that Mapbox can't then use.
+        image.crossOrigin = 'anonymous'
         image.src = f.url
         image
           .decode()

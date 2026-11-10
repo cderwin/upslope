@@ -5,17 +5,18 @@ from pathlib import Path
 
 import pytest
 
-from upslope.clients.forecasts import ForecastStore, parse_run_path
+from upslope.clients.forecasts import IMMUTABLE_CACHE_CONTROL, ForecastStore, migrate, parse_run_path
 from upslope.models.manifest import Frame, RunLayer, RunManifest, RunPointer, frame_name, run_path
 
 MODEL = "uwwrf_4km"
 INITIALIZED = datetime(2026, 10, 29, 0, tzinfo=UTC)
 NOW = datetime(2026, 10, 29, 6, tzinfo=UTC)
+DIGEST = "0123456789abcdef"
 
 
 def manifest(initialized: datetime = INITIALIZED, hours: list[int] | None = None) -> RunManifest:
     hours = [0, 3] if hours is None else hours
-    frames = [Frame(h, initialized + timedelta(hours=h), f"surface-temp/{frame_name(initialized + timedelta(hours=h))}") for h in hours]
+    frames = [Frame(h, initialized + timedelta(hours=h), f"surface-temp/{frame_name(initialized + timedelta(hours=h), DIGEST)}") for h in hours]
     layer = RunLayer("surface-temp", "Surface temperature", "washington", "f1", [0, 3], (2, 1), [(0.0, 0.0)] * 4, frames)
     return RunManifest(MODEL, "UW WRF 4km", initialized, 3, NOW, [layer])
 
@@ -39,11 +40,18 @@ def test_layout_matches_open_meteo_style(store: ForecastStore, memory_storage, t
     store.write_latest(RunPointer.to(manifest(), NOW))
     assert sorted(memory_storage.objects) == [
         "forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json",
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000.png",
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300.png",
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.png",
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png",
         "forecasts/uwwrf_4km/latest.json",
     ]
-    assert memory_storage.objects["forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300.png"][1] == "image/png"
+    assert memory_storage.objects["forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png"][1] == "image/png"
+    # browsers read the bucket directly: frames are cached for good, the JSON files revalidated
+    assert {key: memory_storage.cache_control[key] for key in memory_storage.objects} == {
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json": "no-cache",
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.png": IMMUTABLE_CACHE_CONTROL,
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png": IMMUTABLE_CACHE_CONTROL,
+        "forecasts/uwwrf_4km/latest.json": "no-cache",
+    }
 
 
 def test_manifest_and_pointer_round_trip(store: ForecastStore, tmp_path: Path) -> None:
@@ -68,7 +76,7 @@ def test_manifest_json_shape(store: ForecastStore, memory_storage, tmp_path: Pat
     layer = data["layers"][0]
     assert {"id", "name", "maptype", "fingerprint", "hours", "dimensions", "coordinates", "frames", "legend", "values"} <= layer.keys()
     assert layer["frames"][1] == {
-        "hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300.png", "values": None,
+        "hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300-0123456789abcdef.png", "values": None,
     }
 
 
@@ -144,3 +152,52 @@ def test_delete_legacy_only_touches_old_prefixes(store: ForecastStore, memory_st
     assert not any(key.startswith(("web_exports/", "model_runs/")) for key in memory_storage.objects)
     assert sum(key.startswith("georegistration/") for key in memory_storage.objects) == 3
     assert store.list_runs(MODEL) == [INITIALIZED]
+
+
+# --- moving forecasts to the public bucket
+
+
+def test_migrate_copies_what_the_destination_lacks(memory_storage, public_storage, tmp_path: Path) -> None:
+    source = ForecastStore(memory_storage)
+    export(source, tmp_path, manifest())
+    source.write_latest(RunPointer.to(manifest(), NOW))
+    # the exporter has already written a newer pointer in the public bucket: it's kept
+    newer = RunPointer.to(manifest(INITIALIZED + timedelta(hours=6)), NOW)
+    ForecastStore(public_storage).write_latest(newer)
+    order: list[str] = []
+    original = public_storage.copy_from
+
+    def recording(source_bucket: str, key: str, cache_control: str | None = None) -> None:
+        order.append(key)
+        original(source_bucket, key, cache_control)
+
+    public_storage.copy_from = recording
+    result = migrate(memory_storage, public_storage, threads=1)
+    frames = [
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.png",
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png",
+    ]
+    # frames before the manifest that lists them
+    assert order == result.copied == [*frames, "forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json"]
+    assert result.skipped == 1
+    assert ForecastStore(public_storage).read_latest(MODEL) == newer
+    assert public_storage.objects[frames[0]] == memory_storage.objects[frames[0]]
+    assert public_storage.cache_control[frames[0]] == IMMUTABLE_CACHE_CONTROL
+    assert public_storage.cache_control["forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json"] == "no-cache"
+
+    # run again: nothing left to copy
+    assert migrate(memory_storage, public_storage).copied == []
+
+
+def test_migrate_dry_run_copies_nothing(memory_storage, public_storage, tmp_path: Path) -> None:
+    export(ForecastStore(memory_storage), tmp_path, manifest())
+    memory_storage.put_bytes("georegistration/published.json", b"{}", "application/json")
+    result = migrate(memory_storage, public_storage, dry_run=True)
+    assert len(result.copied) == 3 and public_storage.objects == {}
+    # only forecasts/ is ever copied
+    assert not any(key.startswith("georegistration/") for key in result.copied)
+
+
+def test_migrate_refuses_the_same_bucket(memory_storage) -> None:
+    with pytest.raises(ValueError, match="same bucket"):
+        migrate(memory_storage, memory_storage)
