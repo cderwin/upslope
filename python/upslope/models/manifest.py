@@ -1,5 +1,5 @@
 """What an export writes to storage: for each model run (its manifest), per model (`latest.json`,
-`in-progress.json`), and for the exporter as a whole (`export-status.json`)."""
+`in-progress.json`), and for the exporter as a whole (`export-status.json`, `index.json`)."""
 
 from datetime import datetime, timedelta
 from typing import Literal, Self
@@ -305,6 +305,50 @@ class ExportStatus:
     consecutive_failures: int = 0
     error: str | None = None
     models: list[ModelCheckStatus] = field(factory=list)
+
+    def to_json(self) -> bytes:
+        return converter.dumps(self).encode()
+
+    @classmethod
+    def from_json(cls, data: bytes | str) -> Self:
+        return converter.loads(data, cls)
+
+
+@define
+class ModelIndex:
+    """One model's entry in the index: what its pointers say and which runs are kept.
+
+    Attributes:
+        id: Model id.
+        latest: `latest.json`, or None if no run is complete.
+        in_progress: `in-progress.json`, or None if no run has started.
+        runs: Initialization times (UTC) of the runs that have a manifest, newest first.
+    """
+
+    id: str
+    latest: RunPointer | None = None
+    in_progress: InProgress | None = None
+    runs: list[datetime] = field(factory=list)
+
+
+@define
+class ForecastIndex:
+    """Every model's pointers and kept runs in one object: `forecasts/index.json`.
+
+    The exporter writes it after each model's check, from that model's files in storage, so the server can
+    read one object instead of listing every model's runs. The per-model files stay the source of truth.
+
+    Attributes:
+        models: Each exported model's entry, in config order.
+        updated_at: When the index was last written.
+    """
+
+    models: list[ModelIndex] = field(factory=list)
+    updated_at: datetime | None = None
+
+    def model(self, model_id: str) -> ModelIndex | None:
+        """Look up a model's entry by id."""
+        return next((model for model in self.models if model.id == model_id), None)
 
     def to_json(self) -> bytes:
         return converter.dumps(self).encode()

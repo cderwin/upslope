@@ -4,9 +4,10 @@ Exporting runs in a separate process (`upslope export-loop`, see `upslope.export
 with requests; the server only reads what it writes.
 """
 
+import asyncio
 import os
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from litestar import Litestar, get
@@ -80,7 +81,13 @@ def create_app(
             await status.refresh()
         except Exception:
             logger.exception("could not read forecast status at startup; will retry on request")
-        yield
+        refresher = asyncio.create_task(status.run_forever(), name="forecast-status-refresh")
+        try:
+            yield
+        finally:
+            refresher.cancel()
+            with suppress(asyncio.CancelledError):
+                await refresher
 
     route_handlers = [health, ForecastController, AdminGeoregistrationController]
     if (webapp_dist / "index.html").is_file():

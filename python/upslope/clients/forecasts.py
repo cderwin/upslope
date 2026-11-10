@@ -2,6 +2,7 @@
 
 ```
 forecasts/export-status.json                          the exporter's health (ExportStatus)
+forecasts/index.json                                  every model's pointers and kept runs, for /fx/status (ForecastIndex)
 forecasts/<model>/latest.json                         newest complete run (RunPointer)
 forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
@@ -21,7 +22,7 @@ from attrs import define
 
 from upslope.clients.storage import StorageClient
 from upslope.logging import get_logger
-from upslope.models.manifest import ExportStatus, InProgress, RunManifest, RunPointer, run_path
+from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, ModelIndex, RunManifest, RunPointer, run_path
 
 logger = get_logger(__name__)
 
@@ -30,6 +31,7 @@ LATEST = "latest.json"
 IN_PROGRESS = "in-progress.json"
 MANIFEST = "manifest.json"
 EXPORT_STATUS = f"{PREFIX}/export-status.json"
+INDEX = f"{PREFIX}/index.json"
 
 # Prefixes of the storage layout before forecasts/; only `delete_legacy` touches them
 LEGACY_PREFIXES = ("web_exports/", "model_runs/")
@@ -109,6 +111,19 @@ class ForecastStore:
     def write_export_status(self, status: ExportStatus) -> None:
         """Write the exporter's status."""
         self.storage.put_bytes(EXPORT_STATUS, status.to_json(), "application/json")
+
+    def read_model_index(self, model: str) -> ModelIndex:
+        """A model's index entry, from its pointers and a listing of its runs (slow: it lists every frame)."""
+        return ModelIndex(model, self.read_latest(model), self.read_in_progress(model), self.list_runs(model))
+
+    def read_index(self) -> ForecastIndex | None:
+        """The index of every model's pointers and runs, or None if it hasn't been written."""
+        stored = self.storage.get_bytes(INDEX)
+        return None if stored is None else ForecastIndex.from_json(stored.data)
+
+    def write_index(self, index: ForecastIndex) -> None:
+        """Write the index."""
+        self.storage.put_bytes(INDEX, index.to_json(), "application/json")
 
     def list_runs(self, model: str) -> list[datetime]:
         """Initialization times of the model's runs that have a manifest, newest first."""

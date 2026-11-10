@@ -275,10 +275,18 @@ Runs live under `forecasts/`, laid out like open-meteo's
 | Key | Contents |
 | --- | --- |
 | `forecasts/export-status.json` | The exporter's health: its last check's outcome, per model (above) |
+| `forecasts/index.json` | Every model's `latest.json`, `in-progress.json` and retained runs in one object, for `/fx/status` (below) |
 | `forecasts/<model>/latest.json` | The newest complete run: `{model, initialized, path, updated_at}` |
 | `forecasts/<model>/in-progress.json` | The newest run that has started, and each layer's progress (below) |
 | `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json` | The run's layers and frames (below) |
 | `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>.png` | Frames, named by valid time (UTC) |
+
+`index.json` (`ForecastIndex` in `models/manifest.py`) exists so the server
+reads one object instead of listing every frame of every model to find its
+runs. As each model's check finishes, the exporter re-reads that model's
+pointers and runs from storage and rewrites the index if its entry changed, so
+the index can't drift from the files; the per-model files stay the source of
+truth.
 
 A run's manifest is rewritten as its frames arrive, after the frames are
 uploaded, and `latest.json` points at a run only once it's complete, so a reader
@@ -369,7 +377,7 @@ requires), shown on the map.
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`); at most a minute old |
+| `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
 | `GET /fx/data/{path}` | `forecasts/{path}` from storage: pointers and manifests (`no-cache`) and frames (`max-age=300`), with ETags |
 
 `in_progress` adds `checked_at`, `complete` and, per configured layer, `name`,
@@ -378,6 +386,13 @@ derives: `complete`; `waiting` for the next hour; `stalled` when an incomplete
 layer has gained no frame for 2 hours (`STALL_AFTER`; a layer with no frames is
 measured from the run's first frame); or `error` when the last attempt failed
 (it's retried at the next check).
+
+The server builds the status from `index.json` and `export-status.json`, which
+a background task re-reads every 60 seconds with their ETags, so a request
+never waits on storage and an unchanged file costs one small request. Until
+the exporter first writes the index, the server lists every model's runs
+instead (slow, but still in the background). With the index written once per
+model check, a running check's progress shows up when that model finishes.
 
 `export` is `export-status.json` (see [The exporter](#the-exporter)), or null if
 the exporter has never run. `export_overdue` is true once `export.overdue_after`
