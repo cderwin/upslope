@@ -344,29 +344,6 @@ def test_latest_complete_run_raises_on_upstream_errors() -> None:
         asyncio.run(uw_client(status=503).latest_complete_run(RUN_MODEL, datetime(2026, 10, 29, 5, 0, tzinfo=UTC)))
 
 
-def test_download_layer_reads_the_runs_directory(tmp_path: Path) -> None:
-    requested: list[str] = []
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        requested.append(request.url.path)
-        return httpx.Response(200, content=b"gif")
-
-    client = mock_client(handler)
-    layer = make_layer("3-hour-precip", "wa_pcp3", HourRange(first=6, last=12))
-    asyncio.run(client.download_layer(layer, datetime(2026, 10, 28, 12, tzinfo=UTC), tmp_path / "3-hour-precip"))
-    assert requested == [
-        "/wrfrt/data/2026102812/images_d3/wa_pcp3.06.0000.gif",
-        "/wrfrt/data/2026102812/images_d3/wa_pcp3.09.0000.gif",
-        "/wrfrt/data/2026102812/images_d3/wa_pcp3.12.0000.gif",
-    ]
-    assert (tmp_path / "3-hour-precip/hour12.gif").read_bytes() == b"gif"
-
-    # files already on disk aren't downloaded again
-    requested.clear()
-    asyncio.run(client.download_layer(layer, datetime(2026, 10, 28, 12, tzinfo=UTC), tmp_path / "3-hour-precip"))
-    assert requested == []
-
-
 # --- driver
 
 
@@ -838,7 +815,7 @@ def test_fit_report_flags_too_few_points(document: AnnotationDocument) -> None:
 def test_cli_registers_commands() -> None:
     result = CliRunner().invoke(main, ["--help"])
     assert result.exit_code == 0
-    for command in ("export-web", "serve", "download", "reproject", "check-layers", "delete-legacy-exports"):
+    for command in ("export-web", "export-loop", "serve", "check-layers", "render-frame", "georegistration"):
         assert command in result.output
     assert "--force" in CliRunner().invoke(main, ["export-web", "--help"]).output
 

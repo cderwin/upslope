@@ -1,12 +1,10 @@
 # upslope
 
-Command-line tooling for downloading and georegistering forecast map images
-(currently UW WRF).
+The exporter, server and command-line tooling: UW WRF images georegistered with
+hand-placed annotations, and dynamical.org models rendered from gridded data.
 
 ```sh
 uv run upslope check-layers        # check every configured layer's images exist upstream (--model, --run)
-uv run upslope download            # forecast/raw/<model>/<layer>/hourNN.gif (--model, --run)
-uv run upslope reproject           # forecast/georegistered/<model>/<layer>/hourNN.tiff
 uv run upslope export-web          # one export check of every model; uploads PNGs + manifest.json to storage
 uv run upslope export-loop         # the exporter: a check every 15 min, forever (--interval, --run-immediately)
 uv run upslope registration-error  # per-maptype fit error, in meters (--draft, --snapshot DIR)
@@ -17,7 +15,7 @@ uv run upslope georegistration promote-examples  # draft an image for each confi
 uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.png  # preview a dynamical.org frame
 ```
 
-`reproject` and `registration-error` read the annotations published in storage;
+`registration-error` reads the annotations published in storage;
 pass `--snapshot ../dev/georegistration` to use the repo's snapshot instead.
 
 ## Models config
@@ -95,7 +93,7 @@ against the live dataset and lists hours not published yet;
 The UW WRF plots are drawn on the model's native grid, a Lambert conformal conic
 projection on a 6370 km sphere (WPS namelist: `truelat1=30`, `truelat2=60`,
 `stand_lon=-121`; see `WRF_LAMBERT_CRS` in `georegistration.py`). Because each
-plot is axis-aligned with that grid, `reproject` fits only a scale and offset per
+plot is axis-aligned with that grid, the export fits only a scale and offset per
 axis for each map type from the published annotations (pixel -> Lambert meters;
 see below), then warps
 every frame to Web Mercator (EPSG:3857) with nearest-neighbour resampling, so the

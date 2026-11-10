@@ -78,8 +78,6 @@ just reset     # stop and wipe MinIO so the next `up` starts fresh
 ```sh
 cd python
 uv run upslope --help
-uv run upslope download                            # raw GIFs into forecast/raw/
-uv run upslope reproject --snapshot ../dev/georegistration
 uv run upslope registration-error --snapshot ../dev/georegistration
 just py-export                                     # full export against the bucket in .env.local
 just py-serve                                      # server against the bucket in .env.local

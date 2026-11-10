@@ -11,7 +11,6 @@ import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 from attrs import define, field
@@ -25,11 +24,6 @@ logger = get_logger(__name__)
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 # Images are small; a response that takes longer than this is stuck
 DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
-
-
-def raw_image_name(hour: int) -> str:
-    """File name of a downloaded image in a layer's working directory."""
-    return f"hour{hour:02d}.gif"
 
 
 @define
@@ -164,23 +158,6 @@ class ImageClient:
         response = await self.request("GET", layer.image_url(initialized, hour))
         _ = response.raise_for_status()
         return response.content
-
-    async def download_layer(self, layer: LayerConfig, initialized: datetime, directory: Path) -> None:
-        """Download every forecast hour of a layer, skipping files already on disk.
-
-        Args:
-            layer: Layer to download.
-            initialized: Initialization time of the model run to download from.
-            directory: Where to write the images, named by `raw_image_name`.
-        """
-        directory.mkdir(exist_ok=True, parents=True)
-        for hour in layer.hours.hours:
-            path = directory / raw_image_name(hour)
-            if path.exists():
-                logger.debug("skipping %s, already downloaded", path)
-                continue
-            logger.debug("downloading %s", layer.image_url(initialized, hour))
-            _ = path.write_bytes(await self.download_image(layer, initialized, hour))
 
     async def image_exists(self, layer: LayerConfig, initialized: datetime, hour: int) -> bool:
         """Check whether one forecast image has been published.
