@@ -50,12 +50,11 @@ variables:
   - {id: reflectivity, name: Composite reflectivity, group: Precipitation}
   - {id: snow, name: 3-hour snowfall, group: Snow}
   - {id: model-snow, name: 3-hour model snowfall, group: Snow}
-  - {id: 6-hour-snowfall-water, name: 6-hour snowfall (water equivalent), group: Snow}
   - {id: accumulated-snowfall, name: Accumulated snowfall, group: Snow}
   - {id: snow-depth, name: Snow depth, group: Snow}
-  - {id: snow-water-equivalent, name: Snow water equivalent, group: Snow}
+  - {id: swe, name: Snow water equivalent, group: Snow}
+  - {id: 6-hour-swe, name: Snow water equivalent (6 hour), group: Snow}
   - {id: freezing-level, name: Freezing level, group: Freezing level}
-  - {id: freezing-level-terrain, name: Freezing level over terrain, group: Freezing level}
   - {id: cloud-cover, name: Cloud cover, group: Clouds}
   - {id: integrated-cloud, name: Integrated cloud, group: Clouds}
   - {id: longwave, name: Outgoing longwave radiation, group: Clouds}
@@ -104,11 +103,6 @@ models:
 
       - id: accumulated-snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/snowacc.{hour:02d}.0000.gif
-        hours: {last: 120}
-        maptype: pacific-northwest
-
-      - id: freezing-level-terrain
-        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/fzlt.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
 
@@ -167,11 +161,6 @@ models:
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snowacc.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington
-
-      - id: freezing-level-terrain
-        url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/fzlt.{hour:02d}.0000.gif
-        hours: {last: 72}
-        maptype: pacific-northwest-hr
 
       - id: freezing-level
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/fzlc.{hour:02d}.0000.gif
