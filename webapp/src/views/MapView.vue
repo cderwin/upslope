@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router'
 import ForecastMap from '@/forecast/components/ForecastMap.vue'
 import MapControls from '@/forecast/components/MapControls.vue'
 import MapLegend from '@/forecast/components/MapLegend.vue'
-import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import {
   FORECAST_BASE_URL,
   IN_PROGRESS,
@@ -26,6 +25,7 @@ import {
   type Choices,
   type LoadedLayers,
 } from '@/forecast/selection'
+import { openRunStatus, setStatus } from '@/forecast/status'
 import type { ForecastLayer, ForecastStatus, RunRef } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
 import { adminToken } from '@/admin/token'
@@ -47,7 +47,6 @@ const status = ref<ForecastStatus | null>(null)
 /** Map-ready layers of each model's run, for the models whose manifest has loaded. */
 const modelLayers = ref<Record<string, ForecastLayer[]>>({})
 const error = ref('')
-const statusOpen = ref(false)
 
 /** `?run=`: a run other than the latest, e.g. `2026-10-29T00Z`, or `in-progress` to preview the newest run. */
 const runQuery = computed(() => (typeof route.query.run === 'string' ? route.query.run : undefined))
@@ -90,16 +89,6 @@ const availableRuns = computed<RunRef[]>(() =>
 )
 const problem = computed(() => error.value || noForecast.value)
 
-/** Status button color: blue while a run is coming in, amber if a layer is stuck, red on errors. */
-const statusTone = computed(() => {
-  const runs = (status.value?.models ?? []).map((model) => model.in_progress).filter((run) => run !== null)
-  const states = runs.flatMap((run) => run.layers.map((layer) => layer.state))
-  if (states.includes('error')) return 'danger'
-  if (states.includes('stalled')) return 'warning'
-  if (runs.some((run) => !run.complete)) return 'info'
-  return 'success'
-})
-
 /** The banner for a preview: which run, and how far along. */
 const previewLabel = computed(() => {
   const current = layer.value
@@ -121,7 +110,8 @@ function queryNumber(name: string): number | undefined {
 }
 
 const opacity = ref(Math.min(Math.max(queryNumber('opacity') ?? DEFAULT_OPACITY, 0), 1))
-const terrain = ref(route.query.terrain === '1')
+/** 3D terrain is a viewer setting (in Settings), not part of the link. */
+const terrain = computed(() => settings.terrain)
 
 // On a new layer, show the same valid time as before (the nearest frame), seeded from ?hour= on first load.
 // Models' runs start at different times, so keeping the forecast hour would jump in time.
@@ -136,7 +126,7 @@ watch([layer, () => frame.value?.hour], ([current, hour]) => {
 })
 
 // Mirror the view state into the URL (replace, so playback doesn't flood history), once the selection shows.
-watch([selectedLayer, () => frame.value?.hour, opacity, terrain], ([current, hour, alpha, is3d]) => {
+watch([selectedLayer, () => frame.value?.hour, opacity], ([current, hour, alpha]) => {
   if (!current || current !== layer.value) return
   void router.replace({
     name: 'map-layer',
@@ -145,7 +135,6 @@ watch([selectedLayer, () => frame.value?.hour, opacity, terrain], ([current, hou
       run: runQuery.value,
       hour: hour === undefined ? undefined : String(hour),
       opacity: String(alpha),
-      terrain: is3d ? '1' : undefined,
     },
   })
 })
@@ -243,6 +232,7 @@ async function load() {
     const current = await fetchStatus(signal)
     if (gen !== generation) return
     status.value = current
+    setStatus(current)
     modelLayers.value = {}
     if (selection.value) await loadSelected(selection.value.model)
   } catch (e) {
@@ -314,7 +304,7 @@ onBeforeUnmount(() => {
             Preview the run in progress
           </RouterLink>
           <span v-if="!previewing && status.models.some((model) => model.in_progress)"> · </span>
-          <a href="#" @click.prevent="statusOpen = true">Model run status</a>
+          <a href="#" @click.prevent="openRunStatus">Model run status</a>
         </div>
         <small v-else>
           Forecast data comes from <code>{{ FORECAST_BASE_URL }}/status</code>. In development, run the local
@@ -344,7 +334,6 @@ onBeforeUnmount(() => {
         v-model:index="index"
         v-model:opacity="opacity"
         v-model:playing="playing"
-        v-model:terrain="terrain"
         :variables="variableOptions"
         :models="modelOptions"
         :selection="selection"
@@ -355,15 +344,6 @@ onBeforeUnmount(() => {
         @select-model="selectModel"
         @step="step"
       >
-        <button
-          type="button"
-          class="btn btn-sm btn-outline-secondary w-100 d-flex align-items-center justify-content-center gap-2"
-          title="Latest and in-progress model runs"
-          @click="statusOpen = true"
-        >
-          <span class="status-dot" :class="`bg-${statusTone}`" aria-hidden="true"></span>
-          Model runs
-        </button>
         <!-- only UW WRF frames (which have a maptype) are georegistered with annotations -->
         <div v-if="adminToken.token && layer.maptype">
           <button
@@ -383,7 +363,6 @@ onBeforeUnmount(() => {
     <div v-else class="d-flex h-100 align-items-center justify-content-center text-body-secondary">
       Loading forecast…
     </div>
-    <RunStatusDialog v-model:open="statusOpen" :initial="status" @loaded="status = $event" />
   </div>
 </template>
 
@@ -391,13 +370,6 @@ onBeforeUnmount(() => {
 .map-view {
   position: absolute;
   inset: 0;
-}
-
-.status-dot {
-  display: inline-block;
-  width: 0.6rem;
-  height: 0.6rem;
-  border-radius: 50%;
 }
 
 .run-banner {

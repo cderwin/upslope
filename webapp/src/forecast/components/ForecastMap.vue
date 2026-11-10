@@ -20,6 +20,10 @@ const props = defineProps<{
 
 const SOURCE_ID = 'forecast'
 const LAYER_ID = 'forecast-raster'
+const EXTENT_SOURCE_ID = 'forecast-extent'
+const EXTENT_LAYER_ID = 'forecast-extent-line'
+// Burnt orange: stands out on the satellite basemap and on the forecast's own colors without matching either.
+const EXTENT_COLOR = '#cc5500'
 // Satellite imagery with roads and place names; the same in light and dark mode.
 const STYLE_URL = 'mapbox://styles/mapbox/satellite-streets-v12'
 const DEM_SOURCE_ID = 'mapbox-dem'
@@ -33,6 +37,13 @@ function bounds(layer: ForecastLayer): mapboxgl.LngLatBounds {
   const result = new mapboxgl.LngLatBounds()
   for (const corner of layer.coordinates) result.extend(corner)
   return result
+}
+
+/** The outline of the layer's data, closed: its source grid's edges, or (in older manifests) the image's corners. */
+function extent(layer: ForecastLayer) {
+  const points = layer.extent?.length ? layer.extent : layer.coordinates
+  const ring = [...points, points[0]]
+  return { type: 'Feature' as const, properties: {}, geometry: { type: 'LineString' as const, coordinates: ring } }
 }
 
 /** Turn terrain on or off; the forecast and basemap raster layers drape over it. */
@@ -55,6 +66,8 @@ function applyTerrain(enabled: boolean) {
 function addForecastLayer() {
   if (!map || map.getSource(SOURCE_ID)) return
   applyTerrain(props.terrain)
+  // fitting the initial bounds leaves the camera flat, whatever pitch the map was created with
+  if (props.terrain) map.setPitch(TERRAIN_PITCH)
   map.addSource(SOURCE_ID, { type: 'image', url: props.url, coordinates: props.layer.coordinates })
   // Draw beneath the first label layer so place names stay readable over the forecast.
   const firstSymbol = map.getStyle()?.layers?.find((layer) => layer.type === 'symbol')?.id
@@ -68,6 +81,16 @@ function addForecastLayer() {
         'raster-fade-duration': 0,
         'raster-resampling': 'nearest',
       },
+    },
+    firstSymbol,
+  )
+  map.addSource(EXTENT_SOURCE_ID, { type: 'geojson', data: extent(props.layer) })
+  map.addLayer(
+    {
+      id: EXTENT_LAYER_ID,
+      type: 'line',
+      source: EXTENT_SOURCE_ID,
+      paint: { 'line-color': EXTENT_COLOR, 'line-width': 2, 'line-opacity': 0.9 },
     },
     firstSymbol,
   )
@@ -144,7 +167,10 @@ watch(
   () => [props.layer, props.url] as const,
   ([layer, url], [previousLayer]) => {
     source()?.updateImage({ url, coordinates: layer.coordinates })
-    if (layer !== previousLayer) map?.fitBounds(bounds(layer), { padding: 40 })
+    if (layer !== previousLayer) {
+      map?.getSource<mapboxgl.GeoJSONSource>(EXTENT_SOURCE_ID)?.setData(extent(layer))
+      map?.fitBounds(bounds(layer), { padding: 40 })
+    }
   },
 )
 

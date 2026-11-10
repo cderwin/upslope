@@ -23,7 +23,6 @@ function modelLabel(model: ModelChoice): string {
 const index = defineModel<number>('index', { required: true })
 const opacity = defineModel<number>('opacity', { required: true })
 const playing = defineModel<boolean>('playing', { required: true })
-const terrain = defineModel<boolean>('terrain', { required: true })
 
 // The forecast covers the Pacific Northwest, so times read in Pacific time wherever the viewer is.
 const validFormat = new Intl.DateTimeFormat('en-US', {
@@ -110,12 +109,6 @@ const framesLabel = computed(() =>
           max="1"
           step="0.05"
         />
-      </div>
-
-      <div class="form-check form-switch mb-0">
-        <input id="forecast-terrain" v-model="terrain" class="form-check-input" type="checkbox" role="switch" />
-        <label class="form-check-label small" for="forecast-terrain">3D terrain</label>
-        <div class="form-text mt-0">Ctrl-drag or right-drag to tilt and rotate.</div>
       </div>
 
       <div>

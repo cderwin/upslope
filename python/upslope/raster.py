@@ -1,5 +1,7 @@
-"""Raster steps every forecast source shares: warping to Web Mercator, corner coordinates and map-ready PNGs."""
+"""Raster steps every forecast source shares: warping to Web Mercator, corner coordinates, footprints and
+map-ready PNGs."""
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +14,41 @@ from rasterio.warp import Resampling, calculate_default_transform, reproject
 # Web Mercator: Mapbox draws image overlays linearly between their corners in this CRS, so warped
 # frames place exactly.
 OUTPUT_CRS = "EPSG:3857"
+
+# GeoTIFF tag holding a frame's footprint (see `footprint`), as JSON
+FOOTPRINT_TAG = "UPSLOPE_FOOTPRINT"
+# Points along each edge of a footprint: enough to follow an edge that reprojection curves
+FOOTPRINT_POINTS_PER_EDGE = 16
+
+
+def footprint(src_crs: str, src_transform: Affine, width: int, height: int) -> list[tuple[float, float]]:
+    """The outline of a raster's grid in (lon, lat): where a warped frame has data, as opposed to the nodata
+    that warping leaves around it.
+
+    Args:
+        src_crs: CRS of the grid.
+        src_transform: Transform from corner-based (col, row) to `src_crs` coordinates.
+        width: Grid columns.
+        height: Grid rows.
+
+    Returns:
+        (lon, lat) pairs rounded to 5 places, clockwise from the top-left corner along the top edge, each
+        edge densified so it stays true once reprojected; the ring isn't closed.
+    """
+    step = np.arange(FOOTPRINT_POINTS_PER_EDGE) / FOOTPRINT_POINTS_PER_EDGE
+    n = FOOTPRINT_POINTS_PER_EDGE
+    cols = np.concatenate([step * width, np.full(n, width), (1 - step) * width, np.zeros(n)])
+    rows = np.concatenate([np.zeros(n), step * height, np.full(n, height), (1 - step) * height])
+    a, b, c, d, e, f = src_transform[:6]
+    xs, ys = a * cols + b * rows + c, d * cols + e * rows + f
+    lons, lats = Transformer.from_crs(src_crs, "EPSG:4326", always_xy=True).transform(xs, ys)
+    return [(round(float(lon), 5), round(float(lat), 5)) for lon, lat in zip(lons, lats)]
+
+
+def read_footprint(dataset: rasterio.DatasetReader) -> list[tuple[float, float]] | None:
+    """The footprint `write_geotiff` stored with a raster, if any."""
+    stored = dataset.tags().get(FOOTPRINT_TAG)
+    return None if stored is None else [tuple(point) for point in json.loads(stored)]
 
 
 def warp_to_web_mercator(
@@ -70,6 +107,7 @@ def write_geotiff(
     nodata: float,
     colormap: dict[int, tuple[int, ...]] | None = None,
     crs: str = OUTPUT_CRS,
+    extent: list[tuple[float, float]] | None = None,
 ) -> None:
     """Write a raster as a compressed GeoTIFF.
 
@@ -80,6 +118,7 @@ def write_geotiff(
         nodata: Nodata value.
         colormap: Palette for band 1, index -> RGB(A), for paletted images.
         crs: The raster's CRS.
+        extent: The source grid's footprint (see `footprint`), to store with it.
     """
     count, height, width = data.shape
     profile = {
@@ -97,6 +136,8 @@ def write_geotiff(
         dst.write(data)
         if colormap is not None:
             dst.write_colormap(1, colormap)
+        if extent is not None:
+            dst.update_tags(**{FOOTPRINT_TAG: json.dumps(extent)})
 
 
 def image_coordinates(dataset: rasterio.DatasetReader) -> list[tuple[float, float]]:

@@ -1,19 +1,30 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink, RouterView } from 'vue-router'
 import TokenDialog from '@/admin/TokenDialog.vue'
 import { adminToken } from '@/admin/token'
+import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
+import { forecastStatus, openRunStatus, refreshStatus, statusLabel, statusTone } from '@/forecast/status'
 import SettingsDialog from '@/settings/SettingsDialog.vue'
 
 const settingsOpen = ref(false)
 
+/** How often the navbar's status dot refreshes. */
+const STATUS_REFRESH_MS = 60_000
+let statusTimer: number | undefined
+
 onMounted(() => {
+  void refreshStatus()
+  statusTimer = window.setInterval(() => void refreshStatus(), STATUS_REFRESH_MS)
+
   // Follow the OS theme; Bootstrap 5.3 restyles itself from this attribute.
   const dark = window.matchMedia('(prefers-color-scheme: dark)')
   const apply = () => document.documentElement.setAttribute('data-bs-theme', dark.matches ? 'dark' : 'light')
   apply()
   dark.addEventListener('change', apply)
 })
+
+onBeforeUnmount(() => window.clearInterval(statusTimer))
 </script>
 
 <template>
@@ -32,6 +43,15 @@ onMounted(() => {
           <RouterLink class="nav-link" :to="{ name: 'annotation' }">Annotation</RouterLink>
         </li>
       </ul>
+      <button
+        type="button"
+        class="btn btn-link nav-link px-2 d-flex align-items-center"
+        :title="statusLabel"
+        :aria-label="statusLabel"
+        @click="openRunStatus"
+      >
+        <span class="status-dot" :class="`bg-${statusTone}`" aria-hidden="true"></span>
+      </button>
       <button
         type="button"
         class="btn btn-link nav-link px-2"
@@ -53,4 +73,14 @@ onMounted(() => {
   </main>
   <TokenDialog />
   <SettingsDialog v-model:open="settingsOpen" />
+  <RunStatusDialog v-model:open="forecastStatus.dialogOpen" />
 </template>
+
+<style scoped>
+.status-dot {
+  display: inline-block;
+  width: 0.75rem;
+  height: 0.75rem;
+  border-radius: 50%;
+}
+</style>

@@ -11,6 +11,7 @@ import {
   FRAME_INTERVAL_MIN_MS,
   setDefaultModel,
   setFrameInterval,
+  setTerrain,
   settings,
 } from './settings'
 
@@ -93,6 +94,22 @@ function logIn() {
                 Reset
               </button>
               <span>Slower</span>
+            </div>
+          </section>
+
+          <section>
+            <h6>Map</h6>
+            <div class="form-check form-switch mb-0">
+              <input
+                id="settings-terrain"
+                class="form-check-input"
+                type="checkbox"
+                role="switch"
+                :checked="settings.terrain"
+                @change="setTerrain(($event.target as HTMLInputElement).checked)"
+              />
+              <label class="form-check-label" for="settings-terrain">3D terrain</label>
+              <div class="form-text mt-0">Ctrl-drag or right-drag the map to tilt and rotate.</div>
             </div>
           </section>
 

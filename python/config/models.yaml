@@ -362,9 +362,8 @@ models:
     # a materialized dataset (no virtual one exists): a run appears once it's complete, about 4.5 h after init
     source: {kind: dynamical, dataset: eccc-hrdps-forecast}
     region: [-127, 41.5, -113, 50]
-    attribution: >-
-      ECCC HRDPS data processed by dynamical.org from Environment and Climate Change Canada, used under the ECCC
-      Data Servers End-use Licence version 2.1 (https://eccc-msc.github.io/open-data/licence/readme_en/).
+    # the ECCC Data Servers End-use Licence 2.1: https://eccc-msc.github.io/open-data/licence/readme_en/
+    attribution: ECCC HRDPS data processed by dynamical.org from Environment and Climate Change Canada (ECCC End-use Licence).
     start_times: [0, 6, 12, 18]
     retention_days: 2
     layers:

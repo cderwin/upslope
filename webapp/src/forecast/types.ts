@@ -123,6 +123,8 @@ export interface RunLayer {
   frames: RunFrame[]
   legend?: Legend | null
   values?: ValueEncoding | null
+  /** Outline of the frames' data (the source grid's edges), clockwise from the top-left; absent in older manifests. */
+  extent?: LngLat[] | null
 }
 
 /** A run's `manifest.json` (python `RunManifest`). */
@@ -165,6 +167,8 @@ export interface ForecastLayer {
   dimensions: [number, number]
   /** Image corners: top-left, top-right, bottom-right, bottom-left (Mapbox order). */
   coordinates: [LngLat, LngLat, LngLat, LngLat]
+  /** Outline of the frames' data, without the nodata around them; null if the manifest predates it. */
+  extent: LngLat[] | null
   /** Sorted by hour. */
   frames: ForecastFrame[]
   /** Hours the layer is published for; more than `frames` while a run is incomplete. */

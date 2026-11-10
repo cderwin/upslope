@@ -20,7 +20,7 @@ npm run typecheck
 | `/annotation`                     | `annotation`       | Georegistration tool, first image selected    |
 | `/annotation/:maptype/:image`     | `annotation-image` | Same tool, deep-linked to one image           |
 | `/map`                            | `map`              | Forecast map, first layer selected            |
-| `/map/:model/:layer`              | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&terrain=1&run=`) |
+| `/map/:model/:layer`              | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&run=`) |
 | `/about`                          | `about`            | Project description and credits               |
 | anything else                     | `not-found`        | 404                                           |
 
@@ -30,7 +30,15 @@ the URL and can be shared.
 The **Annotation** nav link appears only while an admin token is stored; the
 page itself still works by URL and asks for the token. The gear button in the
 navbar opens **Settings** (`src/settings/`): log in or out (store or clear the
-token), set the playback speed and pick a default model for the map. Settings are kept in `localStorage`.
+token), set the playback speed, turn the map's 3D terrain on or off and pick a
+default model for the map. Settings are kept in `localStorage`.
+
+The dot beside the gear (blue while a run is coming in, amber if a layer has
+stalled, red on errors, from `/fx/status` refreshed every minute,
+`src/forecast/status.ts`) opens `RunStatusDialog` from any page: a collapsible
+section per model, all collapsed when it opens, each with a summary badge in
+its header; expanded, it shows the latest complete run, the newest run with a
+progress bar and state per layer, links to preview it, and every kept run.
 
 ## Where the data comes from
 
@@ -73,14 +81,12 @@ published: only the frames exported so far are shown (the controls say e.g.
 "41 of 45 frames"), and the page reloads the manifests every 3 minutes to pick
 up new ones.
 
-The **Model runs** button (its dot is blue while a run is coming in, amber if a
-layer has stalled, red on errors) opens `RunStatusDialog`: each model's latest
-complete run, its newest run with a progress bar and state per layer (from
-`/fx/status`, refreshed every minute while open), links to preview it, and every
-kept run. The basemap is Mapbox's
+The basemap is Mapbox's
 `satellite-streets-v12`. Frames are drawn as a Mapbox `image` source from their
 four corner coordinates, beneath the basemap's labels, with a Mercator
-projection to match the EPSG:3857 registration. The **3D terrain** switch adds
+projection to match the EPSG:3857 registration, with a burnt-orange outline
+around the frames' data (the manifest's `extent`: the source grid's edges in
+its native projection; the image's corners for layers exported before it). The **3D terrain** setting adds
 Mapbox's terrain DEM (1.5× exaggeration), drapes the basemap and forecast over
 it, and tilts the camera; ctrl-drag or right-drag to tilt and rotate. All of a layer's
 frames are preloaded; playback advances one frame every 2 s by default
