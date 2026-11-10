@@ -2,7 +2,6 @@
 
 import hashlib
 import mimetypes
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -52,11 +51,6 @@ class MemoryStorage:
         content_type = content_type or mimetypes.guess_type(key)[0] or "application/octet-stream"
         self.put_bytes(key, path.read_bytes(), content_type, cache_control=cache_control)
 
-    def copy_from(self, source_bucket: str, key: str, cache_control: str | None = None) -> None:
-        source = BUCKETS[source_bucket]
-        data, _ = source.objects[key]
-        self.put_bytes(key, data, mimetypes.guess_type(key)[0] or "application/octet-stream", cache_control=cache_control)
-
     def delete_keys(self, keys: list[str]) -> None:
         for key in keys:
             self.objects.pop(key, None)
@@ -85,20 +79,12 @@ def data_url(monkeypatch) -> str:
     return DATA_URL
 
 
-# Buckets made by the fixtures, by name, so a copy can find its source bucket
-BUCKETS: dict[str, MemoryStorage] = {}
+@pytest.fixture
+def memory_storage() -> MemoryStorage:
+    return MemoryStorage()
 
 
 @pytest.fixture
-def memory_storage() -> Iterator[MemoryStorage]:
-    BUCKETS["upslope-storage"] = storage = MemoryStorage()
-    yield storage
-    BUCKETS.clear()
-
-
-@pytest.fixture
-def public_storage() -> Iterator[MemoryStorage]:
+def public_storage() -> MemoryStorage:
     """A second bucket, standing in for the public forecasts bucket."""
-    BUCKETS["upslope-data-public"] = storage = MemoryStorage("upslope-data-public")
-    yield storage
-    BUCKETS.clear()
+    return MemoryStorage("upslope-data-public")

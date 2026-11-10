@@ -334,20 +334,9 @@ takes effect right away.
 After each check, runs initialized more than the model's `retention_days`
 (7 by default) ago are deleted, except the ones `latest.json` and
 `in-progress.json` point at.
-`georegistration/` is never touched. `upslope delete-legacy-exports` deletes the
-layout used before `forecasts/` (`web_exports/` and `model_runs/`) from the
-private bucket; with `--old-forecasts`, also `forecasts/` there, which refuses
-unless `PUBLIC_BUCKET_NAME` names another bucket.
+`georegistration/` is never touched.
 
-#### Moving forecasts to the public bucket
-
-Forecasts used to live in the private bucket. `upslope migrate-forecasts`
-copies `forecasts/` from `BUCKET_NAME` to `PUBLIC_BUCKET_NAME` (or
-`--source`/`--destination`), server side, setting each copy's `Cache-Control`.
-It copies frames, then manifests, then pointers, so the destination never
-points at a missing file, and only copies keys the destination lacks: the
-exporter's files there are never overwritten, and running it again copies only
-what's new. `--dry-run` lists what it would copy.
+#### The public bucket
 
 The public bucket needs public read, and a CORS rule allowing `GET` and `HEAD`
 from the app's origin (and `http://localhost:5173` for the dev server), exposing

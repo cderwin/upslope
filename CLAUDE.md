@@ -43,7 +43,7 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris (`build()` the private bucket, `build_public()` the public one); conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
-| `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control); `migrate` from the private bucket |
+| `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control) |
 | `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
 | `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
