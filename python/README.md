@@ -148,7 +148,7 @@ accept `If-Match: "<revision>"` to fail with 412 if the draft has moved on.
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /draft`, `GET /published` | Documents (the draft with `published_revision`) |
+| `GET /draft` | The draft, with `published_revision` |
 | `POST /draft/discard` | Reset the draft to the published document |
 | `POST /draft/points`, `PUT`/`DELETE /draft/points/{key}` | Landmarks (delete also removes their annotations) |
 | `PUT`/`DELETE /draft/maptypes/{m}/images/{i}/annotations/{point}` | A landmark's pixel on an image (`{pixel_x, pixel_y, replaces?}`) |

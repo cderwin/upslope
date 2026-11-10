@@ -52,7 +52,6 @@ def test_disabled_without_token(memory_storage, tmp_path: Path) -> None:
 
 def test_every_route_is_guarded(client: TestClient) -> None:
     for method, path in [
-        ("GET", "/published"),
         ("GET", "/draft/fit"),
         ("GET", "/images/washington/legacy-hour06"),
         ("GET", "/history"),
@@ -144,7 +143,6 @@ def test_publish_flow(client: TestClient) -> None:
     result = response.json()
     assert result["history"]["revision"] == 2 and len(result["warnings"]) == 1
 
-    assert client.get(f"{BASE}/published", headers=AUTH).json()["revision"] == 2
     history = client.get(f"{BASE}/history", headers=AUTH).json()
     assert [entry["revision"] for entry in history] == [2, 1]
     assert client.get(f"{BASE}/history/{history[0]['id']}", headers=AUTH).json()["note"] == "tighter"

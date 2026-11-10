@@ -126,11 +126,6 @@ class AdminGeoregistrationController(Controller):
     async def get_draft(self, state: State) -> Response:
         return draft_response(await _service(state).draft())
 
-    @get("/published")
-    async def get_published(self, state: State) -> Response:
-        document = await _service(state).published()
-        return Response(content=converter.unstructure(document), headers={"ETag": f'"{document.revision}"'})
-
     @post("/draft/discard", status_code=200)
     async def discard(self, request: Request, state: State) -> Response:
         return draft_response(await _service(state).discard_draft(expected_revision(request)))
