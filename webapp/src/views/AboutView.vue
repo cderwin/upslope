@@ -40,9 +40,6 @@ import { RouterLink } from 'vue-router'
         forecast model and publishes the forecast imagery that Upslope maps.
       </dd>
 
-      <dt><a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo</a></dt>
-      <dd>Open weather forecast data, planned as an additional forecast source.</dd>
-
       <dt><a href="https://nwac.us/" target="_blank" rel="noopener">Northwest Avalanche Center (NWAC)</a></dt>
       <dd>
         Avalanche forecasting and mountain weather for the Cascades and Olympics, and an inspiration for this project.
@@ -51,8 +48,8 @@ import { RouterLink } from 'vue-router'
     </dl>
 
     <p class="small text-body-secondary mt-5">
-      Upslope is an independent project and is not affiliated with or endorsed by the University of Washington,
-      Open-Meteo or NWAC. Forecasts are model output and can be wrong.
+      Upslope is an independent project and is not affiliated with or endorsed by the University of Washington
+      or NWAC. Forecasts are model output and can be wrong.
     </p>
   </div>
 </template>

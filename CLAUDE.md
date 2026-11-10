@@ -53,8 +53,6 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `models/manifest.py` | Run manifest and `latest.json` schemas |
 | `logging.py` | `get_logger`, `configure_logging`, `log_duration` |
 
-`models/openmeteo/` is an empty placeholder.
-
 ## Python conventions
 
 Match the surrounding code. Specifically:
