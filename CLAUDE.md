@@ -41,9 +41,9 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status` from `forecasts/index.json`, refreshed in the background; `/fx/data`), webapp serving |
 | `export_loop.py` | The exporter process (`upslope export-loop`): checks on the clock, time limits, `export-status.json` (the driver writes `index.json`) |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
-| `clients/storage.py` | `StorageClient` over S3/Tigris; conditional writes via ETags |
+| `clients/storage.py` | `StorageClient` over S3/Tigris (`build()` the private bucket, `build_public()` the public one); conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
-| `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` (manifests, frames, `latest.json`, retention) |
+| `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control); `migrate` from the private bucket |
 | `config/models.yaml` (in `python/`) | Forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
 | `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
@@ -97,6 +97,11 @@ Match the surrounding code. Specifically:
 - **Admin errors.** Raise `NotFound`, `Invalid`, `Conflict` or `UpstreamError`
   from the service; `server/admin.py` turns them into 404/422/412/502. These are
   deliberately not logged as server errors.
+- **Two buckets.** Browsers read the public bucket (`PUBLIC_BUCKET_NAME`)
+  directly, so only `forecasts/` (through `ForecastStore`) is ever written to it;
+  annotations and anything else stay in the private bucket (`BUCKET_NAME`).
+  Frames are named by their content and cached for good: never overwrite a
+  frame's key with different bytes. JSON files there are `no-cache`.
 - **Production never reads `dev/georegistration/`.** It's for tests and the
   local stack only. Commands read storage unless given `--snapshot`.
 - **Config at startup.** `create_app`'s lifespan builds storage eagerly so
@@ -109,7 +114,8 @@ Match the surrounding code. Specifically:
 - Use the `memory_storage` fixture (`tests/conftest.py`), an in-memory S3 with
   real conditional-write semantics, instead of mocking boto3.
 - Server tests: `create_app(storage=memory_storage, webapp_dist=tmp_path,
-  run_jobs=False, admin_token="secret")` with `litestar.testing.TestClient`.
+  admin_token="secret")` with `litestar.testing.TestClient`; pass `public_storage=public_storage` (a second
+  in-memory bucket) to keep forecasts apart from annotations.
 - Tests must not touch the network or real credentials. Load fixtures from
   `DEV_GEOREGISTRATION`.
 

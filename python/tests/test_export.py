@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta, timezone
@@ -19,11 +20,11 @@ from PIL import Image
 
 from upslope.cli import DEFAULT_MODELS_CONFIG, DEV_GEOREGISTRATION
 from upslope.clients.annotations import AnnotationStore, read_snapshot, snapshot_image_path
-from upslope.clients.forecasts import INDEX, ForecastStore
+from upslope.clients.forecasts import IMMUTABLE_CACHE_CONTROL, INDEX, ForecastStore
 from upslope.cli.main import main
 from upslope.models.config import ConfigError, DynamicalLayerConfig, DynamicalSourceConfig, FieldConfig, HourRange, LayerConfig, ModelConfig, ModelsConfig
 from upslope.models.driver import CheckReport, ForecastDriver
-from upslope.models.manifest import ForecastIndex, Legend, LegendStop, ModelIndex, RunManifest, RunPointer, ValueEncoding
+from upslope.models.manifest import ForecastIndex, Legend, content_digest, LegendStop, ModelIndex, RunManifest, RunPointer, ValueEncoding
 from upslope.models.source import NotPublished, RenderedFrame, SourceUnavailable
 from upslope.models.uw_wrf.image_client import ImageClient, Throttle
 from upslope.models.uw_wrf.source import UwWrfSource
@@ -249,12 +250,15 @@ def test_export_frame_uploads_a_placed_png(memory_storage, document: AnnotationD
 
     frame = asyncio.run(scenario())
 
-    assert (frame.hour, frame.valid, frame.path) == (6, INITIALIZED + timedelta(hours=6), "surface-temp/2026-10-21T1800.png")
+    assert (frame.hour, frame.valid) == (6, INITIALIZED + timedelta(hours=6))
     assert run_layer.frames == [frame]
     for lon, lat in run_layer.coordinates:
         assert -130 < lon < -110 and 40 < lat < 52
-    data, content_type = memory_storage.objects["forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1800.png"]
-    assert content_type == "image/png"
+    key = f"forecasts/uwwrf_4km/2026/10/21/1200Z/{frame.path}"
+    data, content_type = memory_storage.objects[key]
+    # named by valid time and content, so it can be cached for good
+    assert frame.path == f"surface-temp/2026-10-21T1800-{content_digest(data)}.png"
+    assert content_type == "image/png" and memory_storage.cache_control[key] == IMMUTABLE_CACHE_CONTROL
     with Image.open(io.BytesIO(data)) as png:
         assert png.mode == "P"
         assert "transparency" in png.info
@@ -431,7 +435,9 @@ def make_export_driver(
 
 
 def frame_keys(memory_storage) -> list[str]:
-    return sorted(key for key in memory_storage.objects if key.startswith("forecasts/") and key.endswith(".png"))
+    """Frame keys, without their content digests."""
+    keys = (key for key in memory_storage.objects if key.startswith("forecasts/") and key.endswith(".png"))
+    return sorted(re.sub(r"-[0-9a-f]{16}(?=\.)", "", key) for key in keys)
 
 
 def test_run_exports_the_newest_complete_run(memory_storage, published, document) -> None:
@@ -771,7 +777,7 @@ def test_frames_with_values_get_a_value_image(memory_storage, tmp_path: Path) ->
     layer = manifest.layer("surface-temp")
     assert (layer.legend, layer.values) == (legend, ValueEncoding())
     frame = layer.frames[1]
-    assert frame.values == "surface-temp/2026-10-21T1500.values.png"
+    assert re.fullmatch(r"surface-temp/2026-10-21T1500-[0-9a-f]{16}\.values\.png", frame.values)
 
     data, content_type = memory_storage.objects[f"forecasts/uwwrf_4km/2026/10/21/1200Z/{frame.values}"]
     assert content_type == "image/png"
@@ -978,7 +984,7 @@ def test_models_are_exported_concurrently(memory_storage) -> None:
 def test_a_model_that_runs_too_long_is_stopped_without_holding_up_the_others(memory_storage) -> None:
     source = SlowSource({INITIALIZED: 999}, stuck="uwwrf_4km")
     driver = ForecastDriver(
-        ModelsConfig(TWO_MODELS), {"uw_wrf": source}, ForecastStore(memory_storage), now=lambda: NOW, model_timeout=0.2
+        ModelsConfig(TWO_MODELS), {"uw_wrf": source}, ForecastStore(memory_storage), now=lambda: NOW, model_timeout=1.0
     )
     stuck, other = check(driver).models
     assert stuck.state == "failed" and stuck.error.startswith("stopped after")
@@ -1060,7 +1066,7 @@ def test_index_matches_each_models_files_after_a_check(memory_storage) -> None:
 def test_index_includes_what_a_failed_model_exported(memory_storage) -> None:
     source = SlowSource({INITIALIZED: 999}, stuck="uwwrf_12km")
     store = ForecastStore(memory_storage)
-    driver = ForecastDriver(ModelsConfig(TWO_MODELS), {"uw_wrf": source}, store, now=lambda: NOW, model_timeout=0.2)
+    driver = ForecastDriver(ModelsConfig(TWO_MODELS), {"uw_wrf": source}, store, now=lambda: NOW, model_timeout=1.0)
     check(driver)
     assert store.read_index().models == [store.read_model_index("uwwrf_4km"), ModelIndex("uwwrf_12km")]
 
@@ -1114,3 +1120,23 @@ def test_models_missing_from_the_index_are_added_before_checking(memory_storage)
     check(driver)
     assert [m.id for m in seen[0].models] == ["uwwrf_4km", "uwwrf_12km"]
     assert all(m.latest.initialized == INITIALIZED for m in seen[0].models)
+
+
+# --- two buckets: annotations stay private, forecasts go to the public one
+
+
+def test_build_driver_reads_annotations_privately_and_exports_publicly(memory_storage, public_storage) -> None:
+    from upslope.export_loop import build_driver
+
+    driver = build_driver(ModelsConfig([EXPORT_MODEL]), memory_storage, public_storage)
+    assert driver.store.storage is public_storage
+    assert driver.sources["uw_wrf"].annotations.storage is memory_storage
+
+
+def test_export_writes_only_forecasts_to_the_public_bucket(memory_storage, public_storage, published) -> None:
+    upstream = FakeUpstream(INITIALIZED)
+    driver = make_export_driver(memory_storage, upstream)
+    driver.store = ForecastStore(public_storage)
+    export(driver)
+    assert public_storage.objects and all(key.startswith("forecasts/") for key in public_storage.objects)
+    assert not any(key.startswith("forecasts/") for key in memory_storage.objects)

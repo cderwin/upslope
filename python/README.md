@@ -178,7 +178,9 @@ converts it to a PNG (nodata becomes transparent) and uploads it to the
 S3/Tigris bucket. A model exports at most 400 frames per check
 (`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-`AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` and, optionally, `AWS_REGION`. Put them in
+`AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` (the private bucket, which annotations are
+read from), `PUBLIC_BUCKET_NAME` (the public bucket forecasts are written to;
+unset, `BUCKET_NAME`) and, optionally, `AWS_REGION`. Put them in
 the repo-root `.env.local` (gitignored; see `.env.example`); `just py-export`,
 `just py-export-loop` and `just py-serve` load it.
 
@@ -189,7 +191,7 @@ clock (`--interval`), and also at startup with `--run-immediately`. It's its
 own process, apart from the server: in production the `exporter` Fly process
 group, on its own machine, so exporting never slows down requests (`fly.toml`).
 Exactly one exporter may run, since two would race on manifests and retention;
-deploys pass `--ha=false`. The two processes share only the bucket.
+deploys pass `--ha=false`. The two processes share only storage.
 
 The pipeline is async. Every model is checked concurrently, each in its own
 task, while a model's runs, layers and hours go in order. Blocking work
@@ -269,8 +271,12 @@ is followed.
 
 ### Storage layout
 
-Runs live under `forecasts/`, laid out like open-meteo's
-[`data_spatial/`](https://github.com/open-meteo/open-data#data-organization):
+Runs live under `forecasts/` in the public bucket (`PUBLIC_BUCKET_NAME`), laid
+out like open-meteo's
+[`data_spatial/`](https://github.com/open-meteo/open-data#data-organization).
+Browsers read it directly, at `PUBLIC_DATA_URL`, so nothing else ever goes in it:
+annotations stay in the private bucket (`BUCKET_NAME`), which only the server and
+exporter read.
 
 | Key | Contents |
 | --- | --- |
@@ -279,7 +285,15 @@ Runs live under `forecasts/`, laid out like open-meteo's
 | `forecasts/<model>/latest.json` | The newest complete run: `{model, initialized, path, updated_at}` |
 | `forecasts/<model>/in-progress.json` | The newest run that has started, and each layer's progress (below) |
 | `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json` | The run's layers and frames (below) |
-| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>.png` | Frames, named by valid time (UTC) |
+| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.png` | Frames, named by valid time (UTC) and content (and `...-<digest>.values.png` value images) |
+
+Frames are named by the first 16 hex digits of their content's SHA-256, so a
+re-exported frame gets a new name and a cached one is never stale. They're
+uploaded with `Cache-Control: public, max-age=31536000, immutable`. The JSON
+files are rewritten in place and uploaded with `Cache-Control: no-cache`, so
+browsers revalidate them with their ETags every time. Frames a re-export
+replaced stay until their run is deleted. (Frames exported before the names had
+digests keep their old names, which nothing writes again.)
 
 `index.json` (`ForecastIndex` in `models/manifest.py`) exists so the server
 reads one object instead of listing every frame of every model to find its
@@ -310,7 +324,7 @@ it's complete:
 }
 ```
 
-A run is exported again, in place, when its layers no longer match what the
+A run is exported again when its layers no longer match what the
 config and annotations would produce. Each manifest layer records its
 `fingerprint` (`LayerConfig.fingerprint()`: its URL template, hours and maptype,
 not its name) and the manifest records the annotation revision. A publish
@@ -324,7 +338,24 @@ After each check, runs initialized more than the model's `retention_days`
 (7 by default) ago are deleted, except the ones `latest.json` and
 `in-progress.json` point at.
 `georegistration/` is never touched. `upslope delete-legacy-exports` deletes the
-layout used before `forecasts/` (`web_exports/` and `model_runs/`).
+layout used before `forecasts/` (`web_exports/` and `model_runs/`) from the
+private bucket; with `--old-forecasts`, also `forecasts/` there, which refuses
+unless `PUBLIC_BUCKET_NAME` names another bucket.
+
+#### Moving forecasts to the public bucket
+
+Forecasts used to live in the private bucket. `upslope migrate-forecasts`
+copies `forecasts/` from `BUCKET_NAME` to `PUBLIC_BUCKET_NAME` (or
+`--source`/`--destination`), server side, setting each copy's `Cache-Control`.
+It copies frames, then manifests, then pointers, so the destination never
+points at a missing file, and only copies keys the destination lacks: the
+exporter's files there are never overwritten, and running it again copies only
+what's new. `--dry-run` lists what it would copy.
+
+The public bucket needs public read, and a CORS rule allowing `GET` and `HEAD`
+from the app's origin (and `http://localhost:5173` for the dev server), exposing
+`ETag`: the map fetches manifests and frames cross-origin. Locally, `just up`
+creates an anonymously readable `upslope-data-public` bucket in MinIO.
 
 ### Run manifest
 
@@ -378,7 +409,13 @@ requires), shown on the map.
 | Method and path | Purpose |
 | --- | --- |
 | `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
-| `GET /fx/data/{path}` | `forecasts/{path}` from storage: pointers and manifests (`no-cache`) and frames (`max-age=300`), with ETags |
+| `GET /fx/data/{path}` | `forecasts/{path}` from the public bucket, with the bucket's `Cache-Control` and ETags: for pages loaded before forecasts were served from the bucket, and setups without `PUBLIC_DATA_URL` |
+
+`data_url` is where the webapp loads manifests
+(`<data_url>/<model>/<run path>/manifest.json`) and frames (their paths are
+relative to the run's folder) from: `PUBLIC_DATA_URL`, the public bucket's
+`forecasts/`, or `/fx/data` if that's unset. A relative `data_url` is relative
+to the API.
 
 `in_progress` adds `checked_at`, `complete` and, per configured layer, `name`,
 `available_hour`, `last_hour`, `progressed_at`, `error` and a `state` the server

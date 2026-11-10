@@ -51,12 +51,17 @@ def build_sources(storage: StorageClient) -> dict[str, ForecastSource]:
     return {"uw_wrf": UwWrfSource(ImageClient(), AnnotationStore(storage)), "dynamical": DynamicalSource()}
 
 
-def build_driver(config: ModelsConfig, storage: StorageClient, model_timeout: timedelta | None = MODEL_TIMEOUT) -> ForecastDriver:
-    """Create the export driver, exporting to `storage`."""
+def build_driver(
+    config: ModelsConfig,
+    storage: StorageClient,
+    public_storage: StorageClient,
+    model_timeout: timedelta | None = MODEL_TIMEOUT,
+) -> ForecastDriver:
+    """Create the export driver: annotations come from the private `storage`, and forecasts go to `public_storage`."""
     return ForecastDriver(
         config=config,
         sources=build_sources(storage),
-        store=ForecastStore(storage),
+        store=ForecastStore(public_storage),
         frames_per_model=FRAMES_PER_MODEL,
         model_timeout=model_timeout.total_seconds() if model_timeout is not None else None,
     )

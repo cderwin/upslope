@@ -14,6 +14,9 @@ x-s3-env: &s3-env
   # StorageClient uses virtual-host-style addressing (as Tigris requires), so this bucket
   # name must match the `upslope-storage.minio` network alias below.
   BUCKET_NAME: upslope-storage
+  # forecasts go in a second, anonymously readable bucket, which the browser reads directly (as on Tigris)
+  PUBLIC_BUCKET_NAME: upslope-data-public
+  PUBLIC_DATA_URL: http://localhost:9000/upslope-data-public/forecasts
 
 services:
   minio:
@@ -29,7 +32,9 @@ services:
       default:
         aliases:
           - upslope-storage.minio
+          - upslope-data-public.minio
     ports:
+      - "9000:9000" # the public bucket, which the map reads from (PUBLIC_DATA_URL)
       - "9001:9001" # web console, log in with the root user above
     volumes:
       - minio-data:/data
@@ -46,7 +51,10 @@ services:
         condition: service_healthy
     entrypoint: ["/bin/sh", "-c"]
     command:
-      - mc alias set local http://minio:9000 upslope upslope-local-secret && mc mb --ignore-existing local/upslope-storage
+      - >-
+        mc alias set local http://minio:9000 upslope upslope-local-secret &&
+        mc mb --ignore-existing local/upslope-storage local/upslope-data-public &&
+        mc anonymous set download local/upslope-data-public
 
   # Uploads dev/georegistration as the draft and published annotations; skips if MinIO already has a draft.
   georegistration-seed:

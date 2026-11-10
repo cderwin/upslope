@@ -8,6 +8,7 @@ import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import {
   FORECAST_BASE_URL,
   IN_PROGRESS,
+  dataBaseUrl,
   fetchRunManifest,
   fetchStatus,
   layerKey,
@@ -152,8 +153,9 @@ async function load() {
       const run = selectRun(model, runPath)
       return run ? [{ model, run }] : []
     })
-    const manifests = await Promise.all(selected.map(({ model, run }) => fetchRunManifest(model.id, run, signal)))
-    const next = manifests.flatMap((manifest, i) => runLayers(manifest, selected[i].run, selected[i].model))
+    const base = dataBaseUrl(current)
+    const manifests = await Promise.all(selected.map(({ model, run }) => fetchRunManifest(base, model.id, run, signal)))
+    const next = manifests.flatMap((manifest, i) => runLayers(base, manifest, selected[i].run, selected[i].model))
     if (signal.aborted) return
     layers.value = next
     if (!next.length && runPath === IN_PROGRESS) {

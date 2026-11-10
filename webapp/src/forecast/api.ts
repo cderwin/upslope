@@ -6,8 +6,17 @@ import type { ForecastLayer, ForecastStatus, ModelStatus, RunManifest, RunRef } 
  */
 export const FORECAST_BASE_URL = (import.meta.env.VITE_FORECAST_BASE_URL ?? '/fx').replace(/\/+$/, '')
 
-function dataUrl(path: string): string {
-  return `${FORECAST_BASE_URL}/data/${path.split('/').map(encodeURIComponent).join('/')}`
+/**
+ * Where a status says forecast files are: the public bucket's `forecasts/` (`data_url`), which the browser
+ * reads directly. A relative `data_url` (`/fx/data`, served by the upslope server) is relative to the API.
+ */
+export function dataBaseUrl(status: ForecastStatus): string {
+  const api = new URL(`${FORECAST_BASE_URL}/status`, window.location.href)
+  return new URL(status.data_url ?? `${FORECAST_BASE_URL}/data`, api).href.replace(/\/+$/, '')
+}
+
+function dataUrl(base: string, path: string): string {
+  return `${base}/${path.split('/').map(encodeURIComponent).join('/')}`
 }
 
 async function getJson<T>(url: string, what: string, signal: AbortSignal | null): Promise<T> {
@@ -20,8 +29,9 @@ export function fetchStatus(signal: AbortSignal | null = null): Promise<Forecast
   return getJson<ForecastStatus>(`${FORECAST_BASE_URL}/status`, 'the forecast status', signal)
 }
 
-export function fetchRunManifest(model: string, run: RunRef, signal: AbortSignal | null = null): Promise<RunManifest> {
-  return getJson<RunManifest>(dataUrl(`${model}/${run.path}/manifest.json`), `the ${model} ${run.path} manifest`, signal)
+/** A run's manifest, from `base` (see `dataBaseUrl`). */
+export function fetchRunManifest(base: string, model: string, run: RunRef, signal: AbortSignal | null = null): Promise<RunManifest> {
+  return getJson<RunManifest>(dataUrl(base, `${model}/${run.path}/manifest.json`), `the ${model} ${run.path} manifest`, signal)
 }
 
 // --- the ?run= URL parameter: a run's initialization time (`2026-10-29T00Z`), or `in-progress`
@@ -54,8 +64,8 @@ export function selectRun(model: ModelStatus, runPath: string | null): RunRef | 
   return model.runs.find((run) => run.path === runPath) ?? null
 }
 
-/** Map-ready layers of a run; layers with no frames yet are left out. */
-export function runLayers(manifest: RunManifest, run: RunRef, model: ModelStatus): ForecastLayer[] {
+/** Map-ready layers of a run, with frame URLs under `base` (see `dataBaseUrl`); layers with no frames yet are left out. */
+export function runLayers(base: string, manifest: RunManifest, run: RunRef, model: ModelStatus): ForecastLayer[] {
   const layers: ForecastLayer[] = []
   for (const layer of manifest.layers) {
     if (!layer.dimensions || !layer.coordinates || !layer.frames.length) continue
@@ -72,8 +82,8 @@ export function runLayers(manifest: RunManifest, run: RunRef, model: ModelStatus
       frames: layer.frames
         .map((frame) => ({
           hour: frame.hour,
-          url: dataUrl(`${manifest.model}/${run.path}/${frame.path}`),
-          valuesUrl: frame.values ? dataUrl(`${manifest.model}/${run.path}/${frame.values}`) : null,
+          url: dataUrl(base, `${manifest.model}/${run.path}/${frame.path}`),
+          valuesUrl: frame.values ? dataUrl(base, `${manifest.model}/${run.path}/${frame.values}`) : null,
         }))
         .sort((a, b) => a.hour - b.hour),
       hours: layer.hours,

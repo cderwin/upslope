@@ -39,6 +39,7 @@ from upslope.models.manifest import (
     RunManifest,
     RunPointer,
     ValueEncoding,
+    content_digest,
     frame_name,
     valid_time,
     values_name,
@@ -538,13 +539,13 @@ class ForecastDriver:
             convert_to_png(dataset, png)
 
         valid = valid_time(initialized, hour)
-        frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid)}")
+        frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid, content_digest(png.read_bytes()))}")
         encoding = run_layer.values or ValueEncoding()
         if rendered.values is not None:
             if rendered.values.shape != (size[1], size[0]):
                 raise ValueError(f"values of {model.id}/{layer.id} hour {hour} don't match the image's grid")
             encode_values_png(rendered.values, values_png, encoding.scale, encoding.offset)
-            frame.values = f"{layer.id}/{values_name(valid)}"
+            frame.values = f"{layer.id}/{values_name(valid, content_digest(values_png.read_bytes()))}"
             self.store.upload_frame(model.id, initialized, frame.values, values_png)
         self.store.upload_frame(model.id, initialized, frame.path, png)
         return frame, size, coordinates, encoding
