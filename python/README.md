@@ -375,7 +375,8 @@ creates an anonymously readable `upslope-data-public` bucket in MinIO.
       "coordinates": [[lon, lat], ...],
       "frames": [{ "hour": 6, "valid": "2026-10-29T06:00:00+00:00", "path": "surface-temp/2026-10-29T0600.png", "values": null }, ...],
       "legend": null,
-      "values": null
+      "values": null,
+      "extent": [[lon, lat], ...]
     }
   ],
   "attribution": null
@@ -384,7 +385,12 @@ creates an anonymously readable `upslope-data-public` bucket in MinIO.
 
 `hours` lists every hour the layer is published for. `dimensions` is
 `[width, height]` in pixels. `coordinates` are the image's top-left, top-right,
-bottom-right and bottom-left corners. Frame paths are relative to the run's
+bottom-right and bottom-left corners. `extent` outlines where the frames have
+data: the source grid's edges (the UW image, or a dynamical.org dataset's
+window) in their native projection, 16 points to an edge, clockwise from the
+top-left, without the nodata the warp leaves around them; the map draws it. It's
+missing from layers exported before it was recorded until their next frame.
+Frame paths are relative to the run's
 folder. `registration_revision` is null for models whose source has no
 annotations.
 

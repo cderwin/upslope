@@ -1,11 +1,15 @@
-"""Shared raster steps: warping to Web Mercator and the corners of the result."""
+"""Shared raster steps: warping to Web Mercator, the corners of the result and the source grid's footprint."""
 
 import numpy as np
 import pytest
 import rasterio
 from affine import Affine
 
-from upslope.raster import OUTPUT_CRS, decode_values_png, encode_values_png, image_coordinates, warp_to_web_mercator, write_geotiff
+from upslope.raster import (
+    FOOTPRINT_POINTS_PER_EDGE, OUTPUT_CRS, decode_values_png, encode_values_png, footprint, image_coordinates, read_footprint,
+    warp_to_web_mercator, write_geotiff,
+)
+from upslope.models.uw_wrf.georegistration import WRF_LAMBERT_CRS
 
 
 def test_warp_places_a_lat_lon_grid(tmp_path) -> None:
@@ -35,3 +39,33 @@ def test_value_png_round_trips(tmp_path) -> None:
     np.testing.assert_allclose(decoded[0], [-40.0, 0.0, 12.34], atol=1e-6)
     assert decoded[1, 1] == pytest.approx(18_500.0)
     assert decoded[1, 2] == pytest.approx((2**24 - 2) * 0.01 - 100_000.0)
+
+
+def test_footprint_traces_the_grids_edges() -> None:
+    """A lat/lon grid's footprint is its rectangle, clockwise from the top-left, each edge densified."""
+    transform = Affine(0.25, 0.0, -125.0, 0.0, -0.25, 49.0)
+    ring = footprint("EPSG:4326", transform, 40, 20)
+    n = FOOTPRINT_POINTS_PER_EDGE
+    assert len(ring) == 4 * n
+    assert [ring[0], ring[n], ring[2 * n], ring[3 * n]] == [(-125.0, 49.0), (-115.0, 49.0), (-115.0, 44.0), (-125.0, 44.0)]
+    assert all(lat == 49.0 for _, lat in ring[:n]) and all(lon == -115.0 for lon, _ in ring[n : 2 * n])
+
+
+def test_footprint_follows_a_projected_grid() -> None:
+    """A Lambert grid's edges aren't lines of latitude: the top edge's points don't all share one."""
+    transform = Affine(4000.0, 0.0, -1_000_000.0, 0.0, -4000.0, 1_000_000.0)
+    ring = footprint(WRF_LAMBERT_CRS, transform, 500, 500)
+    top = [lat for _, lat in ring[:FOOTPRINT_POINTS_PER_EDGE]]
+    assert max(top) - min(top) > 0.1
+
+
+def test_footprint_is_stored_with_the_geotiff(tmp_path) -> None:
+    transform = Affine(0.25, 0.0, -125.0, 0.0, -0.25, 49.0)
+    ring = footprint("EPSG:4326", transform, 40, 20)
+    out = tmp_path / "frame.tiff"
+    write_geotiff(out, np.zeros((1, 2, 2), dtype=np.uint8), transform, nodata=255, crs="EPSG:4326", extent=ring)
+    with rasterio.open(out) as dataset:
+        assert read_footprint(dataset) == ring
+    write_geotiff(out, np.zeros((1, 2, 2), dtype=np.uint8), transform, nodata=255, crs="EPSG:4326")
+    with rasterio.open(out) as dataset:
+        assert read_footprint(dataset) is None

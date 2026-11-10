@@ -45,7 +45,7 @@ from upslope.models.manifest import (
     values_name,
 )
 from upslope.models.source import ForecastSource, NotPublished, RenderedFrame, SourceUnavailable
-from upslope.raster import convert_to_png, encode_values_png, image_coordinates
+from upslope.raster import convert_to_png, encode_values_png, image_coordinates, read_footprint
 
 logger = get_logger(__name__)
 
@@ -492,7 +492,7 @@ class ForecastDriver:
             model: Model the layer belongs to.
             source: Where the model's frames come from.
             layer: Layer config.
-            run_layer: Layer to add the frame to; sets its dimensions and corners from the first frame.
+            run_layer: Layer to add the frame to; sets its dimensions, corners and extent from the first frame.
             initialized: Initialization time of the run.
             hour: Forecast hour.
             work: Scratch directory.
@@ -505,7 +505,7 @@ class ForecastDriver:
         tiff.parent.mkdir(parents=True, exist_ok=True)
         try:
             rendered = await source.render_frame(model, layer, initialized, hour, tiff)
-            frame, size, coordinates, encoding = await asyncio.to_thread(
+            frame, size, coordinates, extent, encoding = await asyncio.to_thread(
                 self._upload_frame, model, layer, run_layer, initialized, hour, tiff, rendered
             )
         finally:
@@ -513,6 +513,9 @@ class ForecastDriver:
                 path.unlink(missing_ok=True)
         if run_layer.dimensions is None:
             run_layer.dimensions, run_layer.coordinates = size, coordinates
+        # also for layers exported before footprints were recorded, as their next frame arrives
+        if run_layer.extent is None:
+            run_layer.extent = extent
         if frame.values is not None:
             run_layer.values = encoding
         run_layer.legend = rendered.legend
@@ -528,7 +531,7 @@ class ForecastDriver:
         hour: int,
         tiff: Path,
         rendered: RenderedFrame,
-    ) -> tuple[Frame, tuple[int, int], list, ValueEncoding]:
+    ) -> tuple[Frame, tuple[int, int], list, list | None, ValueEncoding]:
         """Convert a rendered GeoTIFF to the frame's PNG (and value image) and upload them (blocking)."""
         png, values_png = tiff.with_suffix(".png"), tiff.with_suffix(".values.png")
         with rasterio.open(tiff) as dataset:
@@ -536,6 +539,7 @@ class ForecastDriver:
             if run_layer.dimensions is not None and tuple(run_layer.dimensions) != size:
                 raise ValueError(f"frame size changed at hour {hour} for layer {model.id}/{layer.id}")
             coordinates = image_coordinates(dataset)
+            extent = read_footprint(dataset)
             convert_to_png(dataset, png)
 
         valid = valid_time(initialized, hour)
@@ -548,4 +552,4 @@ class ForecastDriver:
             frame.values = f"{layer.id}/{values_name(valid, content_digest(values_png.read_bytes()))}"
             self.store.upload_frame(model.id, initialized, frame.values, values_png)
         self.store.upload_frame(model.id, initialized, frame.path, png)
-        return frame, size, coordinates, encoding
+        return frame, size, coordinates, extent, encoding

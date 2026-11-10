@@ -110,6 +110,9 @@ class RunLayer:
         frames: Exported frames, in hour order.
         legend: How to read the frames' colors; None for images that carry their own legend (UW WRF).
         values: Encoding of the frames' value images, if they have them.
+        extent: Outline of the frames' data, (lon, lat) pairs clockwise from the top-left corner: the source
+            grid's edges in its native projection, without the nodata around a warped frame. None for layers
+            exported before it was recorded.
     """
 
     id: str
@@ -122,6 +125,7 @@ class RunLayer:
     frames: list[Frame] = field(factory=list)
     legend: Legend | None = None
     values: ValueEncoding | None = None
+    extent: list[tuple[float, float]] | None = None
 
     @property
     def complete(self) -> bool:

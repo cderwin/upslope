@@ -12,7 +12,7 @@ from rasterio.warp import Resampling
 
 from pyproj import Geod, Transformer
 
-from upslope.raster import warp_to_web_mercator, write_geotiff
+from upslope.raster import footprint, warp_to_web_mercator, write_geotiff
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument, GeographicPoint, PixelAnnotation
 
 
@@ -190,8 +190,9 @@ class Registration:
 
         # nearest: palette indices can't be blended
         warped, dst_transform = warp_to_web_mercator(data, WRF_LAMBERT_CRS, src_transform, nodata, Resampling.nearest)
+        extent = footprint(WRF_LAMBERT_CRS, src_transform, data.shape[2], data.shape[1])
         # keeps the GIF's palette so colors render correctly
-        write_geotiff(registered_forecast_image, warped, dst_transform, nodata, cmap)
+        write_geotiff(registered_forecast_image, warped, dst_transform, nodata, cmap, extent=extent)
 
     @classmethod
     def build(cls, document: AnnotationDocument) -> Self:

@@ -301,6 +301,15 @@ def test_export_frame_uploads_a_placed_png(memory_storage, document: AnnotationD
     assert run_layer.frames == [frame]
     for lon, lat in run_layer.coordinates:
         assert -130 < lon < -110 and 40 < lat < 52
+    # the outline of the GIF's own pixels, inside the warped frame's corners
+    lons, lats = zip(*run_layer.coordinates)
+    assert len(run_layer.extent) > 4
+    # (within a pixel or so: the warp sizes the frame from its own samples of the edges)
+    slack = 0.01
+    assert all(
+        min(lons) - slack <= lon <= max(lons) + slack and min(lats) - slack <= lat <= max(lats) + slack
+        for lon, lat in run_layer.extent
+    )
     key = f"forecasts/uwwrf_4km/2026/10/21/1200Z/{frame.path}"
     data, content_type = memory_storage.objects[key]
     # named by valid time and content, so it can be cached for good

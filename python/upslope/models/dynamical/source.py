@@ -33,7 +33,7 @@ from upslope.models.config import AnyLayerConfig, DynamicalLayerConfig, Dynamica
 from upslope.models.dynamical.catalog import open_dataset
 from upslope.models.dynamical.scales import NODATA_INDEX, SCALES, convert
 from upslope.models.source import NotPublished, RenderedFrame
-from upslope.raster import warp_to_web_mercator, write_geotiff
+from upslope.raster import footprint, warp_to_web_mercator, write_geotiff
 
 logger = get_logger(__name__)
 
@@ -204,7 +204,8 @@ class DynamicalSource:
             values[np.newaxis], window.crs, window.transform, nodata=np.nan, resampling=Resampling.bilinear,
             min_width=MIN_FRAME_WIDTH,
         )
-        write_geotiff(out, scale.colorize(warped[0])[np.newaxis], transform, NODATA_INDEX, scale.colormap())
+        extent = footprint(window.crs, window.transform, values.shape[1], values.shape[0])
+        write_geotiff(out, scale.colorize(warped[0])[np.newaxis], transform, NODATA_INDEX, scale.colormap(), extent=extent)
         return RenderedFrame(values=warped[0], legend=scale.legend())
 
     # --- fields
