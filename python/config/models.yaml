@@ -347,7 +347,7 @@ models:
         scale: precip_in
         hours: {first: 6, last: 360, step: 6}
 
-      - id: 6-hour-snowfall-water
+      - id: 6-hour-swe
         field: {derive: change, variables: [snowfall_water_equivalent_run_total_surface], hours: 6}
         scale: precip_in
         hours: {first: 6, last: 360, step: 6}
@@ -384,7 +384,7 @@ models:
         scale: precip_in
         hours: {first: 3, last: 48, step: 1}
 
-      - id: snow-water-equivalent
+      - id: swe
         field: snow_water_equivalent_surface
         scale: snow_in
         hours: {last: 48, step: 1}

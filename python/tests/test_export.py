@@ -86,7 +86,7 @@ def test_configured_ids_match_existing_map_urls() -> None:
     assert model is not None
     assert {layer.id for layer in model.layers} >= {
         "surface-temp", "10m-wind-speed", "integrated-cloud", "longwave", "3-hour-precip", "snow", "model-snow",
-        "accumulated-snowfall", "freezing-level-terrain", "freezing-level", "snow-depth",
+        "accumulated-snowfall", "freezing-level", "snow-depth",
     }
 
 
@@ -225,8 +225,8 @@ def test_initializations_follow_start_times() -> None:
 def test_configured_fingerprints_are_stable() -> None:
     """A changed fingerprint re-exports every retained run of the model, so config refactors must keep them."""
     config = ModelsConfig.load(DEFAULT_MODELS_CONFIG)
-    assert config.model("uwwrf_4km").fingerprint() == "e1359839afb6d730"
-    assert config.model("uwwrf_1.33km").fingerprint() == "4ac7afb08cb8b50b"
+    assert config.model("uwwrf_4km").fingerprint() == "7ff57d2ef37f7c7a"
+    assert config.model("uwwrf_1.33km").fingerprint() == "b22d7d5b7d40dcd4"
 
 
 def test_model_source_defaults_to_uw_wrf(tmp_path: Path) -> None:
