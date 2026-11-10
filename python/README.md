@@ -411,8 +411,8 @@ measured from the run's first frame); or `error` when the last attempt failed
 The server builds the status from `index.json` and `export-status.json`, which
 a background task re-reads every 60 seconds with their ETags, so a request
 never waits on storage and an unchanged file costs one small request. Until
-the exporter first writes the index, the server lists every model's runs
-instead (slow, but still in the background). With the index written once per
+the exporter first writes the index (in a new bucket), no runs are listed. With
+the index written once per
 model check, a running check's progress shows up when that model finishes.
 
 `export` is `export-status.json` (see [The exporter](#the-exporter)), or null if

@@ -157,9 +157,9 @@ class StatusCache:
 
     It's built from `forecasts/index.json`, which the exporter (another process) rewrites as each model's
     check finishes, and `export-status.json`. Both are re-read every `refresh_interval` seconds with their
-    ETags, so an unchanged file costs one small request. Until the exporter has written the index (e.g. right
-    after it's first deployed), every model's files are read instead, which is slow but still in the background.
-    Only the first request, if the startup refresh failed, waits for storage.
+    ETags, so an unchanged file costs one small request. The exporter writes the index as each check starts, so
+    it's missing only from a new bucket, until the first check. Only the first request, if the startup refresh
+    failed, waits for storage.
 
     The parts that depend on the time (stalled layers, an overdue exporter) are worked out per request.
     """
@@ -202,16 +202,12 @@ class StatusCache:
         changed, data, etag = await asyncio.to_thread(self._read_changed, INDEX)
         if not changed:
             return self._index
-        if data is not None:
-            index = ForecastIndex.from_json(data)
-            self._etags[INDEX] = etag
-            return index
-        logger.warning("the exporter hasn't written %s yet; reading every model's runs instead", INDEX)
-        entries = await asyncio.gather(
-            *(asyncio.to_thread(self._store.read_model_index, model.id) for model in self._config.models)
-        )
-        self._etags.pop(INDEX, None)
-        return ForecastIndex(list(entries), self._now())
+        index = None if data is None else ForecastIndex.from_json(data)
+        if index is None:
+            logger.warning("the exporter hasn't written %s yet; no runs to list", INDEX)
+        # recorded once parsed, so a file that failed to parse is read again
+        self._etags[INDEX] = etag
+        return index
 
     async def _read_export(self) -> ExportStatus | None:
         changed, data, etag = await asyncio.to_thread(self._read_changed, EXPORT_STATUS)

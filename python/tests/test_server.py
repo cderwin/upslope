@@ -25,13 +25,18 @@ RUN_KEY = "forecasts/uwwrf_4km/2026/10/21/1200Z"
 DATA_URL = "https://data.example/forecasts"
 
 
-def export_run(storage, model: str = "uwwrf_4km", initialized: datetime = INITIALIZED, latest: bool = True) -> None:
+def export_run(
+    storage, model: str = "uwwrf_4km", initialized: datetime = INITIALIZED, latest: bool = True, index: bool = True
+) -> None:
+    """Write a run, and (as the exporter does after each check) the index."""
     store = ForecastStore(storage)
     store.storage.put_bytes(f"{store.run_prefix(model, initialized)}/surface-temp/2026-10-21T1500.png", b"png-bytes", "image/png")
     manifest = RunManifest(model, "UW WRF 4km", initialized, 1, initialized, [])
     store.write_manifest(manifest)
     if latest:
         store.write_latest(RunPointer.to(manifest, initialized))
+    if index:
+        store.write_index(ForecastIndex([store.read_model_index(m.id) for m in CONFIG.models]))
 
 
 @pytest.fixture
@@ -138,7 +143,7 @@ def test_status_comes_from_the_index(memory_storage) -> None:
         ModelIndex("uwwrf_12km", pointer, None, [INITIALIZED]),
         ModelIndex("retired", pointer, None, [INITIALIZED]),  # no longer configured: left out
     ]))
-    export_run(memory_storage)  # in storage, but not yet in the index
+    export_run(memory_storage, index=False)  # in storage, but not yet in the index
     calls = counting_gets(memory_storage)
     memory_storage.list_keys = None  # listing would fail
 
@@ -168,17 +173,17 @@ def test_refresh_rereads_only_changed_files(memory_storage) -> None:
     asyncio.run(scenario())
 
 
-def test_status_lists_runs_until_the_index_exists(memory_storage) -> None:
-    """Before the exporter first writes the index, every model's files are read; then the index takes over."""
-    export_run(memory_storage)
+def test_status_lists_no_runs_until_the_index_exists(memory_storage) -> None:
+    """In a new bucket, before the exporter's first check, every model is listed with no runs."""
+    export_run(memory_storage, index=False)
     store = ForecastStore(memory_storage)
     cache = StatusCache(store, CONFIG, DATA_URL)
 
     async def scenario() -> None:
-        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
-        store.write_index(ForecastIndex([ModelIndex("uwwrf_4km")]))
+        assert [m.latest for m in (await cache.get()).models] == [None, None]
+        store.write_index(ForecastIndex([store.read_model_index("uwwrf_4km")]))
         await cache.refresh()
-        assert (await cache.get()).models[0].latest is None
+        assert (await cache.get()).models[0].latest.initialized == INITIALIZED
 
     asyncio.run(scenario())
 
