@@ -3,6 +3,12 @@
 # Model and layer IDs appear in map URLs (/map/<model>/<layer>), storage keys and annotation
 # image sources, so renaming one breaks links. Names are for display only and can change freely.
 #
+# variables     What layers show, in the order the map lists them. A layer's id is a variable's id and it
+#               takes the variable's name, so layers with the same id are one choice on the map, with a
+#               model to pick among the models that have it. `group` is the heading it's listed under.
+# default_model The model the map opens on, and switches to when the viewer's model lacks a variable
+#               (unless the viewer has picked a default model of their own in settings).
+#
 # Model fields:
 #   source       Where frames come from: {kind: uw_wrf} for UW WRF images placed with the annotations, or
 #                {kind: dynamical, dataset: <catalog id>} for a dataset from https://dynamical.org/catalog/.
@@ -34,6 +40,26 @@
 #     d4: "" pacific-northwest-hr, ww_ western-washington. d4 runs to hour 72, and intcld, olr, fzlt
 #         and fzlc exist only on its full map.
 
+default_model: uwwrf_4km
+
+variables:
+  - {id: surface-temp, name: Surface temperature, group: Temperature}
+  - {id: 10m-wind-speed, name: 10m wind speed, group: Wind}
+  - {id: 3-hour-precip, name: 3-hour precipitation, group: Precipitation}
+  - {id: 6-hour-precip, name: 6-hour precipitation, group: Precipitation}
+  - {id: reflectivity, name: Composite reflectivity, group: Precipitation}
+  - {id: snow, name: 3-hour snowfall, group: Snow}
+  - {id: model-snow, name: 3-hour model snowfall, group: Snow}
+  - {id: 6-hour-snowfall-water, name: 6-hour snowfall (water equivalent), group: Snow}
+  - {id: accumulated-snowfall, name: Accumulated snowfall, group: Snow}
+  - {id: snow-depth, name: Snow depth, group: Snow}
+  - {id: snow-water-equivalent, name: Snow water equivalent, group: Snow}
+  - {id: freezing-level, name: Freezing level, group: Freezing level}
+  - {id: freezing-level-terrain, name: Freezing level over terrain, group: Freezing level}
+  - {id: cloud-cover, name: Cloud cover, group: Clouds}
+  - {id: integrated-cloud, name: Integrated cloud, group: Clouds}
+  - {id: longwave, name: Outgoing longwave radiation, group: Clouds}
+
 models:
   - id: uwwrf_4km
     name: UW WRF 4km
@@ -42,67 +68,56 @@ models:
     retention_days: 7
     layers:
       - id: surface-temp
-        name: Surface temperature
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/wa_tsfc.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: washington
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/wa_wssfc.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: washington
 
       - id: integrated-cloud
-        name: Integrated cloud
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/intcld.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
 
       - id: longwave
-        name: Outgoing longwave radiation
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/olr.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
 
       - id: 3-hour-precip
-        name: 3-hour precipitation
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/wa_pcp3.{hour:02d}.0000.gif
         hours: {first: 6, last: 120}
         maptype: washington
 
       - id: snow
-        name: 3-hour snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/wa_snow3.{hour:02d}.0000.gif
         hours: {first: 6, last: 120}
         maptype: washington
 
       - id: model-snow
-        name: 3-hour model snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/msnow3.{hour:02d}.0000.gif
         hours: {first: 6, last: 120}
         maptype: pacific-northwest
 
       - id: accumulated-snowfall
-        name: Accumulated snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/snowacc.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
 
       - id: freezing-level-terrain
-        name: Freezing level over terrain
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/fzlt.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
 
       - id: freezing-level
-        name: Freezing level
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/fzlc.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
 
       - id: snow-depth
-        name: Snow depth
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/snodep.{hour:02d}.0000.gif
         hours: {last: 120}
         maptype: pacific-northwest
@@ -114,67 +129,56 @@ models:
     retention_days: 7
     layers:
       - id: surface-temp
-        name: Surface temperature
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_tsfc.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_wssfc.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington
 
       - id: integrated-cloud
-        name: Integrated cloud
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/intcld.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: pacific-northwest-hr
 
       - id: longwave
-        name: Outgoing longwave radiation
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/olr.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: pacific-northwest-hr
 
       - id: 3-hour-precip
-        name: 3-hour precipitation
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_pcp3.{hour:02d}.0000.gif
         hours: {first: 6, last: 72}
         maptype: western-washington
 
       - id: snow
-        name: 3-hour snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snow3.{hour:02d}.0000.gif
         hours: {first: 6, last: 72}
         maptype: western-washington
 
       - id: model-snow
-        name: 3-hour model snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_msnow3.{hour:02d}.0000.gif
         hours: {first: 6, last: 72}
         maptype: western-washington
 
       - id: accumulated-snowfall
-        name: Accumulated snowfall
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snowacc.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington
 
       - id: freezing-level-terrain
-        name: Freezing level over terrain
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/fzlt.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: pacific-northwest-hr
 
       - id: freezing-level
-        name: Freezing level
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/fzlc.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: pacific-northwest-hr
 
       - id: snow-depth
-        name: Snow depth
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d4/ww_snodep.{hour:02d}.0000.gif
         hours: {last: 72}
         maptype: western-washington
@@ -188,43 +192,36 @@ models:
     retention_days: 3
     layers:
       - id: surface-temp
-        name: Surface temperature
         field: temperature_2m
         scale: temperature_f
         hours: {last: 240}
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
         scale: wind_mph
         hours: {last: 240}
 
       - id: 3-hour-precip
-        name: 3-hour precipitation
         field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
         scale: precip_in
         hours: {first: 3, last: 240}
 
       - id: snow-depth
-        name: Snow depth
         field: snow_thickness_surface
         scale: snow_in
         hours: {last: 240}
 
       - id: freezing-level
-        name: Freezing level
         field: {derive: freezing_level, variables: [geopotential_height_0c_isotherm]}
         scale: height_ft
         hours: {last: 240}
 
       - id: cloud-cover
-        name: Cloud cover
         field: total_cloud_cover_atmosphere
         scale: cloud_pct
         hours: {last: 240}
 
       - id: reflectivity
-        name: Composite reflectivity
         field: composite_reflectivity
         scale: reflectivity_dbz
         hours: {last: 240}
@@ -238,56 +235,47 @@ models:
     retention_days: 2
     layers:
       - id: surface-temp
-        name: Surface temperature
         field: temperature_2m
         scale: temperature_f
         hours: {last: 48, step: 1}
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         # grid-relative components; their speed is the same as earth-relative
         field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
         scale: wind_mph
         hours: {last: 48, step: 1}
 
       - id: 3-hour-precip
-        name: 3-hour precipitation
         field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
         scale: precip_in
         hours: {first: 3, last: 48, step: 1}
 
       - id: snow
-        name: 3-hour snowfall
         field: {derive: change, variables: [total_snowfall_run_total_surface], hours: 3}
         scale: snow_in
         hours: {first: 3, last: 48, step: 1}
 
       - id: accumulated-snowfall
-        name: Accumulated snowfall
         field: total_snowfall_run_total_surface
         scale: snow_in
         hours: {last: 48, step: 1}
 
       - id: snow-depth
-        name: Snow depth
         field: snow_thickness_surface
         scale: snow_in
         hours: {last: 48, step: 1}
 
       - id: freezing-level
-        name: Freezing level
         field: {derive: freezing_level, variables: [geopotential_height_0c_isotherm]}
         scale: height_ft
         hours: {last: 48, step: 1}
 
       - id: cloud-cover
-        name: Cloud cover
         field: total_cloud_cover_atmosphere
         scale: cloud_pct
         hours: {last: 48, step: 1}
 
       - id: reflectivity
-        name: Composite reflectivity
         field: composite_reflectivity
         scale: reflectivity_dbz
         hours: {last: 48, step: 1}
@@ -301,56 +289,47 @@ models:
     retention_days: 2
     layers:
       - id: surface-temp
-        name: Surface temperature
         field: temperature_2m
         scale: temperature_f
         hours: {last: 84, step: 3}
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         # grid-relative components; their speed is the same as earth-relative
         field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
         scale: wind_mph
         hours: {last: 84, step: 3}
 
       - id: 3-hour-precip
-        name: 3-hour precipitation
         field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
         scale: precip_in
         hours: {first: 3, last: 84, step: 3}
 
       - id: snow
-        name: 3-hour snowfall
         field: {derive: change, variables: [total_snowfall_run_total_surface], hours: 3}
         scale: snow_in
         hours: {first: 3, last: 84, step: 3}
 
       - id: accumulated-snowfall
-        name: Accumulated snowfall
         field: total_snowfall_run_total_surface
         scale: snow_in
         hours: {last: 84, step: 3}
 
       - id: snow-depth
-        name: Snow depth
         field: snow_thickness_surface
         scale: snow_in
         hours: {last: 84, step: 3}
 
       - id: freezing-level
-        name: Freezing level
         field: {derive: freezing_level, variables: [geopotential_height_0c_isotherm]}
         scale: height_ft
         hours: {last: 84, step: 3}
 
       - id: cloud-cover
-        name: Cloud cover
         field: total_cloud_cover_atmosphere
         scale: cloud_pct
         hours: {last: 84, step: 3}
 
       - id: reflectivity
-        name: Composite reflectivity
         field: composite_reflectivity
         scale: reflectivity_dbz
         hours: {last: 84, step: 3}
@@ -365,31 +344,26 @@ models:
     # AIFS steps are 6-hourly, so accumulations are over 6 hours
     layers:
       - id: surface-temp
-        name: Surface temperature
         field: temperature_2m
         scale: temperature_f
         hours: {last: 360, step: 6}
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         field: {derive: wind_speed, variables: [wind_u_10m, wind_v_10m]}
         scale: wind_mph
         hours: {last: 360, step: 6}
 
       - id: 6-hour-precip
-        name: 6-hour precipitation
         field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 6}
         scale: precip_in
         hours: {first: 6, last: 360, step: 6}
 
       - id: 6-hour-snowfall-water
-        name: 6-hour snowfall (water equivalent)
         field: {derive: change, variables: [snowfall_water_equivalent_run_total_surface], hours: 6}
         scale: precip_in
         hours: {first: 6, last: 360, step: 6}
 
       - id: cloud-cover
-        name: Cloud cover
         field: total_cloud_cover_atmosphere
         scale: cloud_pct
         hours: {last: 360, step: 6}
@@ -406,32 +380,27 @@ models:
     retention_days: 2
     layers:
       - id: surface-temp
-        name: Surface temperature
         field: temperature_2m
         scale: temperature_f
         hours: {last: 48, step: 1}
 
       - id: 10m-wind-speed
-        name: 10m wind speed
         field: wind_speed_10m
         scale: wind_mph
         hours: {last: 48, step: 1}
 
       - id: 3-hour-precip
-        name: 3-hour precipitation
         # an average rate since the previous hour, summed over 3 hours
         field: {derive: rate_sum, variables: [precipitation_surface], hours: 3}
         scale: precip_in
         hours: {first: 3, last: 48, step: 1}
 
       - id: snow-water-equivalent
-        name: Snow water equivalent
         field: snow_water_equivalent_surface
         scale: snow_in
         hours: {last: 48, step: 1}
 
       - id: cloud-cover
-        name: Cloud cover
         # missing at hour 0
         field: total_cloud_cover_atmosphere
         scale: cloud_pct

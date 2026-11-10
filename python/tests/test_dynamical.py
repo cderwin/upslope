@@ -132,6 +132,10 @@ def make_source(dataset: xr.Dataset) -> DynamicalSource:
 def test_config_loads_dynamical_models(tmp_path: Path) -> None:
     path = tmp_path / "models.yaml"
     path.write_text(
+        "default_model: gfs_0.25\n"
+        "variables:\n"
+        "  - {id: surface-temp, name: T}\n"
+        "  - {id: 3-hour-precip, name: P}\n"
         "models:\n"
         "  - id: gfs_0.25\n"
         "    name: GFS\n"
@@ -139,9 +143,8 @@ def test_config_loads_dynamical_models(tmp_path: Path) -> None:
         "    region: [-127, 41.5, -113, 50]\n"
         "    start_times: [0, 6, 12, 18]\n"
         "    layers:\n"
-        "      - {id: surface-temp, name: T, field: temperature_2m, scale: temperature_f, hours: {last: 240}}\n"
+        "      - {id: surface-temp, field: temperature_2m, scale: temperature_f, hours: {last: 240}}\n"
         "      - id: 3-hour-precip\n"
-        "        name: P\n"
         "        field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}\n"
         "        scale: precip_in\n"
         "        hours: {first: 3, last: 240}\n"

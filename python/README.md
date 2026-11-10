@@ -20,10 +20,15 @@ pass `--snapshot ../dev/georegistration` to use the repo's snapshot instead.
 
 ## Models config
 
-`config/models.yaml` lists the forecast models and, for each, the image layers
-to export (`upslope/models/config.py`):
+`config/models.yaml` lists the variables layers can show, the forecast models
+and, for each, the image layers to export (`upslope/models/config.py`):
 
 ```yaml
+default_model: uwwrf_4km     # the map's default model (see below)
+
+variables:                   # in the order the map lists them
+  - {id: 3-hour-precip, name: 3-hour precipitation, group: Precipitation}
+
 models:
   - id: uwwrf_4km            # in map URLs and storage keys; don't rename
     name: UW WRF 4km         # display only
@@ -32,12 +37,20 @@ models:
     start_times: [0, 12]     # UTC initialization hours
     retention_days: 7
     layers:
-      - id: 3-hour-precip    # in map URLs (/map/uwwrf_4km/3-hour-precip); don't rename
-        name: 3-hour precipitation
+      - id: 3-hour-precip    # a variable; in map URLs (/map/uwwrf_4km/3-hour-precip); don't rename
         url: https://a.atmos.washington.edu/wrfrt/data/{init:%Y%m%d%H}/images_d3/wa_pcp3.{hour:02d}.0000.gif
         hours: {first: 6, last: 120}   # step defaults to 3, first to 0
         maptype: washington  # annotations to georegister with
 ```
+
+A layer's `id` is a variable's, and it takes the variable's `name` (layers
+don't set one). Layers with the same id, from any models, are one variable on
+the map: the viewer picks a variable, under its `group` heading, and then a
+model among those that have it. `default_model` is the model the map opens on,
+and switches to when the viewer's model lacks the variable they pick, unless
+they've chosen a default model of their own in the map's settings. Layers that
+show different things (e.g. 3- and 6-hour precipitation) need different
+variables. Renaming a variable changes no frames, so nothing is re-exported.
 
 `url` takes exactly two fields: `{init}`, the run's initialization time (a UTC
 datetime, so give it a strftime format), and `{hour}`, the forecast hour. The
@@ -60,7 +73,6 @@ instead of downloaded as images (`upslope/models/dynamical/`):
     start_times: [0, 6, 12, 18]
     layers:
       - id: 3-hour-precip
-        name: 3-hour precipitation
         field: {derive: change, variables: [total_precipitation_run_total_surface], hours: 3}
         scale: precip_in            # colors and display units (models/dynamical/scales.py)
         hours: {first: 3, last: 240}
@@ -394,7 +406,7 @@ requires), shown on the map.
 
 | Method and path | Purpose |
 | --- | --- |
-| `GET /fx/status` | Each configured model's `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`), and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
+| `GET /fx/status` | Each configured model's `layers` (variable ids), `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`); the `variables` (`{id, name, group}`) and `default_model` from the config; and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
 
 `data_url` is where the webapp loads manifests
 (`<data_url>/<model>/<run path>/manifest.json`) and frames (their paths are

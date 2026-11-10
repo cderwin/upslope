@@ -1,6 +1,7 @@
 """Forecast API for the webapp: `GET /fx/status`, each model's latest run, in-progress run (with each layer's
-progress) and retained runs, so the webapp can find manifests and show how a run is coming along; the exporter's
-health; and `data_url`, where browsers read the forecast files from the public bucket.
+progress) and retained runs, so the webapp can find manifests and show how a run is coming along; the variables
+and which models have each, so it can list them before loading any manifest; the exporter's health; and
+`data_url`, where browsers read the forecast files from the public bucket.
 """
 
 import asyncio
@@ -15,7 +16,7 @@ from litestar.datastructures import State
 
 from upslope.clients.forecasts import EXPORT_STATUS, INDEX, ForecastStore
 from upslope.logging import get_logger
-from upslope.models.config import ModelConfig, ModelsConfig
+from upslope.models.config import ModelConfig, ModelsConfig, VariableConfig
 from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, ModelIndex, run_path
 
 logger = get_logger(__name__)
@@ -93,6 +94,7 @@ class ModelStatus:
     Attributes:
         id: Model id.
         name: Display name.
+        layers: Ids of the variables the model is configured with, in config order.
         latest: The newest complete run, if any has been exported.
         in_progress: The newest run that has started, if any, and how far it has got.
         runs: Every retained run with a manifest, newest first (complete or not).
@@ -100,6 +102,7 @@ class ModelStatus:
 
     id: str
     name: str
+    layers: list[str]
     latest: RunRef | None
     in_progress: InProgressStatus | None
     runs: list[RunRef]
@@ -139,6 +142,8 @@ class ForecastStatus:
 
     Attributes:
         models: Status of each configured model, in config order.
+        variables: Every variable a model's layers show (`{id, name, group}`), in display order.
+        default_model: Model to show when the viewer hasn't picked one, or theirs lacks a variable.
         data_url: Base URL of the forecast files (`forecasts/` in the public bucket): a run's manifest is at
             `<data_url>/<model>/<run path>/manifest.json`, and its frames' paths are relative to the run's folder.
         export: The exporter's last written status (`export-status.json`): whether its last check failed, each
@@ -147,6 +152,8 @@ class ForecastStatus:
     """
 
     models: list[ModelStatus]
+    variables: list[VariableConfig]
+    default_model: str | None
     data_url: str
     export: ExportStatus | None = None
     export_overdue: bool = False
@@ -258,13 +265,16 @@ class StatusCache:
                 ModelStatus(
                     model.id,
                     model.name,
+                    [layer.id for layer in model.layers],
                     None if latest is None else RunRef(latest.initialized, latest.path),
                     None if progress is None else in_progress_status(model, progress, now),
                     [RunRef(initialized, run_path(initialized)) for initialized in entry.runs],
                 )
             )
         export = self._export
-        return ForecastStatus(models, self._data_url, export, export is not None and now > export.overdue_after)
+        config = self._config
+        overdue = export is not None and now > export.overdue_after
+        return ForecastStatus(models, config.variables, config.default_model, self._data_url, export, overdue)
 
 
 class ForecastController(Controller):
