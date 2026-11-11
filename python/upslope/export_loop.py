@@ -56,13 +56,22 @@ def build_driver(
     storage: StorageClient,
     public_storage: StorageClient,
     model_timeout: timedelta | None = MODEL_TIMEOUT,
+    frames_per_model: int | None = FRAMES_PER_MODEL,
 ) -> ForecastDriver:
-    """Create the export driver: annotations come from the private `storage`, and forecasts go to `public_storage`."""
+    """Create the export driver: annotations come from the private `storage`, and forecasts go to `public_storage`.
+
+    Args:
+        config: Models to export.
+        storage: The private bucket, for annotations.
+        public_storage: The public bucket, for forecasts.
+        model_timeout: Most time one model may take in a check; None for no limit.
+        frames_per_model: Most frames a model exports per check; None for no limit.
+    """
     return ForecastDriver(
         config=config,
         sources=build_sources(storage),
         store=ForecastStore(public_storage),
-        frames_per_model=FRAMES_PER_MODEL,
+        frames_per_model=frames_per_model,
         model_timeout=model_timeout.total_seconds() if model_timeout is not None else None,
     )
 
