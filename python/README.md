@@ -206,7 +206,9 @@ deploys pass `--ha=false`. The two processes share only storage.
 The pipeline is async. Every model is checked concurrently, each in its own
 task, while a model's runs, layers and hours go in order. Blocking work
 (reading datasets, georegistering, PNG encoding, storage) runs in worker
-threads, with at most 3 dynamical.org frames rendered at once. Nothing stops
+threads (16 of them), with at most 3 dynamical.org frames rendered (or latest
+runs looked up) at once. Each dynamical.org dataset is opened under its own
+lock, so a slow upstream holds up only the models that read it. Nothing stops
 the loop:
 
 - a model that fails is reported failed and the others carry on;
