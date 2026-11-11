@@ -15,7 +15,7 @@ the index is written if the entry changed. The server reads that one object inst
 
 import asyncio
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
 from pathlib import Path
@@ -116,7 +116,7 @@ class ModelReport:
 
 @define
 class CheckReport:
-    """What one check did, per model in config order.
+    """What one check did, per model checked, in config order.
 
     Attributes:
         models: Each model's report.
@@ -172,8 +172,8 @@ class ForecastDriver:
     _index: ForecastIndex | None = field(default=None, init=False)
     _index_lock: asyncio.Lock = field(factory=asyncio.Lock, init=False)
 
-    async def run(self, force: bool = False) -> CheckReport:
-        """Check every configured model for new frames and export them, all models at once.
+    async def run(self, force: bool = False, models: Collection[str] | None = None) -> CheckReport:
+        """Check every configured model (or some) for new frames and export them, all models at once.
 
         A model failing doesn't stop the others; each model's outcome is in the report. Models whose source
         can't export this check (e.g. UW WRF before any annotations are published) are skipped.
@@ -181,14 +181,18 @@ class ForecastDriver:
         Args:
             force: Export every layer of the runs being followed again, even ones already exported with the
                 current config and source revision.
+            models: Ids of the models to check; None for all. The others keep their entries in the index.
 
         Returns:
-            What the check did for each model.
+            What the check did for each model checked.
         """
+        if models is not None and (unknown := sorted(set(models) - {model.id for model in self.config.models})):
+            raise ValueError(f"unknown models {unknown}")
+        selected = [model for model in self.config.models if models is None or model.id in models]
         async with AsyncExitStack() as checks:
             # each kind of source reads its per-check state (annotations, dataset snapshots) once, up front
             unavailable: dict[str, str] = {}
-            for kind in dict.fromkeys(model.source.kind for model in self.config.models):
+            for kind in dict.fromkeys(model.source.kind for model in selected):
                 try:
                     await checks.enter_async_context(self.sources[kind].check())
                 except Exception as e:
@@ -197,7 +201,7 @@ class ForecastDriver:
             if self.publish_index:
                 await self._load_index()
             reports = await asyncio.gather(
-                *(self._check_and_index(model, force, unavailable.get(model.source.kind)) for model in self.config.models)
+                *(self._check_and_index(model, force, unavailable.get(model.source.kind)) for model in selected)
             )
         return CheckReport(list(reports))
 

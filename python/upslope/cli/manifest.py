@@ -22,27 +22,41 @@ def _use_export_threads() -> None:
 
 @click.command()
 @click.option("-c", "--config", "config_path", type=click.Path(path_type=Path), default=DEFAULT_MODELS_CONFIG)
+@click.option("-m", "--model", "model_ids", multiple=True, help="Only this model (repeatable). Defaults to every model.")
 @click.option("-f", "--force", is_flag=True, help="Export every layer again, even if the run was already exported.")
+@click.option(
+    "--no-frame-limit",
+    is_flag=True,
+    help="Export every new frame, instead of stopping each model after 400 (the rest wait for a later check).",
+)
 @click.option("-v", "--verbose", is_flag=True, help="Log per-file detail.")
-def export_web(config_path: Path, force: bool, verbose: bool) -> None:
-    """Check every model once for new frames and export them to storage, then exit.
+def export_web(config_path: Path, model_ids: tuple[str, ...], force: bool, no_frame_limit: bool, verbose: bool) -> None:
+    """Check every model (or those given with -m) once for new frames and export them to storage, then exit.
 
     The same check `export-loop` runs on a schedule (and records in the export status, which this doesn't).
     UW WRF frames are georegistered with the annotations currently published in storage. Layers already
-    exported with those annotations and the current config are kept as they are.
+    exported with those annotations and the current config are kept as they are. Models not checked keep
+    their entries in the index. Like the loop, each model exports at most 400 frames, unless --no-frame-limit
+    is given (e.g. to fill a backlog in one go).
     """
     from upslope.clients.storage import StorageClient
-    from upslope.export_loop import build_driver
+    from upslope.export_loop import FRAMES_PER_MODEL, build_driver
     from upslope.models.config import ModelsConfig
 
     configure_logging(verbose)
     logger.info("loading models config from %s", config_path)
     config = ModelsConfig.load(config_path)
-    driver = build_driver(config, StorageClient.build(), StorageClient.build_public(), model_timeout=None)
+    if unknown := [model_id for model_id in model_ids if config.model(model_id) is None]:
+        configured = ", ".join(model.id for model in config.models)
+        raise click.ClickException(f"unknown model {', '.join(unknown)}; configured: {configured}")
+    driver = build_driver(
+        config, StorageClient.build(), StorageClient.build_public(), model_timeout=None,
+        frames_per_model=None if no_frame_limit else FRAMES_PER_MODEL,
+    )
 
     async def check():
         _use_export_threads()
-        return await driver.run(force=force)
+        return await driver.run(force=force, models=model_ids or None)
 
     report = asyncio.run(check())
     for manifest in report.manifests:
