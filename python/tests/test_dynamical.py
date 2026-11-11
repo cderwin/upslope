@@ -2,6 +2,7 @@
 
 import asyncio
 import io
+import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -314,6 +315,97 @@ def test_latest_complete_run_needs_the_last_hour() -> None:
     with checking(source):
         assert source.layer_problems(model, TEMPERATURE, RUN) == ["hours [6] aren't published yet"]
         assert source.layer_problems(model, layer("x", FieldConfig(("nope",)), "snow_in"), RUN) == ["test-dataset has no variable 'nope'"]
+
+
+
+# --- opening datasets concurrently
+
+WAIT = 5  # seconds; a test fails rather than hangs if a thread never gets through
+
+
+class GatedOpen:
+    """Opens datasets that wait for `release` (those in `slow`), recording how many are open at once."""
+
+    def __init__(self, dataset: xr.Dataset, slow: set[str]) -> None:
+        self.dataset = dataset
+        self.slow = slow
+        self.release = threading.Event()
+        self.started = threading.Event()
+        self.calls: list[str] = []
+        self.active = 0
+        self.most_active = 0
+        self._lock = threading.Lock()
+
+    def __call__(self, dataset_id: str) -> xr.Dataset:
+        with self._lock:
+            self.calls.append(dataset_id)
+            self.active += 1
+            self.most_active = max(self.most_active, self.active)
+        try:
+            if dataset_id in self.slow:
+                self.started.set()
+                assert self.release.wait(WAIT), "never released"
+            return self.dataset
+        finally:
+            with self._lock:
+                self.active -= 1
+
+
+def test_a_slow_dataset_doesnt_block_other_datasets_or_the_end_of_the_check() -> None:
+    opener = GatedOpen(lat_lon_dataset(), slow={"slow-dataset"})
+    source = DynamicalSource(open=opener)
+    slow, fast = make_model(dataset="slow-dataset"), make_model(dataset="fast-dataset")
+    source.begin_check()
+    stuck = threading.Thread(target=source.field_values, args=(slow, TEMPERATURE, RUN, 0), daemon=True)
+    stuck.start()
+    assert opener.started.wait(WAIT)
+    # another dataset opens and reads while the slow one is still opening
+    np.testing.assert_allclose(source.field_values(fast, TEMPERATURE, RUN, 0), 32.0)
+    # and the check can end (on the event loop, in the exporter) without waiting for it
+    source.end_check()
+    assert stuck.is_alive()  # neither waited for it
+
+    # the next check opens the dataset afresh rather than waiting on, or reusing, the stale open
+    source.begin_check()
+    opener.slow.clear()
+    np.testing.assert_allclose(source.field_values(slow, TEMPERATURE, RUN, 0), 32.0)
+    opener.release.set()
+    stuck.join(WAIT)
+    assert not stuck.is_alive()
+    assert opener.calls.count("slow-dataset") == 2
+    np.testing.assert_allclose(source.field_values(slow, TEMPERATURE, RUN, 0), 32.0)
+    assert opener.calls.count("slow-dataset") == 2
+    source.end_check()
+
+
+def test_a_dataset_is_opened_once_by_concurrent_readers() -> None:
+    opener = GatedOpen(lat_lon_dataset(), slow={"test-dataset"})
+    source = DynamicalSource(open=opener)
+    model = make_model()
+    with checking(source):
+        readers = [threading.Thread(target=source.field_values, args=(model, TEMPERATURE, RUN, 0)) for _ in range(3)]
+        for reader in readers:
+            reader.start()
+        assert opener.started.wait(WAIT)
+        opener.release.set()
+        for reader in readers:
+            reader.join(WAIT)
+    assert opener.calls == ["test-dataset"]
+
+
+def test_finding_the_latest_run_shares_the_render_limit() -> None:
+    """Every model looking for its latest run at once can't take more threads than rendering may."""
+    opener = GatedOpen(lat_lon_dataset(), slow={f"dataset-{n}" for n in range(3)})
+    source = DynamicalSource(open=opener, concurrency=1)
+    models = [make_model(dataset=f"dataset-{n}") for n in range(3)]
+
+    async def find() -> list[datetime | None]:
+        async with source.check():
+            asyncio.get_running_loop().call_later(0.2, opener.release.set)
+            return await asyncio.gather(*(source.latest_complete_run(m, RUN + timedelta(hours=7)) for m in models))
+
+    assert asyncio.run(find()) == [RUN] * 3
+    assert opener.most_active == 1
 
 
 # --- rendering

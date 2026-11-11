@@ -8,7 +8,9 @@ Virtual datasets fill in a run as the model publishes it. An hour counts as publ
 variable (`temperature_2m`) has data over the region; missing chunks read back as NaN.
 
 Reading and rendering are blocking (Icechunk, xarray, GDAL), so the async methods run them in threads, a few
-at a time; models are exported concurrently, so the per-check caches are shared under a lock.
+at a time; models are exported concurrently, so the per-check caches are shared under a lock. That lock is never
+held while reading: opening a dataset can take minutes when the upstream is slow, so each dataset is opened under
+its own lock, and only models reading that dataset wait for it.
 """
 
 import asyncio
@@ -45,7 +47,8 @@ REGION_MARGIN_CELLS = 2
 MIN_FRAME_WIDTH = 600
 # Region reads kept per check, so a field read for one layer or interval is reused by the next
 FIELD_CACHE_SIZE = 64
-# Frames rendered at once across models: bounds memory and CPU, while letting reads overlap
+# Blocking calls (rendering a frame, finding the latest run) at once across models: bounds memory and CPU, and
+# keeps a slow upstream from occupying every worker thread, while letting reads overlap
 RENDER_CONCURRENCY = 3
 # The catalog lookup is one small JSON document
 CATALOG_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
@@ -137,15 +140,19 @@ class DynamicalSource:
 
     Attributes:
         open: Opens a catalog dataset by id; defaults to the live catalog (tests pass in-memory datasets).
-        concurrency: Most frames rendered at once.
+        concurrency: Most blocking calls (frames rendered, latest runs found) at once.
     """
 
     open: Callable[[str], xr.Dataset] = field(factory=lambda: partial(open_dataset, client=httpx.Client(timeout=CATALOG_TIMEOUT)))
     concurrency: int = RENDER_CONCURRENCY
     _checking: bool = field(default=False, init=False)
-    # guards the caches below; held while a dataset is opened, not while data is read
+    # guards the caches below; never held while a dataset is opened or read
     _lock: threading.RLock = field(factory=threading.RLock, init=False)
     _renders: asyncio.Semaphore = field(init=False)
+    # incremented as each check ends, so an open that outlives its check doesn't leave its snapshot for the next
+    _generation: int = field(default=0, init=False)
+    # one lock per dataset, held while it's opened, so callers wait only for the dataset they need
+    _opening: dict[str, threading.Lock] = field(factory=dict, init=False)
     _datasets: dict[str, xr.Dataset] = field(factory=dict, init=False)
     _windows: dict[str, GridWindow] = field(factory=dict, init=False)
     _fields: OrderedDict[tuple, tuple[np.ndarray, str]] = field(factory=OrderedDict, init=False)
@@ -170,6 +177,9 @@ class DynamicalSource:
         """End a check; the next one sees the datasets' newest snapshots."""
         with self._lock:
             self._checking = False
+            self._generation += 1
+            # a thread still opening a dataset (its model timed out) keeps its old lock and doesn't block the next check
+            self._opening.clear()
             self._datasets.clear()
             self._windows.clear()
             self._fields.clear()
@@ -180,7 +190,8 @@ class DynamicalSource:
         return None
 
     async def latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
-        return await asyncio.to_thread(self.find_latest_complete_run, model, now)
+        async with self._renders:
+            return await asyncio.to_thread(self.find_latest_complete_run, model, now)
 
     def find_latest_complete_run(self, model: ModelConfig, now: datetime) -> datetime | None:
         """The newest run with the last hour of every layer published (blocking)."""
@@ -286,16 +297,28 @@ class DynamicalSource:
             raise TypeError(f"model {model.id} isn't a dynamical.org model")
         dataset_id = model.source.dataset
         with self._lock:
-            if dataset_id not in self._datasets:
-                with log_duration(logger, f"opened {dataset_id}"):
-                    self._datasets[dataset_id] = self.open(dataset_id)
-            return self._datasets[dataset_id]
+            if (dataset := self._datasets.get(dataset_id)) is not None:
+                return dataset
+            opening = self._opening.setdefault(dataset_id, threading.Lock())
+            generation = self._generation
+        with opening:
+            with self._lock:
+                if (dataset := self._datasets.get(dataset_id)) is not None:
+                    return dataset  # opened while this caller waited
+            with log_duration(logger, f"opened {dataset_id}"):
+                dataset = self.open(dataset_id)
+            with self._lock:
+                if self._generation == generation:
+                    self._datasets[dataset_id] = dataset
+            return dataset
 
     def _window(self, model: ModelConfig) -> GridWindow:
         with self._lock:
-            if model.id not in self._windows:
-                self._windows[model.id] = grid_window(self._dataset(model), model.region)
-            return self._windows[model.id]
+            if (window := self._windows.get(model.id)) is not None:
+                return window
+        window = grid_window(self._dataset(model), model.region)
+        with self._lock:
+            return self._windows.setdefault(model.id, window)
 
     def _init_index(self, model: ModelConfig, initialized: datetime) -> int | None:
         target = np.datetime64(initialized.astimezone(UTC).replace(tzinfo=None), "ns")
