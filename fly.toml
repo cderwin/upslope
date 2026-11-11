@@ -45,8 +45,10 @@ primary_region = "sjc"
   cpus = 1
 
 [[vm]]
-  # georegistering, decoding GRIB fields from dynamical.org and PNG conversion are memory-hungry
+  # georegistering, decoding GRIB fields from dynamical.org and PNG conversion are memory-hungry. Several
+  # renders run at once (3 dynamical.org, plus UW WRF), and a shared CPU's quota scales with its count, so
+  # 4 keeps a busy check from being throttled
   processes = ["exporter"]
   memory = "2gb"
   cpu_kind = "shared"
-  cpus = 1
+  cpus = 4
