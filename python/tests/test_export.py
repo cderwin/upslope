@@ -15,6 +15,7 @@ import pytest
 import rasterio
 from affine import Affine
 from attrs import evolve
+import click
 from click.testing import CliRunner
 from PIL import Image
 
@@ -1096,6 +1097,26 @@ def test_index_matches_each_models_files_after_a_check(memory_storage) -> None:
     assert len(writes) == 3
 
 
+def test_a_check_of_some_models_keeps_the_others_in_the_index(memory_storage) -> None:
+    """`export-web -m`: only the models named are checked; the rest stay in the index, in config order."""
+    store = ForecastStore(memory_storage)
+    driver = ForecastDriver(ModelsConfig(TWO_MODELS), {"uw_wrf": FakeSource({INITIALIZED: 999})}, store, now=lambda: NOW)
+    report = asyncio.run(driver.run(models=["uwwrf_12km"]))
+    assert [model.model for model in report.models] == ["uwwrf_12km"]
+    assert store.list_runs("uwwrf_12km") == [INITIALIZED] and store.list_runs("uwwrf_4km") == []
+    assert [(m.id, m.runs) for m in store.read_index().models] == [("uwwrf_4km", []), ("uwwrf_12km", [INITIALIZED])]
+
+    asyncio.run(driver.run(models=["uwwrf_4km"]))
+    assert [(m.id, m.runs) for m in store.read_index().models] == [("uwwrf_4km", [INITIALIZED]), ("uwwrf_12km", [INITIALIZED])]
+    with pytest.raises(ValueError, match="nope"):
+        asyncio.run(driver.run(models=["nope"]))
+
+
+def test_export_web_rejects_an_unknown_model() -> None:
+    result = CliRunner().invoke(main, ["export-web", "-m", "nope"])
+    assert result.exit_code != 0 and "unknown model nope" in result.output and "uwwrf_4km" in result.output
+
+
 def test_index_includes_what_a_failed_model_exported(memory_storage) -> None:
     source = SlowSource({INITIALIZED: 999}, stuck="uwwrf_12km")
     store = ForecastStore(memory_storage)
@@ -1164,6 +1185,25 @@ def test_build_driver_reads_annotations_privately_and_exports_publicly(memory_st
     driver = build_driver(ModelsConfig([EXPORT_MODEL]), memory_storage, public_storage)
     assert driver.store.storage is public_storage
     assert driver.sources["uw_wrf"].annotations.storage is memory_storage
+
+
+def test_frame_limit_is_the_loops_unless_export_web_lifts_it(monkeypatch, memory_storage, public_storage) -> None:
+    from upslope.clients.storage import StorageClient
+    from upslope.export_loop import FRAMES_PER_MODEL, build_driver
+
+    assert build_driver(ModelsConfig([EXPORT_MODEL]), memory_storage, public_storage).frames_per_model == FRAMES_PER_MODEL
+    monkeypatch.setattr(StorageClient, "build", classmethod(lambda cls, bucket=None: memory_storage))
+    monkeypatch.setattr(StorageClient, "build_public", classmethod(lambda cls: public_storage))
+    limits = []
+
+    def stop(*args, **kwargs):
+        limits.append(kwargs["frames_per_model"])
+        raise click.ClickException("stop before exporting")
+
+    monkeypatch.setattr("upslope.export_loop.build_driver", stop)
+    CliRunner().invoke(main, ["export-web"])
+    CliRunner().invoke(main, ["export-web", "--no-frame-limit"])
+    assert limits == [FRAMES_PER_MODEL, None]
 
 
 def test_export_writes_only_forecasts_to_the_public_bucket(memory_storage, public_storage, published) -> None:

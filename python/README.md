@@ -5,7 +5,7 @@ hand-placed annotations, and dynamical.org models rendered from gridded data.
 
 ```sh
 uv run upslope check-layers        # check every configured layer's images exist upstream (--model, --run)
-uv run upslope export-web          # one export check of every model; uploads PNGs + manifest.json to storage
+uv run upslope export-web          # one export check of every model (or -m MODEL; --no-frame-limit); uploads PNGs + manifest.json to storage
 uv run upslope export-loop         # the exporter: a check every 15 min, forever (--interval, --run-immediately)
 uv run upslope registration-error  # per-maptype fit error, in meters (--draft, --snapshot DIR)
 uv run upslope serve               # API server and webapp (doesn't export)
@@ -186,7 +186,8 @@ and `models/dynamical/source.py`) renders each frame as a Web Mercator GeoTIFF
 (for UW, by downloading the image and georegistering it), and the driver
 converts it to a PNG (nodata becomes transparent) and uploads it to the
 S3/Tigris bucket. A model exports at most 400 frames per check
-(`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others. It
+(`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others;
+`export-web --no-frame-limit` exports all of it at once. It
 reads storage settings from `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_ENDPOINT_URL_S3`, `BUCKET_NAME` (the private bucket, which annotations are
 read from), `PUBLIC_BUCKET_NAME` (the public bucket forecasts are written to) and, optionally, `AWS_REGION`. Put them in
