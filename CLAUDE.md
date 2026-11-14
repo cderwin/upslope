@@ -52,6 +52,7 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `raster.py` | Warping to Web Mercator, frame corners, WebP and value-image encoding; shared by every source |
 | `models/manifest.py` | Run manifest and `latest.json` schemas |
 | `logging.py` | `get_logger`, `configure_logging`, `log_duration` |
+| `migrations/` (in `python/`) | One-off storage migrations run by hand (`just py-migrate <name>`); see its README |
 
 ## Python conventions
 

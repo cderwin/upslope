@@ -359,6 +359,13 @@ from the app's origin (and `http://localhost:5173` for the dev server), exposing
 `ETag`: the map fetches manifests and frames cross-origin. Locally, `just up`
 creates an anonymously readable `upslope-data-public` bucket in MinIO.
 
+### Migrations
+
+When the export format changes, a one-off script in `migrations/` converts the
+runs already in the bucket, so the webapp only ever reads one format. They're
+run by hand (`just py-migrate <name>`), alongside the running exporter; see
+[`migrations/README.md`](migrations/README.md) for how they stay out of its way.
+
 ### Run manifest
 
 ```json

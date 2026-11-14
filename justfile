@@ -42,6 +42,12 @@ py-export *args:
 py-export-loop *args:
     uv run upslope export-loop {{ args }}
 
+# Run a one-off storage migration (python/migrations/) against the S3 settings in .env.local
+[group('python')]
+[working-directory('python')]
+py-migrate name *args:
+    uv run python -m migrations.{{ name }} {{ args }}
+
 # Run the server against the S3 settings in .env.local (it doesn't export; see py-export-loop)
 [group('python')]
 [working-directory('python')]
