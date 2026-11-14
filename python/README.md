@@ -5,14 +5,14 @@ hand-placed annotations, and dynamical.org models rendered from gridded data.
 
 ```sh
 uv run upslope check-layers        # check every configured layer's images exist upstream (--model, --run)
-uv run upslope export-web          # one export check of every model (or -m MODEL; --no-frame-limit); uploads PNGs + manifest.json to storage
+uv run upslope export-web          # one export check of every model (or -m MODEL; --no-frame-limit); uploads WebPs + manifest.json to storage
 uv run upslope export-loop         # the exporter: a check every 15 min, forever (--interval, --run-immediately)
 uv run upslope registration-error  # per-maptype fit error, in meters (--draft, --snapshot DIR)
 uv run upslope serve               # API server and webapp (doesn't export)
 uv run upslope georegistration upload DIR    # load a snapshot into storage (draft + published)
 uv run upslope georegistration snapshot DIR  # save the published annotations to a directory
 uv run upslope georegistration promote-examples  # draft an image for each configured maptype with none (--hour, --dry-run)
-uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.png  # preview a dynamical.org frame
+uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.webp  # preview a dynamical.org frame
 ```
 
 `registration-error` reads the annotations published in storage;
@@ -98,7 +98,7 @@ the model publishes them.
 
 `upslope check-layers -m <model>` checks each layer's variables, hours and units
 against the live dataset and lists hours not published yet;
-`upslope render-frame` writes one frame as a PNG, without uploading it.
+`upslope render-frame` writes one frame as a lossless WebP, without uploading it.
 
 ## Georegistration
 
@@ -184,7 +184,8 @@ start. Production never reads it.
 model: the model's source (`upslope/models/source.py`; `models/uw_wrf/source.py`
 and `models/dynamical/source.py`) renders each frame as a Web Mercator GeoTIFF
 (for UW, by downloading the image and georegistering it), and the driver
-converts it to a PNG (nodata becomes transparent) and uploads it to the
+converts it to a lossless WebP (nodata becomes transparent; method 4, since
+higher efforts cost far more time for little gain) and uploads it to the
 S3/Tigris bucket. A model exports at most 400 frames per check
 (`upslope/export_loop.py`), so a backlog takes a few checks without holding up the others;
 `export-web --no-frame-limit` exports all of it at once. It
@@ -205,7 +206,7 @@ deploys pass `--ha=false`. The two processes share only storage.
 
 The pipeline is async. Every model is checked concurrently, each in its own
 task, while a model's runs, layers and hours go in order. Blocking work
-(reading datasets, georegistering, PNG encoding, storage) runs in worker
+(reading datasets, georegistering, image encoding, storage) runs in worker
 threads (16 of them), with at most 3 dynamical.org frames rendered (or latest
 runs looked up) at once. Each dynamical.org dataset is opened under its own
 lock, so a slow upstream holds up only the models that read it. Nothing stops
@@ -297,7 +298,7 @@ exporter read.
 | `forecasts/<model>/latest.json` | The newest complete run: `{model, initialized, path, updated_at}` |
 | `forecasts/<model>/in-progress.json` | The newest run that has started, and each layer's progress (below) |
 | `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json` | The run's layers and frames (below) |
-| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.png` | Frames, named by valid time (UTC) and content (and `...-<digest>.values.png` value images) |
+| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.webp` | Frames (lossless WebP), named by valid time (UTC) and content (and `...-<digest>.values.png` value images) |
 
 Frames are named by the first 16 hex digits of their content's SHA-256, so a
 re-exported frame gets a new name and a cached one is never stale. They're
@@ -358,6 +359,13 @@ from the app's origin (and `http://localhost:5173` for the dev server), exposing
 `ETag`: the map fetches manifests and frames cross-origin. Locally, `just up`
 creates an anonymously readable `upslope-data-public` bucket in MinIO.
 
+### Migrations
+
+When the export format changes, a one-off script in `migrations/` converts the
+runs already in the bucket, so the webapp only ever reads one format. They're
+run by hand (`just py-migrate <name>`), alongside the running exporter; see
+[`migrations/README.md`](migrations/README.md) for how they stay out of its way.
+
 ### Run manifest
 
 ```json
@@ -376,7 +384,7 @@ creates an anonymously readable `upslope-data-public` bucket in MinIO.
       "hours": [0, 3, 6, ...],
       "dimensions": [958, 919],
       "coordinates": [[lon, lat], ...],
-      "frames": [{ "hour": 6, "valid": "2026-10-29T06:00:00+00:00", "path": "surface-temp/2026-10-29T0600.png", "values": null }, ...],
+      "frames": [{ "hour": 6, "valid": "2026-10-29T06:00:00+00:00", "path": "surface-temp/2026-10-29T0600.webp", "values": null }, ...],
       "legend": null,
       "values": null,
       "extent": [[lon, lat], ...]
