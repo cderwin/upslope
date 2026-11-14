@@ -314,12 +314,14 @@ def test_export_frame_uploads_a_placed_png(memory_storage, document: AnnotationD
     key = f"forecasts/uwwrf_4km/2026/10/21/1200Z/{frame.path}"
     data, content_type = memory_storage.objects[key]
     # named by valid time and content, so it can be cached for good
-    assert frame.path == f"surface-temp/2026-10-21T1800-{content_digest(data)}.png"
-    assert content_type == "image/png" and memory_storage.cache_control[key] == IMMUTABLE_CACHE_CONTROL
-    with Image.open(io.BytesIO(data)) as png:
-        assert png.mode == "P"
-        assert "transparency" in png.info
-        assert png.size == tuple(run_layer.dimensions)
+    assert frame.path == f"surface-temp/2026-10-21T1800-{content_digest(data)}.webp"
+    assert content_type == "image/webp" and memory_storage.cache_control[key] == IMMUTABLE_CACHE_CONTROL
+    with Image.open(io.BytesIO(data)) as webp:
+        assert webp.format == "WEBP" and webp.mode == "RGBA"
+        assert webp.size == tuple(run_layer.dimensions)
+        alpha = np.asarray(webp)[..., 3]
+    # the nodata around the warped frame is see-through, the frame itself opaque
+    assert alpha.min() == 0 and alpha.max() == 255
     assert list(tmp_path.rglob("*.*")) == []  # scratch files are removed as it goes
 
 
@@ -470,7 +472,7 @@ def make_export_driver(
 
 def frame_keys(memory_storage) -> list[str]:
     """Frame keys, without their content digests."""
-    keys = (key for key in memory_storage.objects if key.startswith("forecasts/") and key.endswith(".png"))
+    keys = (key for key in memory_storage.objects if key.startswith("forecasts/") and key.endswith(".webp"))
     return sorted(re.sub(r"-[0-9a-f]{16}(?=\.)", "", key) for key in keys)
 
 
@@ -485,10 +487,10 @@ def test_run_exports_the_newest_complete_run(memory_storage, published, document
         ("surface-temp", [0, 3]), ("3-hour-precip", [3, 6]),
     ]
     assert frame_keys(memory_storage) == [
-        "forecasts/uwwrf_4km/2026/10/21/1200Z/3-hour-precip/2026-10-21T1500.png",
-        "forecasts/uwwrf_4km/2026/10/21/1200Z/3-hour-precip/2026-10-21T1800.png",
-        "forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1200.png",
-        "forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.png",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/3-hour-precip/2026-10-21T1500.webp",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/3-hour-precip/2026-10-21T1800.webp",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1200.webp",
+        "forecasts/uwwrf_4km/2026/10/21/1200Z/surface-temp/2026-10-21T1500.webp",
     ]
     store = ForecastStore(memory_storage)
     assert store.read_manifest("uwwrf_4km", INITIALIZED) == manifest

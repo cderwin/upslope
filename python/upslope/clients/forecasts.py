@@ -6,7 +6,7 @@ forecasts/index.json                                  every model's pointers and
 forecasts/<model>/latest.json                         newest complete run (RunPointer)
 forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
-forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.png   frames, by valid time and content
+forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.webp  frames, by valid time and content
 ```
 
 Browsers read these straight from the bucket (`PUBLIC_BUCKET_NAME`), so only forecasts ever go in it. Frames

@@ -23,9 +23,9 @@ def content_digest(data: bytes) -> str:
 
 def frame_name(valid: datetime, digest: str) -> str:
     """A frame's file name: its valid time in UTC (open-meteo style) and content digest, e.g.
-    `2026-10-29T0600-3f9a1c2b7d4e5f60.png`. Browsers cache frames for good, so a re-exported frame needs a
+    `2026-10-29T0600-3f9a1c2b7d4e5f60.webp`. Browsers cache frames for good, so a re-exported frame needs a
     new name."""
-    return f"{valid:%Y-%m-%dT%H%M}-{digest}.png"
+    return f"{valid:%Y-%m-%dT%H%M}-{digest}.webp"
 
 
 def values_name(valid: datetime, digest: str) -> str:
@@ -40,7 +40,8 @@ class Frame:
     Attributes:
         hour: Forecast hour.
         valid: Time the frame is valid for (UTC): the run's initialization time plus `hour`.
-        path: Image path relative to the run's folder, e.g. `surface-temp/2026-10-29T0600-3f9a1c2b7d4e5f60.png`.
+        path: Image (lossless WebP) path relative to the run's folder, e.g.
+            `surface-temp/2026-10-29T0600-3f9a1c2b7d4e5f60.webp`.
         values: Path of the frame's value image (see `ValueEncoding`), for layers with numeric data.
     """
 

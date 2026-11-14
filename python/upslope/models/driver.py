@@ -45,7 +45,7 @@ from upslope.models.manifest import (
     values_name,
 )
 from upslope.models.source import ForecastSource, NotPublished, RenderedFrame, SourceUnavailable
-from upslope.raster import convert_to_png, encode_values_png, image_coordinates, read_footprint
+from upslope.raster import convert_to_webp, encode_values_png, image_coordinates, read_footprint
 
 logger = get_logger(__name__)
 
@@ -513,7 +513,7 @@ class ForecastDriver:
                 self._upload_frame, model, layer, run_layer, initialized, hour, tiff, rendered
             )
         finally:
-            for path in (tiff, tiff.with_suffix(".png"), tiff.with_suffix(".values.png")):
+            for path in (tiff, tiff.with_suffix(".webp"), tiff.with_suffix(".values.png")):
                 path.unlink(missing_ok=True)
         if run_layer.dimensions is None:
             run_layer.dimensions, run_layer.coordinates = size, coordinates
@@ -536,18 +536,18 @@ class ForecastDriver:
         tiff: Path,
         rendered: RenderedFrame,
     ) -> tuple[Frame, tuple[int, int], list, list | None, ValueEncoding]:
-        """Convert a rendered GeoTIFF to the frame's PNG (and value image) and upload them (blocking)."""
-        png, values_png = tiff.with_suffix(".png"), tiff.with_suffix(".values.png")
+        """Convert a rendered GeoTIFF to the frame's WebP (and value image) and upload them (blocking)."""
+        image, values_png = tiff.with_suffix(".webp"), tiff.with_suffix(".values.png")
         with rasterio.open(tiff) as dataset:
             size = (dataset.width, dataset.height)
             if run_layer.dimensions is not None and tuple(run_layer.dimensions) != size:
                 raise ValueError(f"frame size changed at hour {hour} for layer {model.id}/{layer.id}")
             coordinates = image_coordinates(dataset)
             extent = read_footprint(dataset)
-            convert_to_png(dataset, png)
+            convert_to_webp(dataset, image)
 
         valid = valid_time(initialized, hour)
-        frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid, content_digest(png.read_bytes()))}")
+        frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid, content_digest(image.read_bytes()))}")
         encoding = run_layer.values or ValueEncoding()
         if rendered.values is not None:
             if rendered.values.shape != (size[1], size[0]):
@@ -555,5 +555,5 @@ class ForecastDriver:
             encode_values_png(rendered.values, values_png, encoding.scale, encoding.offset)
             frame.values = f"{layer.id}/{values_name(valid, content_digest(values_png.read_bytes()))}"
             self.store.upload_frame(model.id, initialized, frame.values, values_png)
-        self.store.upload_frame(model.id, initialized, frame.path, png)
+        self.store.upload_frame(model.id, initialized, frame.path, image)
         return frame, size, coordinates, extent, encoding
