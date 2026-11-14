@@ -6,8 +6,8 @@ They're run by hand, from a laptop (they aren't in the Docker image), never
 by the exporter, so they can't slow down or stall an export check.
 
 ```sh
-just py-migrate m001_webp_frames --dry-run   # what would change
-just py-migrate m001_webp_frames             # asks before writing
+just py-migrate m003_<what> --dry-run   # what would change
+just py-migrate m003_<what>             # asks before writing
 ```
 
 `just py-migrate` loads `.env.local`, so a migration works on whichever bucket
@@ -34,27 +34,15 @@ Every migration skips what it has already done, so it's safe to rerun.
 
 ## Migrations
 
-| Migration | Ships with | What it does |
+None pending. Past ones (in git history):
+
+| Migration | Shipped with | What it did |
 | --- | --- | --- |
-| `m001_webp_frames` | Lossless WebP frames | Converts every PNG frame to a lossless WebP with the same pixels |
-| `m002_int16_values` | int16 values on the model's grid | `strip` removes the old PNG value images; `backfill` recomputes values from dynamical.org |
+| `m001_webp_frames` | Lossless WebP frames | Converted every PNG frame to a lossless WebP with the same pixels |
+| `m002_int16_values` | int16 values on the model's grid | Replaced the PNG value images with int16 GeoTIFFs, recomputed from dynamical.org |
 
-### Running m002
-
-The new exporter can't read a manifest that still lists old PNG value images,
-so the runs it follows are converted while it's stopped:
-
-1. Stop the exporter: `fly scale count exporter=0`.
-2. Merge the PR (this deploys the server and webapp); check the exporter stays at zero machines.
-3. `just py-migrate m002_int16_values strip --include-followed` (minutes, no
-   upstream reads). The webapp then never sees the old format; runs show no
-   values until they're backfilled.
-4. `just py-migrate m002_int16_values backfill --include-followed --followed-only`:
-   values for the runs the exporter will carry on with, from dynamical.org.
-5. Start the exporter: `fly scale count exporter=1`.
-6. `just py-migrate m002_int16_values backfill` for the older runs, with the
-   exporter running (hours; stop and rerun at will). Frames dynamical.org no
-   longer serves are reported and keep showing, without values.
-
-Delete a migration once it has run against production; `common.py` stays for
-the next one.
+A new migration is a module here (`m003_<what>.py`) with a click command,
+built on `common.py`: `kept_runs` lists the runs, `migrate_runs` applies a step
+to each (skipping followed runs unless `--include-followed`), and
+`rewrite_manifest` writes a migrated manifest only if it's unchanged. Add its
+tests to `tests/`, and delete it once it has run against production.
