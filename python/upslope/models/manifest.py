@@ -29,8 +29,13 @@ def frame_name(valid: datetime, digest: str) -> str:
 
 
 def values_name(valid: datetime, digest: str) -> str:
-    """A frame's value image name, beside its image: e.g. `2026-10-29T0600-9b0e4d7a1c2f3e45.values.png`."""
-    return f"{valid:%Y-%m-%dT%H%M}-{digest}.values.png"
+    """A frame's value file name, beside its image: e.g. `2026-10-29T0600-9b0e4d7a1c2f3e45.values.tif`."""
+    return f"{valid:%Y-%m-%dT%H%M}-{digest}.values.tif"
+
+
+def lookup_name(digest: str) -> str:
+    """A layer's lookup file name, beside its frames: e.g. `lookup-9b0e4d7a1c2f3e45.tif`."""
+    return f"lookup-{digest}.tif"
 
 
 @define
@@ -42,7 +47,7 @@ class Frame:
         valid: Time the frame is valid for (UTC): the run's initialization time plus `hour`.
         path: Image (lossless WebP) path relative to the run's folder, e.g.
             `surface-temp/2026-10-29T0600-3f9a1c2b7d4e5f60.webp`.
-        values: Path of the frame's value image (see `ValueEncoding`), for layers with numeric data.
+        values: Path of the frame's value file (see `ValueEncoding`), for layers with numeric data.
     """
 
     hour: int
@@ -81,18 +86,27 @@ class Legend:
 
 @define
 class ValueEncoding:
-    """How a frame's value image stores numbers: a lossless RGB PNG on the same pixel grid as the frame.
+    """How a layer's value files store numbers, and how to find the value under a display pixel.
 
-    A pixel's integer `n = R * 65536 + G * 256 + B` is no data when 0, and otherwise the value
-    `(n - 1) * scale + offset`, in the legend's units.
+    Each frame's value file is a single-band int16 GeoTIFF (deflate, tiled) on the model's native grid. A
+    code `n` is no data when -32768, and otherwise the value `n * scale + offset`, in the legend's units.
+
+    The layer's lookup file is a two-band float32 GeoTIFF: sample `(i, j)` holds the value grid's column and
+    row (continuous, corner-based) at display pixel position `(i * lookup_step, j * lookup_step)`, NaN where
+    there's none. Interpolating between samples, then between the grid cells around the result, gives the
+    value under any display pixel.
 
     Attributes:
-        scale: Value of one step.
-        offset: Value of `n = 1`.
+        scale: Value of one code (the variable's quantization step).
+        offset: Value of code 0.
+        lookup: Path of the layer's lookup file, relative to the run's folder.
+        lookup_step: Display pixels between lookup samples.
     """
 
-    scale: float = 0.01
-    offset: float = -100_000.0
+    scale: float
+    offset: float
+    lookup: str
+    lookup_step: int
 
 
 @define
@@ -110,7 +124,7 @@ class RunLayer:
             bottom-right, bottom-left), once a frame exists.
         frames: Exported frames, in hour order.
         legend: How to read the frames' colors; None for images that carry their own legend (UW WRF).
-        values: Encoding of the frames' value images, if they have them.
+        values: Encoding of the frames' value files, if they have them.
         extent: Outline of the frames' data, (lon, lat) pairs clockwise from the top-left corner: the source
             grid's edges in its native projection, without the nodata around a warped frame. None for layers
             exported before it was recorded.

@@ -97,11 +97,15 @@ the run time (UTC) alongside.
 
 Layers with a `legend` in their manifest (colors chosen by the export, not an
 upstream image) show it bottom left (top left on phones), with the model's
-`attribution`. Layers with value images (`values`; see `python/README.md`) show
+`attribution`. Layers with value files (`values`; see `python/README.md`) show
 the value under the cursor in a tooltip, or under a tap on touch screens
-(`src/forecast/frameValues.ts`): the current frame's value image is fetched the
-first time the cursor is over it, decoded on a canvas with no color management,
-and the recent 64 are kept for playback. **Annotate this frame** appears only
+(`src/forecast/frameValues.ts`). geotiff.js decodes the value files; it loads in
+the background once the page has loaded and the browser is idle
+(`src/forecast/valueDecoder.ts`), so it doesn't slow the page but is ready for
+the first hover. A layer's lookup file is fetched as the layer is shown, and the
+current frame's value file the first time the cursor is over it; the recent 64
+are kept for playback. The value is interpolated between the model's grid cells
+around the cursor, as the image's colors are. **Annotate this frame** appears only
 for layers with an annotation maptype (UW WRF).
 
 ## Annotation page

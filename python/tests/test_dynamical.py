@@ -1,7 +1,9 @@
 """dynamical.org source: config, grids, derived fields, publishing and rendering, against small in-memory datasets."""
 
 import asyncio
+import hashlib
 import io
+import json
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -13,6 +15,7 @@ import numpy as np
 import pytest
 import rasterio
 import xarray as xr
+from attrs import evolve
 from PIL import Image
 from pyproj import CRS, Transformer
 
@@ -25,6 +28,8 @@ from upslope.models.config import (
     HourRange,
     ModelConfig,
     ModelsConfig,
+    ValueQuantization,
+    VariableConfig,
 )
 from upslope.models.driver import ForecastDriver
 from upslope.models.manifest import RunManifest
@@ -32,7 +37,7 @@ from upslope.models.dynamical.catalog import anonymous_credentials, store_url
 from upslope.models.dynamical.scales import NODATA_INDEX, SCALES, convert
 from upslope.models.dynamical.source import DynamicalSource, grid_window
 from upslope.models.source import NotPublished
-from upslope.raster import OUTPUT_CRS
+from upslope.raster import OUTPUT_CRS, decode_lookup, decode_values
 
 RUN = datetime(2026, 11, 8, 0, tzinfo=UTC)
 PREVIOUS = RUN - timedelta(hours=6)
@@ -105,8 +110,18 @@ def lambert_dataset() -> xr.Dataset:
     )
 
 
+# how test layers store their values, by scale
+QUANTIZATION = {
+    "temperature_f": ValueQuantization(0.1, -80, 140), "precip_in": ValueQuantization(0.001, 0, 20),
+    "wind_mph": ValueQuantization(0.1, 0, 250), "height_ft": ValueQuantization(1, 0, 30000),
+    "snow_in": ValueQuantization(0.01, 0, 600),
+}
+
+
 def layer(layer_id: str, field: FieldConfig, scale: str, first: int = 0, last: int = 6, step: int = 3) -> DynamicalLayerConfig:
-    return DynamicalLayerConfig(layer_id, layer_id.title(), field, scale, HourRange(first=first, last=last, step=step))
+    return DynamicalLayerConfig(
+        layer_id, layer_id.title(), field, scale, HourRange(first=first, last=last, step=step), values=QUANTIZATION.get(scale)
+    )
 
 
 TEMPERATURE = layer("surface-temp", FieldConfig(("temperature_2m",)), "temperature_f")
@@ -135,8 +150,8 @@ def test_config_loads_dynamical_models(tmp_path: Path) -> None:
     path.write_text(
         "default_model: gfs_0.25\n"
         "variables:\n"
-        "  - {id: surface-temp, name: T}\n"
-        "  - {id: 3-hour-precip, name: P}\n"
+        "  - {id: surface-temp, name: T, values: {step: 0.1, min: -80, max: 140}}\n"
+        "  - {id: 3-hour-precip, name: P, values: {step: 0.001, min: 0, max: 20}}\n"
         "models:\n"
         "  - id: gfs_0.25\n"
         "    name: GFS\n"
@@ -156,6 +171,9 @@ def test_config_loads_dynamical_models(tmp_path: Path) -> None:
     assert model.layers[1].field == FieldConfig(("total_precipitation_run_total_surface",), "change", 3)
     assert model.layers[0].maptype is None
     assert ModelsConfig([model]).maptypes == set()
+    # each layer stores values as its variable says
+    assert model.layers[0].values == ValueQuantization(0.1, -80, 140)
+    assert model.layers[1].values == ValueQuantization(0.001, 0, 20)
 
 
 @pytest.mark.parametrize(
@@ -186,8 +204,44 @@ def test_layer_fingerprint_covers_dataset_region_and_scale() -> None:
     assert make_model(region=(-127.0, 44.0, -116.0, 49.0)).layer_fingerprint(TEMPERATURE) != fingerprint
     assert base.layer_fingerprint(layer("surface-temp", TEMPERATURE.field, "wind_mph")) != fingerprint
     # display names don't change frames
-    renamed = DynamicalLayerConfig("surface-temp", "Temperature", TEMPERATURE.field, TEMPERATURE.scale, TEMPERATURE.hours)
+    renamed = DynamicalLayerConfig("surface-temp", "Temperature", TEMPERATURE.field, TEMPERATURE.scale, TEMPERATURE.hours, TEMPERATURE.values)
     assert base.layer_fingerprint(renamed) == fingerprint
+    # how values are stored does, and a layer without values has the fingerprint layers had before values were stored
+    assert base.layer_fingerprint(evolve(TEMPERATURE, values=ValueQuantization(0.2, -80, 140))) != fingerprint
+    without = evolve(TEMPERATURE, values=None).fingerprint()
+    assert without != TEMPERATURE.fingerprint()
+    payload = {"field": [["temperature_2m"], "value", None], "scale": SCALES["temperature_f"].fingerprint_payload(), "hours": [0, 3, 6]}
+    assert without == hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
+
+
+@pytest.mark.parametrize(
+    ("variables", "error"),
+    [
+        ("  - {id: surface-temp, name: T}\n", "needs `values`"),
+        ("  - {id: surface-temp, name: T, values: {step: 0.001, min: -80, max: 140}}\n", "int16 codes"),
+        ("  - {id: surface-temp, name: T, values: {step: 0.1, min: 10, max: 10}}\n", "min < max"),
+    ],
+)
+def test_invalid_value_quantization_raises(tmp_path: Path, variables: str, error: str) -> None:
+    path = tmp_path / "models.yaml"
+    path.write_text(
+        "default_model: gfs_0.25\nvariables:\n" + variables + "models:\n"
+        "  - {id: gfs_0.25, name: GFS, source: {kind: dynamical, dataset: d}, region: [-127, 41.5, -113, 50],"
+        " start_times: [0], layers: [{id: surface-temp, field: temperature_2m, scale: temperature_f, hours: {last: 6}}]}\n"
+    )
+    with pytest.raises(ConfigError, match=error):
+        ModelsConfig.load(path)
+
+
+def test_a_variables_layers_must_share_units() -> None:
+    """A step only means one thing if every dynamical.org layer of the variable shows the same units."""
+    values = ValueQuantization(0.1, 0, 250)
+    variable = VariableConfig("surface-temp", "Surface-Temp", values=values)
+    fahrenheit = make_model(evolve(TEMPERATURE, values=values))
+    mph = make_model(evolve(TEMPERATURE, scale="wind_mph", values=values), dataset="other")
+    mph = evolve(mph, id="other")
+    with pytest.raises(ConfigError, match="different units"):
+        ModelsConfig([fahrenheit, mph], [variable])
 
 
 # --- grids
@@ -426,8 +480,13 @@ def test_render_frame_writes_a_paletted_web_mercator_frame_and_its_values(tmp_pa
         assert dataset.width >= 600  # upsampled from the coarse grid
         indices = dataset.read(1)
         assert dataset.colormap(1)[int(indices[indices != NODATA_INDEX][0])][:3] == (253, 174, 97)  # 80-90 °F
-        assert frame.values.shape == (dataset.height, dataset.width)
-    np.testing.assert_allclose(frame.values[np.isfinite(frame.values)], 86.0, rtol=1e-5)
+        # the values stay on the model's grid: far fewer cells than the upsampled image has pixels
+        assert frame.values.size * 50 < dataset.width * dataset.height
+    with checking(source):
+        window = grid_window(source._dataset(model), model.region)
+    assert frame.values.shape == (window.rows.stop - window.rows.start, window.cols.stop - window.cols.start)
+    assert (frame.crs, frame.transform) == (window.crs, window.transform)
+    np.testing.assert_allclose(frame.values, 86.0, rtol=1e-5)
     assert frame.legend == SCALES["temperature_f"].legend()
 
 
@@ -438,11 +497,15 @@ def test_render_frame_on_a_projected_grid(tmp_path: Path) -> None:
     with checking(source):
         frame = source.render(model, model.layers[0], RUN, 0, out)
     # the grid is rotated against Web Mercator, so the image's corners are empty, but the region is covered
+    to_mercator = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
+    to_grid = Transformer.from_crs("EPSG:4326", frame.crs, always_xy=True)
     with rasterio.open(out) as dataset:
-        to_mercator = Transformer.from_crs("EPSG:4326", OUTPUT_CRS, always_xy=True)
         for lon, lat in [(REGION[0], REGION[1]), (REGION[2], REGION[3]), (-121.0, 46.5)]:
             row, col = dataset.index(*to_mercator.transform(lon, lat))
-            assert frame.values[row, col] == pytest.approx(41.0)
+            assert dataset.read(1)[row, col] != NODATA_INDEX
+            # and the values cover it on the Lambert grid they came from
+            grid_col, grid_row = ~frame.transform @ to_grid.transform(lon, lat)
+            assert frame.values[int(grid_row), int(grid_col)] == pytest.approx(41.0)
     np.testing.assert_allclose(frame.values[np.isfinite(frame.values)], 41.0, rtol=1e-5)
 
 
@@ -460,10 +523,16 @@ def test_driver_exports_a_dynamical_model(memory_storage) -> None:
     assert temperature.maptype is None and temperature.legend.units == "°F" and temperature.values is not None
     assert store.read_latest("gfs_test").initialized == PREVIOUS
 
-    data, content_type = memory_storage.objects[f"forecasts/gfs_test/2026/11/08/0000Z/{temperature.frames[1].values}"]
-    assert content_type == "image/png"
-    with Image.open(io.BytesIO(data)) as image:
-        assert image.mode == "RGB" and image.size == tuple(temperature.dimensions)
+    prefix = "forecasts/gfs_test/2026/11/08/0000Z"
+    data, content_type = memory_storage.objects[f"{prefix}/{temperature.frames[1].values}"]
+    assert content_type == "image/tiff"
+    values, crs, transform = decode_values(data)
+    np.testing.assert_allclose(values, 86.0)  # 30 °C, to a tenth of a degree
+    assert (temperature.values.scale, temperature.values.offset) == (0.1, 30.0)
+    # the lookup maps the middle of the image into the values' grid
+    lookup = decode_lookup(memory_storage.objects[f"{prefix}/{temperature.values.lookup}"][0])
+    col, row = lookup[:, lookup.shape[1] // 2, lookup.shape[2] // 2]
+    assert 0 < col < values.shape[1] and 0 < row < values.shape[0]
 
 
 # --- catalog

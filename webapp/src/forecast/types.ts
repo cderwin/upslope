@@ -77,7 +77,7 @@ export interface RunFrame {
   valid: string
   /** Relative to the run's folder. */
   path: string
-  /** The frame's value image, relative to the run's folder (see `ValueEncoding`); absent or null without one. */
+  /** The frame's value file, relative to the run's folder (see `ValueEncoding`); absent or null without one. */
   values?: string | null
 }
 
@@ -99,12 +99,16 @@ export interface Legend {
 }
 
 /**
- * How a value image stores numbers (python `ValueEncoding`): an RGB PNG on the frame's pixel grid where
- * `n = R * 65536 + G * 256 + B` is no data when 0, else the value `(n - 1) * scale + offset`.
+ * How a layer's value files store numbers (python `ValueEncoding`): int16 GeoTIFFs on the model's grid, where
+ * code `n` is no data when -32768, else the value `n * scale + offset`. The layer's lookup file maps display
+ * pixels to positions on that grid, sampled every `lookup_step` pixels.
  */
 export interface ValueEncoding {
   scale: number
   offset: number
+  /** The lookup file's path, relative to the run's folder. */
+  lookup: string
+  lookup_step: number
 }
 
 /** python `RunLayer`. */
@@ -145,7 +149,7 @@ export interface ForecastFrame {
   hour: number
   /** Absolute or root-relative URL of the image. */
   url: string
-  /** URL of the frame's value image, if the layer has numbers to show under the cursor. */
+  /** URL of the frame's value file, if the layer has numbers to show under the cursor. */
   valuesUrl: string | null
 }
 
@@ -176,7 +180,9 @@ export interface ForecastLayer {
   /** Annotation maptype (UW WRF only). */
   maptype: string | null
   legend: Legend | null
-  /** Encoding of the frames' value images, if they have them. */
+  /** Encoding of the frames' value files, if they have them. */
   values: ValueEncoding | null
+  /** URL of the layer's lookup file (see `ValueEncoding`), if its frames have values. */
+  lookupUrl: string | null
   attribution: string | null
 }
