@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Protocol
 
 import numpy as np
+from affine import Affine
 from attrs import define
 
 from upslope.models.config import AnyLayerConfig, ModelConfig
@@ -33,13 +34,22 @@ class RenderedFrame:
     """What a source knows about a frame besides its image.
 
     Attributes:
-        values: The frame's numbers in its legend's units, shaped (rows, cols) on the image's pixel grid,
-            NaN where there's no data. Exported as a value image so the map can show a value under the cursor.
+        values: The frame's numbers in its legend's units, shaped (rows, cols) on the grid they came from (the
+            model's native grid, north up), NaN where there's no data. Exported as a value file so the map can
+            show the value under the cursor.
+        crs: CRS of the values' grid.
+        transform: Corner-based (col, row) -> `crs` coordinates of the values' grid.
         legend: How to read the image's colors, if the source chose them.
     """
 
     values: np.ndarray | None = None
+    crs: str | None = None
+    transform: Affine | None = None
     legend: Legend | None = None
+
+    def __attrs_post_init__(self) -> None:
+        if self.values is not None and (self.crs is None or self.transform is None):
+            raise ValueError("a frame's values need the CRS and transform of their grid")
 
 
 class ForecastSource(Protocol):

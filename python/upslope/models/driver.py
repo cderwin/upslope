@@ -28,7 +28,7 @@ from attrs import define, evolve, field
 
 from upslope.clients.forecasts import ForecastStore
 from upslope.logging import get_logger, log_context, log_duration
-from upslope.models.config import AnyLayerConfig, ModelConfig, ModelsConfig
+from upslope.models.config import AnyLayerConfig, DynamicalLayerConfig, ModelConfig, ModelsConfig
 from upslope.models.manifest import (
     ForecastIndex,
     Frame,
@@ -41,11 +41,12 @@ from upslope.models.manifest import (
     ValueEncoding,
     content_digest,
     frame_name,
+    lookup_name,
     valid_time,
     values_name,
 )
 from upslope.models.source import ForecastSource, NotPublished, RenderedFrame, SourceUnavailable
-from upslope.raster import convert_to_webp, encode_values_png, image_coordinates, read_footprint
+from upslope.raster import LOOKUP_STEP, convert_to_webp, encode_lookup, encode_values, image_coordinates, read_footprint
 
 logger = get_logger(__name__)
 
@@ -490,7 +491,7 @@ class ForecastDriver:
         hour: int,
         work: Path,
     ) -> Frame:
-        """Render one forecast hour, upload it as a PNG (and its value image, if any) and add it to `run_layer`.
+        """Render one forecast hour, upload it as a WebP (and its value file, if any) and add it to `run_layer`.
 
         Args:
             model: Model the layer belongs to.
@@ -513,7 +514,7 @@ class ForecastDriver:
                 self._upload_frame, model, layer, run_layer, initialized, hour, tiff, rendered
             )
         finally:
-            for path in (tiff, tiff.with_suffix(".webp"), tiff.with_suffix(".values.png")):
+            for path in (tiff, tiff.with_suffix(".webp")):
                 path.unlink(missing_ok=True)
         if run_layer.dimensions is None:
             run_layer.dimensions, run_layer.coordinates = size, coordinates
@@ -535,25 +536,38 @@ class ForecastDriver:
         hour: int,
         tiff: Path,
         rendered: RenderedFrame,
-    ) -> tuple[Frame, tuple[int, int], list, list | None, ValueEncoding]:
-        """Convert a rendered GeoTIFF to the frame's WebP (and value image) and upload them (blocking)."""
-        image, values_png = tiff.with_suffix(".webp"), tiff.with_suffix(".values.png")
+    ) -> tuple[Frame, tuple[int, int], list, list | None, ValueEncoding | None]:
+        """Convert a rendered GeoTIFF to the frame's WebP, store its values (if any), and upload them (blocking).
+
+        A layer's first frame with values also uploads the layer's lookup file (see `ValueEncoding`); later ones
+        reuse it, since every frame of a layer has the same image and value grids.
+        """
+        image = tiff.with_suffix(".webp")
         with rasterio.open(tiff) as dataset:
             size = (dataset.width, dataset.height)
             if run_layer.dimensions is not None and tuple(run_layer.dimensions) != size:
                 raise ValueError(f"frame size changed at hour {hour} for layer {model.id}/{layer.id}")
             coordinates = image_coordinates(dataset)
             extent = read_footprint(dataset)
+            display_transform = dataset.transform
             convert_to_webp(dataset, image)
 
         valid = valid_time(initialized, hour)
         frame = Frame(hour, valid, f"{layer.id}/{frame_name(valid, content_digest(image.read_bytes()))}")
-        encoding = run_layer.values or ValueEncoding()
-        if rendered.values is not None:
-            if rendered.values.shape != (size[1], size[0]):
-                raise ValueError(f"values of {model.id}/{layer.id} hour {hour} don't match the image's grid")
-            encode_values_png(rendered.values, values_png, encoding.scale, encoding.offset)
-            frame.values = f"{layer.id}/{values_name(valid, content_digest(values_png.read_bytes()))}"
-            self.store.upload_frame(model.id, initialized, frame.values, values_png)
+        encoding = run_layer.values
+        quantization = layer.values if isinstance(layer, DynamicalLayerConfig) else None
+        if rendered.values is not None and quantization is not None:
+            if rendered.values.ndim != 2:
+                raise ValueError(f"values of {model.id}/{layer.id} hour {hour} aren't a 2-D grid")
+            if encoding is None:
+                lookup = encode_lookup(display_transform, size, rendered.crs, rendered.transform)
+                encoding = ValueEncoding(
+                    quantization.step, quantization.offset, f"{layer.id}/{lookup_name(content_digest(lookup))}", LOOKUP_STEP
+                )
+                self.store.upload_bytes(model.id, initialized, encoding.lookup, lookup, "image/tiff")
+            units = rendered.legend.units if rendered.legend is not None else ""
+            data = encode_values(rendered.values, encoding.scale, encoding.offset, rendered.crs, rendered.transform, units)
+            frame.values = f"{layer.id}/{values_name(valid, content_digest(data))}"
+            self.store.upload_bytes(model.id, initialized, frame.values, data, "image/tiff")
         self.store.upload_frame(model.id, initialized, frame.path, image)
         return frame, size, coordinates, extent, encoding

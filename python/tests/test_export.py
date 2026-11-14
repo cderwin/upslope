@@ -25,15 +25,15 @@ from upslope.clients.forecasts import IMMUTABLE_CACHE_CONTROL, INDEX, ForecastSt
 from upslope.cli.main import main
 from upslope.models.config import (
     ConfigError, DynamicalLayerConfig, DynamicalSourceConfig, FieldConfig, HourRange, LayerConfig, ModelConfig, ModelsConfig,
-    VariableConfig,
+    ValueQuantization, VariableConfig,
 )
 from upslope.models.driver import CheckReport, ForecastDriver
-from upslope.models.manifest import ForecastIndex, Legend, content_digest, LegendStop, ModelIndex, RunManifest, RunPointer, ValueEncoding
+from upslope.models.manifest import ForecastIndex, Legend, content_digest, LegendStop, ModelIndex, RunManifest, RunPointer
 from upslope.models.source import NotPublished, RenderedFrame, SourceUnavailable
 from upslope.models.uw_wrf.image_client import ImageClient, Throttle
 from upslope.models.uw_wrf.source import UwWrfSource
 from upslope.models.uw_wrf.georegistration import Registration, fit_report
-from upslope.raster import OUTPUT_CRS, decode_values_png, write_geotiff
+from upslope.raster import LOOKUP_STEP, OUTPUT_CRS, decode_lookup, decode_values, write_geotiff
 from upslope.models.uw_wrf.georegistration_document import AnnotationDocument
 
 SAMPLE_GIF = snapshot_image_path(DEV_GEOREGISTRATION, "washington", "legacy-hour06")
@@ -775,9 +775,10 @@ class FakeSource:
         write_geotiff(out, data, transform, nodata=255, colormap={0: (0, 0, 0, 255), 1: (255, 0, 0, 255)})
         if self.legend is None:
             return RenderedFrame()
-        values = np.full((4, 4), hour + 0.25)
+        # values come on a grid of their own: 3 x 2 cells of 0.01 degrees around the image
+        values = np.full((2, 3), hour + 0.5)
         values[0, 0] = np.nan
-        return RenderedFrame(values=values, legend=self.legend)
+        return RenderedFrame(values=values, crs="EPSG:4326", transform=VALUES_TRANSFORM, legend=self.legend)
 
 
 def make_fake_driver(memory_storage, source: FakeSource, now: datetime = NOW) -> ForecastDriver:
@@ -801,26 +802,50 @@ def test_driver_exports_from_any_source(memory_storage) -> None:
     assert source.rendered == []
 
 
-def test_frames_with_values_get_a_value_image(memory_storage, tmp_path: Path) -> None:
-    """A source's numbers are exported beside each frame, with the legend and the model's attribution."""
+VALUES_TRANSFORM = Affine(0.01, 0.0, -122.17, 0.0, -0.01, 47.33)
+VALUES_LAYER = DynamicalLayerConfig(
+    "surface-temp", "Surface temperature", FieldConfig(("temperature_2m",)), "temperature_f", HourRange(last=3),
+    values=ValueQuantization(0.1, -80, 140),
+)
+
+
+def test_frames_with_values_get_a_value_file_and_the_layer_a_lookup(memory_storage) -> None:
+    """A source's numbers are exported beside each frame on their own grid, with the legend and the model's attribution."""
     legend = Legend("°F", [LegendStop(0, "#0000ff"), LegendStop(32, "#ffffff")], decimals=1)
-    model = evolve(EXPORT_MODEL, attribution="Data: somebody (CC BY 4.0)")
-    driver = ForecastDriver(
-        ModelsConfig([model]), {"uw_wrf": FakeSource({INITIALIZED: 999}, legend=legend)}, ForecastStore(memory_storage), now=lambda: NOW
+    model = ModelConfig(
+        "gfs_test", "GFS test", [0, 12], [VALUES_LAYER], source=DynamicalSourceConfig("test-dataset"),
+        region=(-122.2, 47.2, -122.1, 47.4), attribution="Data: somebody (CC BY 4.0)",
     )
+    source = FakeSource({INITIALIZED: 999}, legend=legend)
+    driver = ForecastDriver(ModelsConfig([model]), {"dynamical": source}, ForecastStore(memory_storage), now=lambda: NOW)
     (manifest,) = export(driver)
     assert manifest.attribution == "Data: somebody (CC BY 4.0)"
     layer = manifest.layer("surface-temp")
-    assert (layer.legend, layer.values) == (legend, ValueEncoding())
+    assert layer.legend == legend
+    assert (layer.values.scale, layer.values.offset, layer.values.lookup_step) == (0.1, 30.0, LOOKUP_STEP)
+    assert re.fullmatch(r"surface-temp/lookup-[0-9a-f]{16}\.tif", layer.values.lookup)
     frame = layer.frames[1]
-    assert re.fullmatch(r"surface-temp/2026-10-21T1500-[0-9a-f]{16}\.values\.png", frame.values)
+    assert re.fullmatch(r"surface-temp/2026-10-21T1500-[0-9a-f]{16}\.values\.tif", frame.values)
 
-    data, content_type = memory_storage.objects[f"forecasts/uwwrf_4km/2026/10/21/1200Z/{frame.values}"]
-    assert content_type == "image/png"
-    (tmp_path / "values.png").write_bytes(data)
-    values = decode_values_png(tmp_path / "values.png", layer.values.scale, layer.values.offset)
-    assert values.shape == (4, 4) and np.isnan(values[0, 0])
-    assert values[1, 1] == pytest.approx(3.25)
+    prefix = "forecasts/gfs_test/2026/10/21/1200Z"
+    data, content_type = memory_storage.objects[f"{prefix}/{frame.values}"]
+    assert (content_type, memory_storage.cache_control[f"{prefix}/{frame.values}"]) == ("image/tiff", IMMUTABLE_CACHE_CONTROL)
+    values, crs, transform = decode_values(data)
+    assert values.shape == (2, 3) and np.isnan(values[0, 0]) and transform == VALUES_TRANSFORM
+    assert values[1, 1] == pytest.approx(3.5)
+    # one lookup for the layer, shared by its frames: a sample per 8 image pixels, plus the far edges
+    lookup, _ = memory_storage.objects[f"{prefix}/{layer.values.lookup}"]
+    assert decode_lookup(lookup).shape == (2, 2, 2)
+    assert len([key for key in memory_storage.objects if "/lookup-" in key]) == 1
+
+
+def test_layers_without_quantization_export_no_values(memory_storage) -> None:
+    """UW WRF layers (and dynamical ones without `values`) have images only."""
+    legend = Legend("°F", [LegendStop(0, "#0000ff")])
+    driver = make_fake_driver(memory_storage, FakeSource({INITIALIZED: 999}, legend=legend))
+    (manifest,) = export(driver)
+    assert all(layer.values is None and all(f.values is None for f in layer.frames) for layer in manifest.layers)
+    assert not [key for key in memory_storage.objects if key.endswith(".tif")]
 
 
 def test_frame_budget_spreads_a_backlog_over_checks(memory_storage) -> None:

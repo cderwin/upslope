@@ -207,17 +207,26 @@ class DynamicalSource:
 
     def render(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int, out: Path) -> RenderedFrame:
         """Render a frame (blocking); see `ForecastSource.render_frame`."""
-        layer = self._dynamical(layer)
-        scale = SCALES[layer.scale]
-        values = self.field_values(model, layer, initialized, hour)
-        window = self._window(model)
+        frame = self.frame_values(model, layer, initialized, hour)
+        scale = SCALES[self._dynamical(layer).scale]
+        values = frame.values
         warped, transform = warp_to_web_mercator(
-            values[np.newaxis], window.crs, window.transform, nodata=np.nan, resampling=Resampling.bilinear,
+            values[np.newaxis], frame.crs, frame.transform, nodata=np.nan, resampling=Resampling.bilinear,
             min_width=MIN_FRAME_WIDTH,
         )
-        extent = footprint(window.crs, window.transform, values.shape[1], values.shape[0])
+        extent = footprint(frame.crs, frame.transform, values.shape[1], values.shape[0])
         write_geotiff(out, scale.colorize(warped[0])[np.newaxis], transform, NODATA_INDEX, scale.colormap(), extent=extent)
-        return RenderedFrame(values=warped[0], legend=scale.legend())
+        return frame
+
+    def frame_values(self, model: ModelConfig, layer: AnyLayerConfig, initialized: datetime, hour: int) -> RenderedFrame:
+        """A frame's values on the model's grid, with that grid and the legend, without rendering its image (blocking).
+
+        The numbers stay on the model's grid: a fraction of the warped image's pixels, and the model's own values.
+        """
+        layer = self._dynamical(layer)
+        values = self.field_values(model, layer, initialized, hour)
+        window = self._window(model)
+        return RenderedFrame(values=values, crs=window.crs, transform=window.transform, legend=SCALES[layer.scale].legend())
 
     # --- fields
 
