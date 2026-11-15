@@ -87,6 +87,7 @@ export function runLayers(base: string, manifest: RunManifest, run: RunRef, mode
       maptype: layer.maptype,
       legend: layer.legend ?? null,
       values: layer.values ?? null,
+      lookupUrl: layer.values?.lookup ? dataUrl(base, `${manifest.model}/${run.path}/${layer.values.lookup}`) : null,
       attribution: manifest.attribution ?? null,
     })
   }

@@ -84,6 +84,19 @@ components, `change` (a run total's growth over `hours`, e.g. precipitation),
 `freezing_level` (missing, zero or negative heights, at or below sea level, as
 0). Values are converted from the variable's `units` to the scale's.
 
+Every variable a dynamical.org layer shows needs `values` in the `variables`
+list, which sets how its numbers are stored for the map's value readout:
+
+```yaml
+variables:
+  - {id: surface-temp, name: Surface temperature, group: Temperature, values: {step: 0.1, min: -80, max: 140}}
+```
+
+They're stored as int16 steps of `step`, in the display units of the layers'
+scale (°F here), with values outside `min`..`max` clamped; `(max - min) / step`
+must be at most 65534, and every dynamical.org layer of the variable must use
+scales with the same units. Changing it re-exports the variable's layers.
+
 Each check looks the dataset's Icechunk repository up in the STAC catalog
 (`https://stac.dynamical.org/<id>/collection.json`; store URLs are versioned, so
 they're never hard-coded) and opens it once, as one snapshot. Virtual datasets
@@ -91,8 +104,8 @@ point at the upstream GRIB files in NOAA's and ECMWF's open-data buckets, which
 are read anonymously and decoded with `gribberish`. A frame is the region's
 window of the native grid (lat/lon or projected) at one forecast hour, plus a
 two-cell margin, warped to Web Mercator (bilinear, upsampled to about 600 px
-across for coarse grids) and colored with the scale; its values are exported as
-the frame's value image. An hour counts as published once `temperature_2m` has
+across for coarse grids) and colored with the scale; its values are exported,
+on the native grid, as the frame's value file (below). An hour counts as published once `temperature_2m` has
 data over the region (unwritten chunks read as NaN), so frames of a run appear as
 the model publishes them.
 
@@ -298,7 +311,7 @@ exporter read.
 | `forecasts/<model>/latest.json` | The newest complete run: `{model, initialized, path, updated_at}` |
 | `forecasts/<model>/in-progress.json` | The newest run that has started, and each layer's progress (below) |
 | `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json` | The run's layers and frames (below) |
-| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.webp` | Frames (lossless WebP), named by valid time (UTC) and content (and `...-<digest>.values.png` value images) |
+| `forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.webp` | Frames (lossless WebP), named by valid time (UTC) and content (and `...-<digest>.values.tif` value files, and each layer's `lookup-<digest>.tif`) |
 
 Frames are named by the first 16 hex digits of their content's SHA-256, so a
 re-exported frame gets a new name and a cached one is never stale. They're
@@ -410,11 +423,18 @@ own legend, like UW's) also have:
 
 - `legend`: `{"units": "°F", "stops": [{"value": 32, "color": "#ffffff"}, ...], "decimals": 0}`;
   each color applies from its value up to the next stop's.
-- `values`: `{"scale": 0.01, "offset": -100000}`, and each frame's `values`
-  names a value image beside it (`surface-temp/2026-10-29T0600.values.png`): a
-  lossless RGB PNG on the frame's pixel grid where `n = R*65536 + G*256 + B` is
-  no data when 0, else the value `(n - 1) * scale + offset` in the legend's
-  units. The map reads it to show the value under the cursor.
+- `values`: `{"scale": 0.1, "offset": 30, "lookup": "surface-temp/lookup-<digest>.tif", "lookup_step": 8}`,
+  for layers whose variable sets `values` in the config. Each frame's `values`
+  names its value file beside it (`surface-temp/2026-10-29T0600-<digest>.values.tif`):
+  a single-band int16 GeoTIFF (deflate, 256-cell tiles) on the model's native
+  grid, where code `n` is no data when -32768, else the value
+  `n * scale + offset` in the legend's units (GDAL reads it as values: the file
+  carries the scale, offset and units). The layer's `lookup` is a two-band
+  float32 GeoTIFF mapping display pixels to that grid: sample `(i, j)` is the
+  grid column and row (continuous, corner-based) at image pixel
+  `(i * lookup_step, j * lookup_step)`. The map interpolates the lookup, then
+  the grid cells around the result, to show the value under the cursor, with
+  no projection math of its own.
 
 `attribution` is the model's `attribution` from the config (credit a license
 requires), shown on the map.

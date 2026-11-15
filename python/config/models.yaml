@@ -6,6 +6,10 @@
 # variables     What layers show, in the order the map lists them. A layer's id is a variable's id and it
 #               takes the variable's name, so layers with the same id are one choice on the map, with a
 #               model to pick among the models that have it. `group` is the heading it's listed under.
+#               `values: {step, min, max}` (required for variables dynamical.org layers show) sets how their
+#               numbers are stored for the map's value readout: int16 steps of `step`, in the display units of
+#               the layers' scale, with values outside min..max clamped. (max - min) / step must be at most
+#               65534. Changing it re-exports the variable's layers.
 # default_model The model the map opens on, and switches to when the viewer's model lacks a variable
 #               (unless the viewer has picked a default model of their own in settings).
 #
@@ -43,19 +47,19 @@
 default_model: uwwrf_4km
 
 variables:
-  - {id: surface-temp, name: Surface temperature, group: Temperature}
-  - {id: 10m-wind-speed, name: 10m wind speed, group: Wind}
-  - {id: 3-hour-precip, name: 3-hour precipitation, group: Precipitation}
-  - {id: 6-hour-precip, name: 6-hour precipitation, group: Precipitation}
-  - {id: reflectivity, name: Composite reflectivity, group: Precipitation}
-  - {id: snow, name: 3-hour snowfall, group: Snow}
+  - {id: surface-temp, name: Surface temperature, group: Temperature, values: {step: 0.1, min: -80, max: 140}}
+  - {id: 10m-wind-speed, name: 10m wind speed, group: Wind, values: {step: 0.1, min: 0, max: 250}}
+  - {id: 3-hour-precip, name: 3-hour precipitation, group: Precipitation, values: {step: 0.001, min: 0, max: 20}}
+  - {id: 6-hour-precip, name: 6-hour precipitation, group: Precipitation, values: {step: 0.001, min: 0, max: 30}}
+  - {id: reflectivity, name: Composite reflectivity, group: Precipitation, values: {step: 0.5, min: -40, max: 80}}
+  - {id: snow, name: 3-hour snowfall, group: Snow, values: {step: 0.01, min: 0, max: 100}}
   - {id: model-snow, name: 3-hour model snowfall, group: Snow}
-  - {id: accumulated-snowfall, name: Accumulated snowfall, group: Snow}
-  - {id: snow-depth, name: Snow depth, group: Snow}
-  - {id: swe, name: Snow water equivalent, group: Snow}
-  - {id: 6-hour-swe, name: Snow water equivalent (6 hour), group: Snow}
-  - {id: freezing-level, name: Freezing level, group: Freezing level}
-  - {id: cloud-cover, name: Cloud cover, group: Clouds}
+  - {id: accumulated-snowfall, name: Accumulated snowfall, group: Snow, values: {step: 0.01, min: 0, max: 600}}
+  - {id: snow-depth, name: Snow depth, group: Snow, values: {step: 0.01, min: 0, max: 600}}
+  - {id: swe, name: Snow water equivalent, group: Snow, values: {step: 0.01, min: 0, max: 300}}
+  - {id: 6-hour-swe, name: Snow water equivalent (6 hour), group: Snow, values: {step: 0.001, min: 0, max: 30}}
+  - {id: freezing-level, name: Freezing level, group: Freezing level, values: {step: 1, min: 0, max: 30000}}
+  - {id: cloud-cover, name: Cloud cover, group: Clouds, values: {step: 0.5, min: 0, max: 100}}
   - {id: integrated-cloud, name: Integrated cloud, group: Clouds}
   - {id: longwave, name: Outgoing longwave radiation, group: Clouds}
 

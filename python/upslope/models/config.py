@@ -120,6 +120,43 @@ class LayerConfig:
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
+# The int16 codes a value may take; -32768 is left for no data
+INT16_CODES = 65535
+
+
+@define(frozen=True)
+class ValueQuantization:
+    """How a variable's numbers are stored for the map's value readout: as int16 steps, in its display units.
+
+    A value `v` is stored as `round((v - offset) / step)`, with values outside `min`..`max` clamped to them.
+
+    Attributes:
+        step: Value of one step, in the display units of the variable's scale (e.g. 0.1 for °F).
+        min: Smallest value stored exactly.
+        max: Largest value stored exactly.
+    """
+
+    step: float
+    min: float
+    max: float
+
+    def __attrs_post_init__(self) -> None:
+        if self.step <= 0 or self.min >= self.max:
+            raise ConfigError(f"values need a positive step and min < max, not {self.step} over {self.min}..{self.max}")
+        if (self.max - self.min) / self.step > INT16_CODES - 1:
+            raise ConfigError(
+                f"values from {self.min} to {self.max} in steps of {self.step} take more than {INT16_CODES} int16 codes"
+            )
+
+    @property
+    def offset(self) -> float:
+        """The value of code 0: the range's middle, rounded to a whole step so stored values stay whole steps."""
+        return round((self.min + self.max) / 2 / self.step) * self.step
+
+    def fingerprint_payload(self) -> list[float]:
+        return [self.step, self.min, self.max]
+
+
 # How a dynamical.org layer's field is computed from the dataset's variables (see FieldConfig)
 Derivation = Literal["value", "wind_speed", "change", "rate_sum", "freezing_level"]
 
@@ -165,6 +202,7 @@ class DynamicalLayerConfig:
         field: The dataset variables shown, and how they're combined.
         scale: Color scale (a key of `upslope.models.dynamical.scales.SCALES`), which also sets the display units.
         hours: Forecast hours to export; each must be a lead time of the dataset.
+        values: How its numbers are stored for the value readout, taken from its variable; None exports no values.
     """
 
     id: str
@@ -172,6 +210,7 @@ class DynamicalLayerConfig:
     field: FieldConfig
     scale: str
     hours: HourRange
+    values: ValueQuantization | None = None
 
     def __attrs_post_init__(self) -> None:
         from upslope.models.dynamical.scales import SCALES
@@ -200,6 +239,8 @@ class DynamicalLayerConfig:
             "scale": SCALES[self.scale].fingerprint_payload(),
             "hours": self.hours.hours,
         }
+        if self.values is not None:  # without values, the fingerprint is what it was before values were stored
+            payload["values"] = self.values.fingerprint_payload()
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -335,11 +376,14 @@ class VariableConfig:
         id: Stable identifier: the id of every layer showing it.
         name: Display name, which its layers take.
         group: Heading it's listed under on the map, e.g. `Snow`.
+        values: How dynamical.org layers showing it store their numbers, in their scale's display units. Required
+            for variables a dynamical.org layer shows; UW WRF images have no numbers.
     """
 
     id: str
     name: str
     group: str | None = None
+    values: ValueQuantization | None = None
 
     def __attrs_post_init__(self) -> None:
         _check_id("variable", self.id)
@@ -371,13 +415,26 @@ class ModelsConfig:
         if duplicates := sorted({i for i in ids if ids.count(i) > 1}):
             raise ConfigError(f"duplicate variable ids {duplicates}")
         if self.variables:
-            names = {variable.id: variable.name for variable in self.variables}
+            from upslope.models.dynamical.scales import SCALES
+
+            variables = {variable.id: variable for variable in self.variables}
+            units: dict[str, set[str]] = {}
             for model in self.models:
                 for layer in model.layers:
-                    if layer.id not in names:
+                    variable = variables.get(layer.id)
+                    if variable is None:
                         raise ConfigError(f"model {model.id}: layer {layer.id} isn't one of the variables")
-                    if layer.name != names[layer.id]:
-                        raise ConfigError(f"model {model.id}: layer {layer.id} must be named {names[layer.id]!r}, as its variable")
+                    if layer.name != variable.name:
+                        raise ConfigError(f"model {model.id}: layer {layer.id} must be named {variable.name!r}, as its variable")
+                    if isinstance(layer, DynamicalLayerConfig):
+                        if variable.values is None:
+                            raise ConfigError(f"variable {variable.id} needs `values`: dynamical.org layers show it")
+                        if layer.values != variable.values:
+                            raise ConfigError(f"model {model.id}: layer {layer.id} must store values as its variable does")
+                        units.setdefault(layer.id, set()).add(SCALES[layer.scale].units)
+            # one step means the same everywhere only if every layer of a variable shows the same units
+            if mixed := sorted(variable for variable, found in units.items() if len(found) > 1):
+                raise ConfigError(f"variables {mixed}: their dynamical.org layers use scales with different units")
         if self.default_model is not None and self.model(self.default_model) is None:
             raise ConfigError(f"default_model {self.default_model!r} isn't a configured model")
 
@@ -416,22 +473,27 @@ class ModelsConfig:
 
 
 def _name_layers(data: object) -> object:
-    """Give each layer of a raw config its variable's name; a config file names variables, not layers."""
+    """Give each layer of a raw config its variable's name, and each dynamical.org layer its variable's `values`:
+    a config file sets them on variables, not layers."""
     if not isinstance(data, dict):
         raise ConfigError("the config must be a mapping")
     for key in ("variables", "default_model"):
         if key not in data:
             raise ConfigError(f"the config needs `{key}`")
-    names = {v.get("id"): v.get("name") for v in data["variables"] or () if isinstance(v, dict)}
+    variables = {v.get("id"): v for v in data["variables"] or () if isinstance(v, dict)}
     for model in data.get("models") or ():
         for layer in (model.get("layers") or ()) if isinstance(model, dict) else ():
             if not isinstance(layer, dict):
                 continue
-            if "name" in layer:
-                raise ConfigError(f"layer {layer.get('id')}: layers take their name from `variables`; remove `name`")
-            if layer.get("id") not in names:
+            for key in ("name", "values"):
+                if key in layer:
+                    raise ConfigError(f"layer {layer.get('id')}: layers take their {key} from `variables`; remove `{key}`")
+            variable = variables.get(layer.get("id"))
+            if variable is None:
                 raise ConfigError(f"model {model.get('id')}: layer {layer.get('id')} isn't one of the variables")
-            layer["name"] = names[layer["id"]]
+            layer["name"] = variable.get("name")
+            if "field" in layer and variable.get("values") is not None:  # a dynamical.org layer
+                layer["values"] = variable["values"]
     return data
 
 

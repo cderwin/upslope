@@ -7,6 +7,8 @@ forecasts/<model>/latest.json                         newest complete run (RunPo
 forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.webp  frames, by valid time and content
+forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.values.tif  their values (int16, model grid)
+forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/lookup-<digest>.tif  display pixel -> value grid, per layer
 ```
 
 Browsers read these straight from the bucket (`PUBLIC_BUCKET_NAME`), so only forecasts ever go in it. Frames
@@ -98,6 +100,11 @@ class ForecastStore:
         """
         key = f"{self.run_prefix(manifest.model, manifest.initialized)}/{MANIFEST}"
         self._put_json(key, manifest.to_json(), if_match=if_match)
+
+    def upload_bytes(self, model: str, initialized: datetime, relative_path: str, data: bytes, content_type: str) -> None:
+        """Upload a frame's file (e.g. its value file) to `<run folder>/<relative_path>`; like frames, it's cached for good."""
+        key = f"{self.run_prefix(model, initialized)}/{relative_path}"
+        self.storage.put_bytes(key, data, content_type, cache_control=IMMUTABLE_CACHE_CONTROL)
 
     def upload_frame(self, model: str, initialized: datetime, relative_path: str, local_path: Path) -> None:
         """Upload a frame image to `<run folder>/<relative_path>`."""

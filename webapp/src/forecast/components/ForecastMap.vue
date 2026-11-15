@@ -2,7 +2,8 @@
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { formatValue, loadValueImage, pixelAt, valueAt } from '@/forecast/frameValues'
+import { displayPosition, formatValue, loadLookup, loadValues, valueAt } from '@/forecast/frameValues'
+import { preloadGeotiff } from '@/forecast/valueDecoder'
 import type { ForecastLayer, LngLat } from '@/forecast/types'
 
 const props = defineProps<{
@@ -10,7 +11,7 @@ const props = defineProps<{
   layer: ForecastLayer
   /** Current frame URL. */
   url: string
-  /** Current frame's value image, for the value under the cursor; null for layers without numbers. */
+  /** Current frame's value file, for the value under the cursor; null for layers without numbers. */
   valuesUrl: string | null
   /** 0–1 */
   opacity: number
@@ -100,33 +101,37 @@ function source(): mapboxgl.ImageSource | undefined {
   return map?.getSource<mapboxgl.ImageSource>(SOURCE_ID)
 }
 
-// --- the value under the cursor (layers with value images only)
+// --- the value under the cursor (layers with value files only)
 
 /** Where the cursor is, in map and screen coordinates. */
 let pointer: { lngLat: LngLat; x: number; y: number } | null = null
 const hover = ref<{ x: number; y: number; text: string } | null>(null)
 let hoverRequest = 0
 
-/** Show the current frame's value under the pointer; value images load on first use. */
+/** Show the current frame's value under the pointer; a frame's value file loads on first use. */
 async function updateHover() {
   const request = ++hoverRequest
   const { layer, valuesUrl } = props
   const at = pointer
-  const pixel = at && valuesUrl && layer.values ? pixelAt(layer, at.lngLat) : null
-  if (!at || !valuesUrl || !layer.values || !pixel) {
+  const position = at && valuesUrl && layer.values && layer.lookupUrl ? displayPosition(layer, at.lngLat) : null
+  if (!at || !valuesUrl || !layer.values || !layer.lookupUrl || !position) {
     hover.value = null
     return
   }
   try {
-    const image = await loadValueImage(valuesUrl)
+    const [lookup, values] = await Promise.all([loadLookup(layer.lookupUrl), loadValues(valuesUrl)])
     if (request !== hoverRequest) return // the pointer, frame or layer moved on meanwhile
-    const [col, row] = pixel
-    const value = col < image.width && row < image.height ? valueAt(image, layer.values, col, row) : null
+    const value = valueAt(lookup, values, layer.values, position)
     hover.value = value === null ? null : { x: at.x, y: at.y, text: `${layer.name}: ${formatValue(value, layer.legend)}` }
   } catch (e) {
     if (request === hoverRequest) hover.value = null
-    console.error('[ForecastMap] value image', e)
+    console.error('[ForecastMap] value file', e)
   }
+}
+
+/** Fetch a layer's lookup as it's shown, so the first hover only waits for the frame's values. */
+function preloadLookup(layer: ForecastLayer) {
+  if (layer.lookupUrl) loadLookup(layer.lookupUrl).catch((e) => console.error('[ForecastMap] lookup file', e))
 }
 
 function onPointer(event: mapboxgl.MapMouseEvent) {
@@ -135,6 +140,8 @@ function onPointer(event: mapboxgl.MapMouseEvent) {
 }
 
 onMounted(() => {
+  preloadGeotiff()
+  preloadLookup(props.layer)
   mapboxgl.accessToken = props.token
   map = new mapboxgl.Map({
     container: container.value!,
@@ -168,6 +175,7 @@ watch(
   ([layer, url], [previousLayer]) => {
     source()?.updateImage({ url, coordinates: layer.coordinates })
     if (layer !== previousLayer) {
+      preloadLookup(layer)
       map?.getSource<mapboxgl.GeoJSONSource>(EXTENT_SOURCE_ID)?.setData(extent(layer))
       map?.fitBounds(bounds(layer), { padding: 40 })
     }

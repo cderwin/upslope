@@ -16,7 +16,7 @@ from litestar.datastructures import State
 
 from upslope.clients.forecasts import EXPORT_STATUS, INDEX, ForecastStore
 from upslope.logging import get_logger
-from upslope.models.config import ModelConfig, ModelsConfig, VariableConfig
+from upslope.models.config import ModelConfig, ModelsConfig
 from upslope.models.manifest import ExportStatus, ForecastIndex, InProgress, ModelIndex, run_path
 
 logger = get_logger(__name__)
@@ -137,6 +137,21 @@ def in_progress_status(model: ModelConfig, progress: InProgress, now: datetime) 
 
 
 @define
+class VariableStatus:
+    """A variable as the map lists it: `VariableConfig` without the exporter's settings.
+
+    Attributes:
+        id: Variable id, which its layers share.
+        name: Display name.
+        group: Heading it's listed under, e.g. `Snow`.
+    """
+
+    id: str
+    name: str
+    group: str | None = None
+
+
+@define
 class ForecastStatus:
     """Every model's status, as served at `/fx/status`.
 
@@ -152,7 +167,7 @@ class ForecastStatus:
     """
 
     models: list[ModelStatus]
-    variables: list[VariableConfig]
+    variables: list[VariableStatus]
     default_model: str | None
     data_url: str
     export: ExportStatus | None = None
@@ -274,7 +289,8 @@ class StatusCache:
         export = self._export
         config = self._config
         overdue = export is not None and now > export.overdue_after
-        return ForecastStatus(models, config.variables, config.default_model, self._data_url, export, overdue)
+        variables = [VariableStatus(v.id, v.name, v.group) for v in config.variables]
+        return ForecastStatus(models, variables, config.default_model, self._data_url, export, overdue)
 
 
 class ForecastController(Controller):

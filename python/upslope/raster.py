@@ -1,5 +1,5 @@
-"""Raster steps every forecast source shares: warping to Web Mercator, corner coordinates, footprints and
-map-ready images."""
+"""Raster steps every forecast source shares: warping to Web Mercator, corner coordinates, footprints,
+map-ready images, and the value files behind the map's value readout."""
 
 import json
 from pathlib import Path
@@ -7,9 +7,11 @@ from typing import BinaryIO
 
 import numpy as np
 import rasterio
+import rasterio.shutil
 from affine import Affine
 from PIL import Image
 from pyproj import Transformer
+from rasterio.io import MemoryFile
 from rasterio.warp import Resampling, calculate_default_transform, reproject
 
 # Web Mercator: Mapbox draws image overlays linearly between their corners in this CRS, so warped
@@ -199,34 +201,101 @@ def convert_to_webp(dataset: rasterio.DatasetReader, webp_path: Path) -> None:
     save_webp(image, webp_path)
 
 
-# Largest integer an RGB pixel holds; 0 is reserved for no data
-_MAX_VALUE_CODE = (1 << 24) - 1
+# int16 code for no data in value files; values take the codes -32767..32767
+VALUES_NODATA = -32768
+# Display pixels between the samples of a layer's lookup: projections are smooth, so interpolating between
+# samples this far apart is accurate to a small fraction of a grid cell
+LOOKUP_STEP = 8
+# Lookup positions are rounded to this fraction of a cell, which is plenty and compresses far better
+_LOOKUP_RESOLUTION = 64
 
 
-def encode_values_png(values: np.ndarray, png_path: Path, scale: float, offset: float) -> None:
-    """Save numbers as a lossless RGB PNG the browser can read back exactly.
+def _cog_bytes(data: np.ndarray, crs: str, transform: Affine, nodata: float, predictor: int, **band) -> bytes:
+    """A deflate-compressed Cloud-Optimized GeoTIFF of `data` (bands, rows, cols), tiled so a reader can range-read."""
+    count, height, width = data.shape
+    profile = {"driver": "GTiff", "count": count, "height": height, "width": width, "dtype": data.dtype, "crs": crs,
+               "transform": transform, "nodata": nodata}
+    with MemoryFile() as source:
+        with source.open(**profile) as dataset:
+            dataset.write(data)
+            for key, value in band.items():
+                setattr(dataset, key, value)
+            with MemoryFile() as cog:
+                rasterio.shutil.copy(
+                    dataset, cog.name, driver="COG", compress="DEFLATE", predictor=predictor, blocksize=256, overviews="NONE"
+                )
+                return cog.read()
 
-    Pixel integer `n = R * 65536 + G * 256 + B` is 0 for no data (NaN), else `(n - 1) * scale + offset`
-    rounded to the nearest step; values outside the encodable range are clamped (see
-    `upslope.models.manifest.ValueEncoding`).
+
+def encode_values(values: np.ndarray, step: float, offset: float, crs: str, transform: Affine, units: str) -> bytes:
+    """Store a frame's numbers as an int16 GeoTIFF on the grid they came from (the model's native grid).
+
+    A value `v` becomes code `round((v - offset) / step)`, clamped to -32767..32767; NaN becomes `VALUES_NODATA`.
+    The file carries GDAL's scale, offset and units, so GDAL-based tools read the values themselves.
 
     Args:
-        values: Values shaped (rows, cols); NaN where there is no data.
-        png_path: Path to write the PNG.
-        scale: Value of one step.
-        offset: Value of `n = 1`.
+        values: Values shaped (rows, cols), north up; NaN where there's no data.
+        step: Value of one code.
+        offset: Value of code 0.
+        crs: The grid's CRS.
+        transform: Corner-based (col, row) -> `crs` coordinates.
+        units: The values' units, e.g. `°F`.
+
+    Returns:
+        The GeoTIFF's bytes.
     """
     missing = ~np.isfinite(values)
-    steps = np.rint((np.where(missing, offset, values) - offset) / scale)
-    codes = (np.clip(steps, 0, _MAX_VALUE_CODE - 1) + 1).astype(np.uint32)
-    codes[missing] = 0
-    rgb = np.stack([(codes >> 16) & 0xFF, (codes >> 8) & 0xFF, codes & 0xFF], axis=-1).astype(np.uint8)
-    Image.fromarray(rgb, mode="RGB").save(png_path, optimize=True)
+    codes = np.clip(np.rint((np.where(missing, offset, values) - offset) / step), -32767, 32767).astype(np.int16)
+    codes[missing] = VALUES_NODATA
+    return _cog_bytes(codes[np.newaxis], crs, transform, VALUES_NODATA, predictor=2, scales=(step,), offsets=(offset,), units=(units,))
 
 
-def decode_values_png(png_path: Path, scale: float, offset: float) -> np.ndarray:
-    """Read back a PNG written by `encode_values_png`, as float64 values with NaN for no data."""
-    with Image.open(png_path) as image:
-        rgb = np.asarray(image.convert("RGB"), dtype=np.uint32)
-    codes = (rgb[..., 0] << 16) | (rgb[..., 1] << 8) | rgb[..., 2]
-    return np.where(codes == 0, np.nan, (codes.astype(np.float64) - 1) * scale + offset)
+def decode_values(data: bytes) -> tuple[np.ndarray, str, Affine]:
+    """Read back a file written by `encode_values`: float64 values (NaN for no data), its CRS and its transform."""
+    with MemoryFile(data) as memory, memory.open() as dataset:
+        codes = dataset.read(1)
+        step, offset = dataset.scales[0], dataset.offsets[0]
+        return np.where(codes == VALUES_NODATA, np.nan, codes * step + offset), dataset.crs.to_wkt(), dataset.transform
+
+
+def encode_lookup(
+    display_transform: Affine, display_size: tuple[int, int], grid_crs: str, grid_transform: Affine, step: int = LOOKUP_STEP
+) -> bytes:
+    """Where a frame's display pixels fall on the grid of its values, sampled every `step` pixels.
+
+    The map finds the value under the cursor from the display pixel there: it interpolates between the
+    surrounding samples to get a position on the values' grid, then between the cells around it. So it needs
+    no projection math, whatever the grid's projection.
+
+    Args:
+        display_transform: The frame image's transform (corner-based (col, row) -> Web Mercator).
+        display_size: The frame image's (width, height).
+        grid_crs: CRS of the values' grid.
+        grid_transform: Corner-based (col, row) -> `grid_crs` coordinates of the values' grid.
+        step: Display pixels between samples.
+
+    Returns:
+        A two-band float32 GeoTIFF: band 1 the grid column, band 2 the grid row (continuous, corner-based: cell
+        `(c, r)` spans `c..c+1`, `r..r+1`) at display pixel position `(i * step, j * step)` for sample `(i, j)`;
+        NaN where the projection has no answer. Its transform places sample `(i, j)` at that pixel corner.
+    """
+    width, height = display_size
+    xs = np.arange(-(-width // step) + 1) * step
+    ys = np.arange(-(-height // step) + 1) * step
+    cols, rows = np.meshgrid(xs.astype(np.float64), ys.astype(np.float64))
+    a, b, c, d, e, f = display_transform[:6]
+    mx, my = a * cols + b * rows + c, d * cols + e * rows + f
+    gx, gy = Transformer.from_crs(OUTPUT_CRS, grid_crs, always_xy=True).transform(mx, my, errcheck=False)
+    inverse = ~grid_transform
+    grid_cols = inverse.a * gx + inverse.b * gy + inverse.c
+    grid_rows = inverse.d * gx + inverse.e * gy + inverse.f
+    samples = np.stack([grid_cols, grid_rows]).astype(np.float64)
+    samples[~np.isfinite(samples)] = np.nan
+    samples = (np.round(samples * _LOOKUP_RESOLUTION) / _LOOKUP_RESOLUTION).astype(np.float32)
+    return _cog_bytes(samples, OUTPUT_CRS, display_transform @ Affine.scale(step), np.nan, predictor=3)
+
+
+def decode_lookup(data: bytes) -> np.ndarray:
+    """Read back a file written by `encode_lookup`: (2, rows, cols) grid columns and rows."""
+    with MemoryFile(data) as memory, memory.open() as dataset:
+        return dataset.read()
