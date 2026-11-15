@@ -6,7 +6,7 @@ forecasts/index.json                                  every model's pointers and
 forecasts/<model>/latest.json                         newest complete run (RunPointer)
 forecasts/<model>/in-progress.json                    newest started run and each layer's progress (InProgress)
 forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/manifest.json   the run's layers and frames (RunManifest)
-forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.png   frames, by valid time and content
+forecasts/<model>/<YYYY>/<MM>/<DD>/<HHMM>Z/<layer>/<YYYY-MM-DDTHHMM>-<digest>.webp  frames, by valid time and content
 ```
 
 Browsers read these straight from the bucket (`PUBLIC_BUCKET_NAME`), so only forecasts ever go in it. Frames
@@ -75,18 +75,29 @@ class ForecastStore:
         """Key prefix of a run's folder, e.g. `forecasts/uwwrf_4km/2026/10/29/0000Z`."""
         return f"{cls.model_prefix(model)}/{run_path(initialized)}"
 
-    def _put_json(self, key: str, data: bytes) -> None:
-        self.storage.put_bytes(key, data, "application/json", cache_control=MUTABLE_CACHE_CONTROL)
+    def _put_json(self, key: str, data: bytes, if_match: str | None = None) -> None:
+        self.storage.put_bytes(key, data, "application/json", if_match=if_match, cache_control=MUTABLE_CACHE_CONTROL)
 
     def read_manifest(self, model: str, initialized: datetime) -> RunManifest | None:
         """A run's manifest, or None if the run hasn't been exported."""
-        stored = self.storage.get_bytes(f"{self.run_prefix(model, initialized)}/{MANIFEST}")
-        return None if stored is None else RunManifest.from_json(stored.data)
+        versioned = self.read_manifest_versioned(model, initialized)
+        return None if versioned is None else versioned[0]
 
-    def write_manifest(self, manifest: RunManifest) -> None:
-        """Write a run's manifest. Upload every frame it lists first."""
+    def read_manifest_versioned(self, model: str, initialized: datetime) -> tuple[RunManifest, str | None] | None:
+        """A run's manifest and its ETag, to rewrite it only if nothing else has meanwhile (see `write_manifest`)."""
+        stored = self.storage.get_bytes(f"{self.run_prefix(model, initialized)}/{MANIFEST}")
+        return None if stored is None else (RunManifest.from_json(stored.data), stored.etag)
+
+    def write_manifest(self, manifest: RunManifest, if_match: str | None = None) -> None:
+        """Write a run's manifest. Upload every frame it lists first.
+
+        Args:
+            manifest: The manifest.
+            if_match: Only write if the stored manifest still has this ETag; raises PreconditionFailed if it
+                changed or was deleted (e.g. the run was pruned).
+        """
         key = f"{self.run_prefix(manifest.model, manifest.initialized)}/{MANIFEST}"
-        self._put_json(key, manifest.to_json())
+        self._put_json(key, manifest.to_json(), if_match=if_match)
 
     def upload_frame(self, model: str, initialized: datetime, relative_path: str, local_path: Path) -> None:
         """Upload a frame image to `<run folder>/<relative_path>`."""

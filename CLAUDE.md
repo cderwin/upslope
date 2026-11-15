@@ -49,9 +49,10 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
 | `models/uw_wrf/` | UW WRF source (`source.py`), throttled and retrying async image download and run detection (`image_client.py`), fit + reprojection to/from the WRF Lambert grid (`georegistration`), annotation document schema |
 | `models/dynamical/` | dynamical.org source: STAC/Icechunk dataset access (`catalog.py`), rendering gridded fields (`source.py`), color scales and unit conversion (`scales.py`) |
-| `raster.py` | Warping to Web Mercator, frame corners, PNG and value-image encoding; shared by every source |
+| `raster.py` | Warping to Web Mercator, frame corners, WebP and value-image encoding; shared by every source |
 | `models/manifest.py` | Run manifest and `latest.json` schemas |
 | `logging.py` | `get_logger`, `configure_logging`, `log_duration` |
+| `migrations/` (in `python/`) | One-off storage migrations run by hand (`just py-migrate <name>`); see its README |
 
 ## Python conventions
 

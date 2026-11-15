@@ -4,10 +4,11 @@ import numpy as np
 import pytest
 import rasterio
 from affine import Affine
+from PIL import Image
 
 from upslope.raster import (
-    FOOTPRINT_POINTS_PER_EDGE, OUTPUT_CRS, decode_values_png, encode_values_png, footprint, image_coordinates, read_footprint,
-    warp_to_web_mercator, write_geotiff,
+    FOOTPRINT_POINTS_PER_EDGE, OUTPUT_CRS, convert_to_webp, decode_values_png, encode_values_png, footprint,
+    image_coordinates, read_footprint, warp_to_web_mercator, write_geotiff,
 )
 from upslope.models.uw_wrf.georegistration import WRF_LAMBERT_CRS
 
@@ -28,6 +29,21 @@ def test_warp_places_a_lat_lon_grid(tmp_path) -> None:
     assert (west, north) == (-125.0, 49.0)
     assert abs(east + 115.0) < 0.25 and abs(south - 44.0) < 0.25
 
+
+
+def test_webp_keeps_palette_colors_exactly_and_nodata_see_through(tmp_path) -> None:
+    indices = np.array([[[0, 1, 255], [1, 0, 255]]], dtype=np.uint8)
+    colormap = {0: (31, 120, 180, 255), 1: (254, 224, 139, 255), 255: (0, 0, 0, 0)}
+    tiff = tmp_path / "frame.tiff"
+    write_geotiff(tiff, indices, Affine(1000.0, 0.0, 0.0, 0.0, -1000.0, 0.0), nodata=255, colormap=colormap)
+    with rasterio.open(tiff) as dataset:
+        convert_to_webp(dataset, tmp_path / "frame.webp")
+    with Image.open(tmp_path / "frame.webp") as webp:
+        assert webp.format == "WEBP"
+        rgba = np.asarray(webp.convert("RGBA"))
+    assert rgba[..., 3].tolist() == [[255, 255, 0], [255, 255, 0]]
+    assert [tuple(rgba[0, i, :3]) for i in range(2)] == [(31, 120, 180), (254, 224, 139)]
+    assert tuple(rgba[1, 0, :3]) == (254, 224, 139)
 
 def test_value_png_round_trips(tmp_path) -> None:
     """Values come back to the nearest step, NaN as no data, and out-of-range values clamped."""

@@ -59,14 +59,14 @@ def check_model(model: "ModelConfig", run: datetime | None) -> int:
 )
 @click.argument("output", type=click.Path(path_type=Path, dir_okay=False))
 def render_frame(config_path: Path, model_id: str, layer_id: str, hour: int, run: datetime | None, output: Path) -> None:
-    """Render one frame of a dynamical.org layer to OUTPUT (a PNG), as the export would, without uploading it."""
+    """Render one frame of a dynamical.org layer to OUTPUT (a lossless WebP), as the export would, without uploading it."""
     import numpy as np
     import rasterio
 
     from upslope.models.config import DynamicalSourceConfig, ModelsConfig
     from upslope.models.dynamical.source import DynamicalSource
     from upslope.models.source import NotPublished
-    from upslope.raster import convert_to_png, image_coordinates
+    from upslope.raster import convert_to_webp, image_coordinates
 
     model = ModelsConfig.load(config_path).model(model_id)
     if model is None or not isinstance(model.source, DynamicalSourceConfig):
@@ -87,7 +87,7 @@ def render_frame(config_path: Path, model_id: str, layer_id: str, hour: int, run
         finally:
             source.end_check()
         with rasterio.open(tiff) as dataset:
-            convert_to_png(dataset, output)
+            convert_to_webp(dataset, output)
             corners = image_coordinates(dataset)
             size = (dataset.width, dataset.height)
     finally:

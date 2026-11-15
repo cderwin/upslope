@@ -14,7 +14,7 @@ The core of the project is the **Python backend** in `python/`. The Vue webapp i
 UW WRF plots (GIF)          annotations in S3 (control points)
         │                              │
         ▼                              ▼
-  upslope export-loop ─ fit + warp to Web Mercator ── PNG frames + manifest.json ──► public bucket
+  upslope export-loop ─ fit + warp to Web Mercator ── WebP frames + manifest.json ─► public bucket
                                                                                        │      │
   upslope serve (Litestar) ◄── index.json, export-status.json ─────────────────────────┘      │
     ├── /fx/status      each model's latest and retained runs, the exporter's health and      │
@@ -26,7 +26,7 @@ UW WRF plots (GIF)          annotations in S3 (control points)
 
 - **Export pipeline** (`upslope/models/`): downloads each configured layer,
   fits a pixel → Lambert-conformal transform per map type from the published
-  control points, reprojects every frame to EPSG:3857, and uploads PNGs plus a
+  control points, reprojects every frame to EPSG:3857, and uploads lossless WebPs plus a
   `manifest.json`.
 - **Server** (`upslope/server/`): a Litestar process that serves the API and webapp.
 - **Exporter** (`upslope/export_loop.py`, `upslope export-loop`): a separate

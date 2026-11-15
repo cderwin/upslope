@@ -1,8 +1,9 @@
 """Raster steps every forecast source shares: warping to Web Mercator, corner coordinates, footprints and
-map-ready PNGs."""
+map-ready images."""
 
 import json
 from pathlib import Path
+from typing import BinaryIO
 
 import numpy as np
 import rasterio
@@ -158,12 +159,25 @@ def image_coordinates(dataset: rasterio.DatasetReader) -> list[tuple[float, floa
     return coordinates
 
 
-def convert_to_png(dataset: rasterio.DatasetReader, png_path: Path) -> None:
-    """Save a raster as a PNG, keeping its palette and making nodata pixels transparent.
+def save_webp(image: Image.Image, fp: Path | BinaryIO) -> None:
+    """Save an image as a lossless WebP, the format of every frame the map shows.
+
+    Lossless, so palette colors stay exact and never blend at their edges. Method 4 balances size and speed:
+    method 6 is 30-50x slower for files only a few percent smaller.
+
+    Args:
+        image: Image in any mode; it's saved as RGBA (WebP has no palette), keeping its transparency.
+        fp: Path or binary file to write.
+    """
+    image.convert("RGBA").save(fp, "WEBP", lossless=True, method=4, quality=75)
+
+
+def convert_to_webp(dataset: rasterio.DatasetReader, webp_path: Path) -> None:
+    """Save a raster as a lossless WebP (see `save_webp`), applying its palette and making nodata pixels transparent.
 
     Args:
         dataset: Open raster to convert.
-        png_path: Path to write the PNG.
+        webp_path: Path to write the WebP.
     """
     data = dataset.read()
     try:
@@ -171,21 +185,18 @@ def convert_to_png(dataset: rasterio.DatasetReader, png_path: Path) -> None:
     except ValueError:
         cmap = None
 
-    save_options = {}
-    if dataset.count == 1 and dataset.nodata is not None:
-        # Warping leaves nodata around the frame; make it see-through on the map.
-        save_options["transparency"] = int(dataset.nodata)
-
     if dataset.count == 1 and cmap is not None:
-        # Keep the image paletted: smaller files and exactly the source colors.
         image = Image.fromarray(data[0], mode="P")
         image.putpalette([channel for index in range(256) for channel in cmap.get(index, (0, 0, 0, 255))[:3]])
     elif dataset.count == 1:
         image = Image.fromarray(data[0], mode="L")
     else:
         image = Image.fromarray(np.moveaxis(data[:4], 0, -1))
+    if dataset.count == 1 and dataset.nodata is not None:
+        # Warping leaves nodata around the frame; make it see-through on the map.
+        image.info["transparency"] = int(dataset.nodata)
 
-    image.save(png_path, optimize=True, **save_options)
+    save_webp(image, webp_path)
 
 
 # Largest integer an RGB pixel holds; 0 is reserved for no data

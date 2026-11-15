@@ -22,11 +22,11 @@ def manifest(initialized: datetime = INITIALIZED, hours: list[int] | None = None
 
 
 def export(store: ForecastStore, tmp_path: Path, run: RunManifest) -> None:
-    png = tmp_path / "frame.png"
-    png.write_bytes(b"png")
+    image = tmp_path / "frame.webp"
+    image.write_bytes(b"webp")
     for layer in run.layers:
         for frame in layer.frames:
-            store.upload_frame(run.model, run.initialized, frame.path, png)
+            store.upload_frame(run.model, run.initialized, frame.path, image)
     store.write_manifest(run)
 
 
@@ -40,16 +40,16 @@ def test_layout_matches_open_meteo_style(store: ForecastStore, memory_storage, t
     store.write_latest(RunPointer.to(manifest(), NOW))
     assert sorted(memory_storage.objects) == [
         "forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json",
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.png",
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png",
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.webp",
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.webp",
         "forecasts/uwwrf_4km/latest.json",
     ]
-    assert memory_storage.objects["forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png"][1] == "image/png"
+    assert memory_storage.objects["forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.webp"][1] == "image/webp"
     # browsers read the bucket directly: frames are cached for good, the JSON files revalidated
     assert {key: memory_storage.cache_control[key] for key in memory_storage.objects} == {
         "forecasts/uwwrf_4km/2026/10/29/0000Z/manifest.json": "no-cache",
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.png": IMMUTABLE_CACHE_CONTROL,
-        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.png": IMMUTABLE_CACHE_CONTROL,
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0000-0123456789abcdef.webp": IMMUTABLE_CACHE_CONTROL,
+        "forecasts/uwwrf_4km/2026/10/29/0000Z/surface-temp/2026-10-29T0300-0123456789abcdef.webp": IMMUTABLE_CACHE_CONTROL,
         "forecasts/uwwrf_4km/latest.json": "no-cache",
     }
 
@@ -76,7 +76,7 @@ def test_manifest_json_shape(store: ForecastStore, memory_storage, tmp_path: Pat
     layer = data["layers"][0]
     assert {"id", "name", "maptype", "fingerprint", "hours", "dimensions", "coordinates", "frames", "legend", "values"} <= layer.keys()
     assert layer["frames"][1] == {
-        "hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300-0123456789abcdef.png", "values": None,
+        "hour": 3, "valid": "2026-10-29T03:00:00+00:00", "path": "surface-temp/2026-10-29T0300-0123456789abcdef.webp", "values": None,
     }
 
 
@@ -100,7 +100,7 @@ def test_list_runs_newest_first(store: ForecastStore, tmp_path: Path) -> None:
     export(store, tmp_path, manifest(INITIALIZED))
     store.write_latest(RunPointer.to(manifest(), NOW))
     # frames without a manifest (an export in progress or interrupted) aren't a run
-    store.upload_frame(MODEL, INITIALIZED + timedelta(hours=12), "surface-temp/x.png", tmp_path / "frame.png")
+    store.upload_frame(MODEL, INITIALIZED + timedelta(hours=12), "surface-temp/x.webp", tmp_path / "frame.webp")
     assert store.list_runs(MODEL) == [INITIALIZED, older]
     assert store.list_runs("other") == []
 
