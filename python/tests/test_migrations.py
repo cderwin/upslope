@@ -234,3 +234,14 @@ def test_m002_backfill_leaves_layers_whose_config_changed(old_runs: ForecastStor
     summary = backfill(old_runs, ModelsConfig([changed]), include_followed=True)
     assert summary.runs == 0 and summary.counts["layers left to the exporter"] == 2
     assert old_runs.read_manifest(OLD.id, PREVIOUS).layers[0].values is None
+
+
+def test_start_shows_migration_logs(caplog) -> None:
+    """Migrations log outside `upslope` (as `migrations.*`, or `__main__` under -m); their info must still show."""
+    import logging
+
+    from migrations.common import start
+
+    start(verbose=False, include_followed=False, dry_run=True, yes=False, what="Test")
+    for name in ("migrations.m001_webp_frames", "__main__"):
+        assert logging.getLogger(name).isEnabledFor(logging.INFO)
