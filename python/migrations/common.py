@@ -179,6 +179,9 @@ def start(verbose: bool, include_followed: bool, dry_run: bool, yes: bool, what:
     from upslope.logging import configure_logging
 
     configure_logging(verbose)
+    # configure_logging only opens up `upslope`; a migration logs as `migrations.*`, or `__main__` when run with -m
+    for name in ("migrations", "__main__"):
+        logging.getLogger(name).setLevel(logging.DEBUG if verbose else logging.INFO)
     if dry_run or yes:
         return
     warning = " INCLUDING the runs the exporter follows: make sure it's stopped" if include_followed else ""
