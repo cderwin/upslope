@@ -21,6 +21,7 @@ npm run typecheck
 | `/annotation/:maptype/:image`     | `annotation-image` | Same tool, deep-linked to one image           |
 | `/map`                            | `map`              | Forecast map, first layer selected            |
 | `/map/:model/:layer`              | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&run=`) |
+| `/soundings/:station?`            | `soundings`        | Latest sounding from a station (default: nearest Seattle) |
 | `/about`                          | `about`            | Project description and credits               |
 | anything else                     | `not-found`        | 404                                           |
 
@@ -108,6 +109,28 @@ are kept for playback. The value is interpolated between the model's grid cells
 around the cursor, as the image's colors are. **Annotate this frame** appears only
 for layers with an annotation maptype (UW WRF).
 
+## Soundings
+
+`/soundings` draws a skew-T log-P diagram of a station's most recent upper-air
+sounding. Both come straight from the Iowa Environmental Mesonet, which allows
+cross-origin requests: the station list from
+`https://mesonet.agron.iastate.edu/geojson/network/RAOB.geojson` (stations whose
+archive is still open) and the profile from `/json/raob.py?station=…&ts=…`, trying
+the latest 00Z and 12Z launches and going back up to two days. `src/soundings/api.ts`
+converts levels to the chart's units (wind from knots to m/s) and drops those
+without a temperature and dewpoint.
+
+The station picker searches by id, name and state and lists stations nearest
+Seattle first, with distances in miles; the page opens on the nearest one.
+Station elevation and heights on the chart are in feet; the chart draws
+temperatures in °C and wind in knots.
+
+The chart is [skewt-plus](https://www.npmjs.com/package/skewt-plus), which also draws
+a parcel trace, LCL and cloud levels, moist adiabats and isohumes, and its own
+controls. It's a plain script that sets `window.SkewT`; `src/soundings/skewt.ts`
+loads it, types the parts used, switches its heights to feet and cleans up after
+it. Press and drag on the chart to read a level's values.
+
 ## Annotation page
 
 The page asks for the admin token (kept in `localStorage` until you log out in
@@ -143,6 +166,10 @@ src/admin/
   token.ts                     Admin token (localStorage) and prompt state
   api.ts                       Authenticated requests; 401/403/412 handling
   TokenDialog.vue              Token prompt
+src/soundings/
+  api.ts                       IEM stations and soundings, unit conversion
+  skewt.ts                     Typed wrapper over skewt-plus
+  components/                  StationPicker (searchable combobox), SkewTChart
 src/settings/
   settings.ts                  Viewer preferences (localStorage)
   SettingsDialog.vue           Login/logout, playback speed and default model

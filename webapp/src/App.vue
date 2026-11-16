@@ -36,6 +36,9 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
           <RouterLink class="nav-link" :to="{ name: 'map' }">Map</RouterLink>
         </li>
         <li class="nav-item">
+          <RouterLink class="nav-link" :to="{ name: 'soundings' }">Soundings</RouterLink>
+        </li>
+        <li class="nav-item">
           <RouterLink class="nav-link" :to="{ name: 'about' }">About</RouterLink>
         </li>
         <!-- Only admins (a stored token) can use the annotation tool. -->

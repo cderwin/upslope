@@ -35,6 +35,14 @@ const routes: RouteRecordRaw[] = [
     props: true,
   },
   {
+    // The latest sounding from a station; with no station, the nearest one to Seattle.
+    // One route, so picking a station doesn't remount the page.
+    path: '/soundings/:station?',
+    name: 'soundings',
+    component: () => import('@/views/SoundingsView.vue'),
+    props: true,
+  },
+  {
     path: '/about',
     name: 'about',
     component: () => import('@/views/AboutView.vue'),
