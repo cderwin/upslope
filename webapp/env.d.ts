@@ -6,6 +6,9 @@ declare module '*.vue' {
   export default component
 }
 
+/** A plain script that sets `window.SkewT` (see `src/soundings/skewt.ts`). */
+declare module 'skewt-plus/dist/bundle.js'
+
 interface ImportMetaEnv {
   /** Mapbox access token for /map; set it in `.env.local`. */
   readonly VITE_MAPBOX_TOKEN?: string

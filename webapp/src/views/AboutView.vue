@@ -45,6 +45,12 @@ import { RouterLink } from 'vue-router'
         Publishes the GFS, HRRR, RRFS, ECMWF AIFS and HRDPS forecast data that Upslope renders, as open datasets.
       </dd>
 
+      <dt><a href="https://mesonet.agron.iastate.edu/" target="_blank" rel="noopener">Iowa Environmental Mesonet</a></dt>
+      <dd>
+        Archives the upper-air soundings (weather balloon launches) shown on the
+        <RouterLink :to="{ name: 'soundings' }">soundings</RouterLink> page.
+      </dd>
+
       <dt><a href="https://nwac.us/" target="_blank" rel="noopener">Northwest Avalanche Center (NWAC)</a></dt>
       <dd>
         Avalanche forecasting and mountain weather for the Cascades and Olympics, and an inspiration for this project.
@@ -54,7 +60,7 @@ import { RouterLink } from 'vue-router'
 
     <p class="small text-body-secondary mt-5">
       Upslope is an independent project and is not affiliated with or endorsed by the University of Washington,
-      dynamical.org or NWAC. Forecasts are model output and can be wrong.
+      dynamical.org, the Iowa Environmental Mesonet or NWAC. Forecasts are model output and can be wrong.
     </p>
   </div>
 </template>
