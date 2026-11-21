@@ -10,6 +10,7 @@
     "typecheck": "vue-tsc --build"
   },
   "dependencies": {
+    "@lucide/vue": "^1.69.0",
     "bootstrap": "^5.3.3",
     "geotiff": "^3.0.5",
     "mapbox-gl": "^3.32.0",

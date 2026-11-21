@@ -16,8 +16,10 @@ interface Settings {
   frameIntervalMs: number
   /** Model the map opens on, and switches to when the current one lacks a variable; null for the server's default. */
   defaultModel: string | null
-  /** Drape the map over 3D terrain and tilt the camera. */
+  /** Drape the map over 3D terrain (the camera only tilts when the viewer tilts it). */
   terrain: boolean
+  /** The map's control panel is collapsed to the valid time and playback buttons. */
+  controlsCollapsed: boolean
 }
 
 function clampInterval(ms: number): number {
@@ -26,12 +28,18 @@ function clampInterval(ms: number): number {
 }
 
 function readStored(): Settings {
-  const settings: Settings = { frameIntervalMs: FRAME_INTERVAL_DEFAULT_MS, defaultModel: null, terrain: false }
+  const settings: Settings = {
+    frameIntervalMs: FRAME_INTERVAL_DEFAULT_MS,
+    defaultModel: null,
+    terrain: false,
+    controlsCollapsed: false,
+  }
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<Settings>
     if (typeof stored.frameIntervalMs === 'number') settings.frameIntervalMs = clampInterval(stored.frameIntervalMs)
     if (typeof stored.defaultModel === 'string') settings.defaultModel = stored.defaultModel
     if (typeof stored.terrain === 'boolean') settings.terrain = stored.terrain
+    if (typeof stored.controlsCollapsed === 'boolean') settings.controlsCollapsed = stored.controlsCollapsed
   } catch {
     // Unreadable or blocked storage: use the defaults.
   }
@@ -61,4 +69,15 @@ export function setDefaultModel(model: string | null): void {
 
 export function setTerrain(enabled: boolean): void {
   state.terrain = enabled
+}
+
+export function setControlsCollapsed(collapsed: boolean): void {
+  state.controlsCollapsed = collapsed
+}
+
+/** Whether the Settings dialog is open: the navbar opens it, and on phones (no navbar) the map's ⋮ menu. */
+export const settingsDialog = reactive({ open: false })
+
+export function openSettings(): void {
+  settingsDialog.open = true
 }

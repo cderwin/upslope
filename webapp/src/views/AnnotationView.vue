@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { X } from '@lucide/vue'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { adminToken, requestToken } from '@/admin/token'
@@ -252,10 +253,11 @@ onMounted(() => {
                 type="button"
                 class="btn btn-outline-danger"
                 title="Remove this image from the draft"
+                aria-label="Remove this image from the draft"
                 :disabled="busy || !imageInfo"
                 @click="onRemoveImage"
               >
-                ×
+                <X :size="16" aria-hidden="true" />
               </button>
             </div>
           </div>

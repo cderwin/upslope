@@ -25,12 +25,12 @@ import {
   type Choices,
   type LoadedLayers,
 } from '@/forecast/selection'
-import { openRunStatus, setStatus } from '@/forecast/status'
+import { openRunStatus, setStatus, statusLabel, statusTone } from '@/forecast/status'
 import type { ForecastLayer, ForecastStatus, RunRef } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
 import { adminToken } from '@/admin/token'
 import { useAnnotationStore } from '@/annotation/store'
-import { settings } from '@/settings/settings'
+import { openSettings, settings } from '@/settings/settings'
 
 /** Route params, so the selected model and variable (layer) are a shareable URL under /map. */
 const props = defineProps<{ model?: string; layer?: string }>()
@@ -141,6 +141,9 @@ watch([selectedLayer, () => frame.value?.hour, opacity], ([current, hour, alpha]
 
 // Admins can send the current frame to the annotation page.
 const annotations = useAnnotationStore()
+
+/** Admins can send a UW WRF frame (a layer with an annotation maptype) to the annotation page. */
+const canAnnotate = computed(() => Boolean(adminToken.token && layer.value?.maptype))
 const annotateError = ref('')
 
 async function annotateFrame() {
@@ -253,12 +256,19 @@ watch(
   { immediate: true },
 )
 
+/** Opacity changes in tenths; values from older links (e.g. 0.75) land on the nearest tenth. */
+function stepOpacity(delta: 1 | -1) {
+  opacity.value = Math.min(Math.max(Math.round(opacity.value * 10 + delta) / 10, 0), 1)
+}
+
 function onKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null
   if (target?.closest('input, select, textarea, button')) return
   if (event.key === ' ') playing.value = !playing.value
   else if (event.key === 'ArrowLeft') step(-1)
   else if (event.key === 'ArrowRight') step(1)
+  else if (event.key === '[') stepOpacity(-1)
+  else if (event.key === ']') stepOpacity(1)
   else return
   event.preventDefault()
 }
@@ -332,7 +342,7 @@ onBeforeUnmount(() => {
       <MapLegend :name="layer.name" :legend="layer.legend" :attribution="layer.attribution" />
       <MapControls
         v-model:index="index"
-        v-model:opacity="opacity"
+        :opacity="opacity"
         v-model:playing="playing"
         :variables="variableOptions"
         :models="modelOptions"
@@ -340,24 +350,42 @@ onBeforeUnmount(() => {
         :layer="layer"
         :hours="hours"
         :load-progress="loadProgress"
+        :menu-phone-only="!canAnnotate"
         @select-variable="selectVariable"
         @select-model="selectModel"
         @step="step"
+        @step-opacity="stepOpacity"
       >
         <!-- only UW WRF frames (which have a maptype) are georegistered with annotations -->
-        <div v-if="adminToken.token && layer.maptype">
-          <button
-            type="button"
-            class="btn btn-sm btn-outline-secondary w-100"
-            :disabled="annotations.state.busy"
-            title="Download this frame from the model's latest run and open it on the annotation page"
-            @click="annotateFrame"
-          >
-            <span v-if="annotations.state.busy" class="spinner-border spinner-border-sm me-1"></span>
-            Annotate this frame
-          </button>
-          <div v-if="annotateError" class="small text-danger mt-1">{{ annotateError }}</div>
+        <template #menu>
+          <li v-if="canAnnotate" class="d-none d-sm-block">
+            <button
+              type="button"
+              class="dropdown-item"
+              :disabled="annotations.state.busy"
+              title="Download this frame from the model's latest run and open it on the annotation page"
+              @click="annotateFrame"
+            >
+              Annotate this frame
+            </button>
+          </li>
+          <!-- Phones have no navbar: these stand in for its status dot and settings button. -->
+          <li class="d-sm-none">
+            <button type="button" class="dropdown-item d-flex align-items-center gap-2" :title="statusLabel" @click="openRunStatus">
+              <span class="status-dot" :class="`bg-${statusTone}`" aria-hidden="true"></span>
+              Model runs
+            </button>
+          </li>
+          <li class="d-sm-none">
+            <button type="button" class="dropdown-item" @click="openSettings">Settings</button>
+          </li>
+        </template>
+        <!-- The menu closes on click, so the annotation's progress and errors show in the panel. -->
+        <div v-if="annotations.state.busy" class="small text-body-secondary">
+          <span class="spinner-border spinner-border-sm me-1"></span>
+          Adding the frame for annotation…
         </div>
+        <div v-else-if="annotateError" class="small text-danger">{{ annotateError }}</div>
       </MapControls>
     </template>
     <div v-else class="d-flex h-100 align-items-center justify-content-center text-body-secondary">
@@ -378,5 +406,21 @@ onBeforeUnmount(() => {
   left: 50%;
   transform: translateX(-50%);
   z-index: 2;
+}
+
+/* On phones the banner spans the top, short of the map's zoom buttons. */
+@media (max-width: 575.98px) {
+  .run-banner {
+    left: 10px;
+    right: 50px;
+    transform: none;
+  }
+}
+
+.status-dot {
+  display: inline-block;
+  width: 0.625rem;
+  height: 0.625rem;
+  border-radius: 50%;
 }
 </style>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { X } from '@lucide/vue'
 import type { GeographicPoint, ImageAnnotation } from '../types'
 
 defineProps<{
@@ -61,10 +62,11 @@ function formatError(meters: number | undefined): string {
                   type="button"
                   class="btn btn-sm btn-outline-danger ms-1"
                   title="Remove from this image"
+                  aria-label="Remove from this image"
                   :disabled="busy"
                   @click="emit('remove', annotation.point)"
                 >
-                  ×
+                  <X :size="14" aria-hidden="true" />
                 </button>
               </td>
             </tr>
@@ -93,10 +95,11 @@ function formatError(meters: number | undefined): string {
                   type="button"
                   class="btn btn-sm btn-outline-danger"
                   title="Delete point everywhere"
+                  aria-label="Delete point everywhere"
                   :disabled="busy"
                   @click="emit('removePoint', row.key)"
                 >
-                  ×
+                  <X :size="14" aria-hidden="true" />
                 </button>
               </td>
             </tr>

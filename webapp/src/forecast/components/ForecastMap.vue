@@ -15,7 +15,7 @@ const props = defineProps<{
   valuesUrl: string | null
   /** 0–1 */
   opacity: number
-  /** Drape everything over 3D terrain and tilt the camera. */
+  /** Drape everything over 3D terrain; the viewer tilts the camera themselves (ctrl-drag). */
   terrain: boolean
 }>()
 
@@ -29,7 +29,6 @@ const EXTENT_COLOR = '#cc5500'
 const STYLE_URL = 'mapbox://styles/mapbox/satellite-streets-v12'
 const DEM_SOURCE_ID = 'mapbox-dem'
 const TERRAIN_EXAGGERATION = 1.5
-const TERRAIN_PITCH = 60
 
 const container = ref<HTMLDivElement | null>(null)
 let map: mapboxgl.Map | undefined
@@ -67,8 +66,6 @@ function applyTerrain(enabled: boolean) {
 function addForecastLayer() {
   if (!map || map.getSource(SOURCE_ID)) return
   applyTerrain(props.terrain)
-  // fitting the initial bounds leaves the camera flat, whatever pitch the map was created with
-  if (props.terrain) map.setPitch(TERRAIN_PITCH)
   map.addSource(SOURCE_ID, { type: 'image', url: props.url, coordinates: props.layer.coordinates })
   // Draw beneath the first label layer so place names stay readable over the forecast.
   const firstSymbol = map.getStyle()?.layers?.find((layer) => layer.type === 'symbol')?.id
@@ -150,7 +147,6 @@ onMounted(() => {
     projection: 'mercator',
     bounds: bounds(props.layer),
     fitBoundsOptions: { padding: 40 },
-    pitch: props.terrain ? TERRAIN_PITCH : 0,
   })
   map.addControl(new mapboxgl.NavigationControl({ visualizePitch: true }), 'top-right')
   map.addControl(new mapboxgl.ScaleControl(), 'bottom-right')
@@ -177,7 +173,10 @@ watch(
     if (layer !== previousLayer) {
       preloadLookup(layer)
       map?.getSource<mapboxgl.GeoJSONSource>(EXTENT_SOURCE_ID)?.setData(extent(layer))
-      map?.fitBounds(bounds(layer), { padding: 40 })
+      // Keep the view when flipping between models and variables over the same spot; refit only when the
+      // new layer doesn't cover where the viewer is looking (a smaller domain, say).
+      const next = bounds(layer)
+      if (map && !next.contains(map.getCenter())) map.fitBounds(next, { padding: 40 })
     }
   },
 )
@@ -189,8 +188,8 @@ watch(
   () => props.terrain,
   (enabled) => {
     if (!map?.getSource(SOURCE_ID)) return // style.load hasn't run yet; it applies terrain itself
+    // The camera stays where the viewer put it: only they tilt it, with ctrl-drag.
     applyTerrain(enabled)
-    map.easeTo({ pitch: enabled ? TERRAIN_PITCH : 0, duration: 1000 })
   },
 )
 
