@@ -2,15 +2,16 @@
   color-scheme: light dark;
 }
 
+/* dvh: a phone's browser bars come and go, and 100vh would put the map's bottom under them. */
 body {
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 /* Let full-bleed views (the map) fill whatever height the navbar leaves. */
 #app {
   display: flex;
   flex-direction: column;
-  min-height: 100vh;
+  min-height: 100dvh;
 }
 
 #app > main {

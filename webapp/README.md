@@ -32,7 +32,12 @@ The **Annotation** nav link appears only while an admin token is stored; the
 page itself still works by URL and asks for the token. The gear button in the
 navbar opens **Settings** (`src/settings/`): log in or out (store or clear the
 token), set the playback speed, turn the map's 3D terrain on or off and pick a
-default model for the map. Settings are kept in `localStorage`.
+default model for the map. Settings are kept in `localStorage`, along with
+whether the map's controls are collapsed.
+
+On phones (narrower than Bootstrap's `sm`, 576px) there is no navbar: the map
+fills the screen, and its ⋮ menu has **Model runs** (with the status dot) and
+**Settings** instead. The other pages still work by URL.
 
 The dot beside the gear (blue while a run is coming in, amber if a layer has
 stalled, red on errors, from `/fx/status` refreshed every minute,
@@ -73,7 +78,9 @@ disabled. Switching to a variable the current model lacks switches to the
 viewer's default model (set in Settings), else the config's `default_model`,
 else the first model that has it; `/map` with no model opens on the same
 default. Switching models keeps the valid time, not the forecast hour, since
-models' runs start at different times. `/map/<model>/<variable>` URLs are
+models' runs start at different times. Switching models or variables also keeps
+the map where it is; it zooms to the new layer's domain only when that doesn't
+cover the center of the view. `/map/<model>/<variable>` URLs are
 unchanged. By default each model's latest complete run is shown. `?run=2026-10-29T00Z`
 shows that run instead (any run kept in storage, a week by default), with a
 banner linking back to the latest; an unknown run lists the available ones.
@@ -89,12 +96,20 @@ projection to match the EPSG:3857 registration, with a burnt-orange outline
 around the frames' data (the manifest's `extent`: the source grid's edges in
 its native projection; the image's corners for layers exported before it). The **3D terrain** setting adds
 Mapbox's terrain DEM (1.5× exaggeration), drapes the basemap and forecast over
-it, and tilts the camera; ctrl-drag or right-drag to tilt and rotate. All of a layer's
+it, but never tilts the camera: the map looks straight down until you ctrl-drag
+or right-drag to tilt and rotate. All of a layer's
 frames are preloaded; playback advances one frame every 2 s by default
 (0.25–4 s, set in Settings) and skips frames that are still loading. Space
-plays/pauses, ←/→ step. The controls show each frame's valid time (the layer's
-`initialized` time plus the frame's hour) in Pacific time, with the offset and
-the run time (UTC) alongside.
+plays/pauses, ←/→ step, and [ / ] lower and raise the overlay's opacity in 10%
+steps (also the −/+ buttons; it's not a slider, so it isn't mistaken for the
+timeline). The controls show each frame's valid time (the layer's `initialized`
+time plus the frame's hour) in Pacific time, with the offset alongside; the run
+time (UTC) is in the model picker, and a run other than the latest gets a badge.
+The button in the panel's top-left corner collapses it to the valid time and
+playback buttons (remembered with the other settings), and the ⋮ beside the
+variable picker holds extra actions, shown only when there are any (on phones,
+always: it stands in for the navbar). On phones the panel docks at the bottom,
+above the scale bar.
 
 Layers with a `legend` in their manifest (colors chosen by the export, not an
 upstream image) show it bottom left (top left on phones), with the model's
@@ -106,8 +121,8 @@ the background once the page has loaded and the browser is idle
 the first hover. A layer's lookup file is fetched as the layer is shown, and the
 current frame's value file the first time the cursor is over it; the recent 64
 are kept for playback. The value is interpolated between the model's grid cells
-around the cursor, as the image's colors are. **Annotate this frame** appears only
-for layers with an annotation maptype (UW WRF).
+around the cursor, as the image's colors are. **Annotate this frame**, in the ⋮
+menu, appears only to admins and for layers with an annotation maptype (UW WRF).
 
 ## Soundings
 
@@ -161,7 +176,7 @@ src/forecast/
   api.ts                       Forecast API (VITE_FORECAST_BASE_URL), ?run= parsing
   selection.ts                 Which variable and model to show; the pickers' options
   usePlayback.ts               Frame selection, playback, preloading
-  components/                  ForecastMap (Mapbox), MapControls, RunStatusDialog
+  components/                  ForecastMap (Mapbox), MapControls, PlaybackButtons, RunStatusDialog
 src/admin/
   token.ts                     Admin token (localStorage) and prompt state
   api.ts                       Authenticated requests; 401/403/412 handling

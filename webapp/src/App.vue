@@ -1,13 +1,13 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { onBeforeUnmount, onMounted } from 'vue'
+import { Settings } from '@lucide/vue'
 import { RouterLink, RouterView } from 'vue-router'
 import TokenDialog from '@/admin/TokenDialog.vue'
 import { adminToken } from '@/admin/token'
 import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import { forecastStatus, openRunStatus, refreshStatus, statusLabel, statusTone } from '@/forecast/status'
 import SettingsDialog from '@/settings/SettingsDialog.vue'
-
-const settingsOpen = ref(false)
+import { openSettings, settingsDialog } from '@/settings/settings'
 
 /** How often the navbar's status dot refreshes. */
 const STATUS_REFRESH_MS = 60_000
@@ -28,7 +28,8 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
 </script>
 
 <template>
-  <nav class="navbar navbar-expand bg-body-tertiary border-bottom">
+  <!-- Phones get the map alone: its ⋮ menu has Settings and Model runs, and the other pages aren't needed there. -->
+  <nav class="navbar navbar-expand bg-body-tertiary border-bottom d-none d-sm-flex">
     <div class="container-fluid">
       <RouterLink class="navbar-brand" :to="{ name: 'map' }">Upslope</RouterLink>
       <ul class="navbar-nav me-auto">
@@ -60,13 +61,9 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
         class="btn btn-link nav-link px-2"
         title="Settings"
         aria-label="Settings"
-        @click="settingsOpen = true"
+        @click="openSettings"
       >
-        <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-          <path
-            d="M9.405 1.05c-.413-1.4-2.397-1.4-2.81 0l-.1.34a1.464 1.464 0 0 1-2.105.872l-.31-.17c-1.283-.698-2.686.705-1.987 1.987l.169.311c.446.82.023 1.841-.872 2.105l-.34.1c-1.4.413-1.4 2.397 0 2.81l.34.1a1.464 1.464 0 0 1 .872 2.105l-.17.31c-.698 1.283.705 2.686 1.987 1.987l.311-.169a1.464 1.464 0 0 1 2.105.872l.1.34c.413 1.4 2.397 1.4 2.81 0l.1-.34a1.464 1.464 0 0 1 2.105-.872l.31.17c1.283.698 2.686-.705 1.987-1.987l-.169-.311a1.464 1.464 0 0 1 .872-2.105l.34-.1c1.4-.413 1.4-2.397 0-2.81l-.34-.1a1.464 1.464 0 0 1-.872-2.105l.17-.31c.698-1.283-.705-2.686-1.987-1.987l-.311.169a1.464 1.464 0 0 1-2.105-.872zM8 10.93a2.929 2.929 0 1 1 0-5.86 2.929 2.929 0 0 1 0 5.858z"
-          />
-        </svg>
+        <Settings :size="18" aria-hidden="true" />
       </button>
     </div>
   </nav>
@@ -75,7 +72,7 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
     <RouterView />
   </main>
   <TokenDialog />
-  <SettingsDialog v-model:open="settingsOpen" />
+  <SettingsDialog v-model:open="settingsDialog.open" />
   <RunStatusDialog v-model:open="forecastStatus.dialogOpen" />
 </template>
 

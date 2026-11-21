@@ -69,8 +69,10 @@ just py-test                 # run the backend tests (no network or credentials 
 ```sh
 just up        # MinIO + server; seeds annotations from dev/georegistration and exports at startup
                # map: http://localhost:8000/map   admin token: upslope-local-admin
+just watch     # the same, but rebuild the server and exporter whenever you edit their source
 just logs      # follow logs
 just reset     # stop and wipe MinIO so the next `up` starts fresh
+just clean     # remove the old upslope images each rebuild leaves behind (they fill Docker's disk)
 ```
 
 ### Run pieces directly

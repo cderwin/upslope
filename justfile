@@ -80,13 +80,26 @@ web-build:
 
 [group('docker')]
 docker-build:
-    docker build -t {{ image }} --build-arg VITE_MAPBOX_TOKEN .
+    docker build -t {{ image }} --label upslope.local=true --build-arg VITE_MAPBOX_TOKEN .
 
 # Build and start the local stack (MinIO, server, exporter); the exporter checks at startup
 [group('docker')]
 up:
     docker compose up -d --build
     @echo "server: http://localhost:8000/map   minio console: http://localhost:9001"
+
+# Each rebuild leaves an old image behind (`just clean`).
+# Start the local stack and rebuild the server (and the exporter, for Python edits) when their source changes
+[group('docker')]
+watch:
+    docker compose watch
+
+# Compose labels what `up` builds with its project, and `docker-build` adds upslope.local.
+# Remove the untagged upslope images that rebuilds leave behind (other projects' images are left alone)
+[group('docker')]
+clean:
+    docker image prune -f --filter label=com.docker.compose.project=upslope
+    docker image prune -f --filter label=upslope.local=true
 
 [group('docker')]
 down:

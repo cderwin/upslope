@@ -2,6 +2,7 @@
 # (dev/georegistration), plus the upslope server and the exporter, which checks every model for new frames
 # at startup and then every 15 minutes (as in production, separate processes sharing the bucket).
 #   just up      # build and start, then open http://localhost:8000/map
+#   just watch   # the same, then rebuild the server and exporter whenever their source changes
 #   just reset   # stop and wipe MinIO's data (the next `up` seeds the snapshot again)
 #
 # Local-only credentials; nothing here is used in production.
@@ -84,6 +85,14 @@ services:
         condition: service_completed_successfully
     ports:
       - "8000:8000"
+    # `docker compose watch` (just watch): the webapp is baked into the image, so any edit means a rebuild
+    develop:
+      watch:
+        - { action: rebuild, path: ./python/upslope }
+        - { action: rebuild, path: ./python/config }
+        - { action: rebuild, path: ./python/pyproject.toml }
+        - { action: rebuild, path: ./python/uv.lock }
+        - { action: rebuild, path: ./webapp, ignore: [node_modules/, dist/] }
 
   exporter:
     build: *upslope-build
@@ -93,6 +102,13 @@ services:
     # the image's healthcheck is the server's
     healthcheck:
       disable: true
+    # the exporter serves no webapp, so only Python edits rebuild it
+    develop:
+      watch:
+        - { action: rebuild, path: ./python/upslope }
+        - { action: rebuild, path: ./python/config }
+        - { action: rebuild, path: ./python/pyproject.toml }
+        - { action: rebuild, path: ./python/uv.lock }
     depends_on:
       georegistration-seed:
         condition: service_completed_successfully

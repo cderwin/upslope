@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { ChevronRight } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useRoute, type RouteLocationRaw } from 'vue-router'
 import { useBootstrapModal } from '@/annotation/useBootstrapModal'
@@ -99,12 +100,15 @@ function close() {
               :aria-controls="`run-status-${model.id}`"
               @click="toggle(model.id)"
             >
-              <span class="chevron" :class="{ open: expanded.has(model.id) }" aria-hidden="true">›</span>
-              <span class="h6 mb-0">{{ model.name }}</span>
-              <span class="small text-body-secondary">
-                {{ model.latest ? `latest ${runLabel(model.latest.initialized)}` : '' }}
+              <ChevronRight class="chevron" :class="{ open: expanded.has(model.id) }" :size="14" aria-hidden="true" />
+              <!-- On a phone the latest run drops under the name, rather than either breaking mid-phrase. -->
+              <span class="d-flex flex-wrap align-items-baseline column-gap-2 text-start">
+                <span class="h6 mb-0 text-nowrap">{{ model.name }}</span>
+                <span class="small text-body-secondary text-nowrap">
+                  {{ model.latest ? `latest ${runLabel(model.latest.initialized)}` : '' }}
+                </span>
               </span>
-              <span class="badge ms-auto" :class="summary(model).badge">{{ summary(model).label }}</span>
+              <span class="badge ms-auto flex-shrink-0" :class="summary(model).badge">{{ summary(model).label }}</span>
             </button>
             <div v-if="expanded.has(model.id)" :id="`run-status-${model.id}`" class="mt-2">
               <dl class="row small mb-2">
@@ -147,45 +151,48 @@ function close() {
                 </dd>
               </dl>
 
-              <table v-if="model.in_progress && !model.in_progress.complete" class="table table-sm small align-middle mb-0">
-                <thead>
-                  <tr>
-                    <th scope="col">Layer</th>
-                    <th scope="col" class="w-50">Hours exported</th>
-                    <th scope="col">State</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="layer in model.in_progress.layers" :key="layer.id">
-                    <td>{{ layer.name }}</td>
-                    <td>
-                      <div class="d-flex align-items-center gap-2">
-                        <div
-                          class="progress flex-grow-1"
-                          role="progressbar"
-                          :aria-label="`${layer.name} hours exported`"
-                          :aria-valuenow="Math.round(progress(layer) * 100)"
-                          aria-valuemin="0"
-                          aria-valuemax="100"
-                          style="height: 6px"
-                        >
-                          <div class="progress-bar" :style="{ width: `${progress(layer) * 100}%` }"></div>
+              <!-- Scrolls sideways inside the dialog on a phone rather than widening it. -->
+              <div v-if="model.in_progress && !model.in_progress.complete" class="table-responsive">
+                <table class="table table-sm small align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th scope="col">Layer</th>
+                      <th scope="col" class="w-50">Hours exported</th>
+                      <th scope="col">State</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="layer in model.in_progress.layers" :key="layer.id">
+                      <td>{{ layer.name }}</td>
+                      <td>
+                        <div class="d-flex align-items-center gap-2">
+                          <div
+                            class="progress flex-grow-1"
+                            role="progressbar"
+                            :aria-label="`${layer.name} hours exported`"
+                            :aria-valuenow="Math.round(progress(layer) * 100)"
+                            aria-valuemin="0"
+                            aria-valuemax="100"
+                            style="height: 6px"
+                          >
+                            <div class="progress-bar" :style="{ width: `${progress(layer) * 100}%` }"></div>
+                          </div>
+                          <span class="font-monospace text-nowrap">{{ hourLabel(layer) }}</span>
                         </div>
-                        <span class="font-monospace text-nowrap">{{ hourLabel(layer) }}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <span class="badge" :class="STATE_BADGES[layer.state]" :title="layer.error ?? undefined">
-                        {{ layer.state }}
-                      </span>
-                      <div v-if="layer.error" class="text-danger">{{ layer.error }}</div>
-                      <div v-else-if="layer.state !== 'complete' && layer.progressed_at" class="text-body-secondary">
-                        last frame {{ ago(layer.progressed_at, now) }}
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                      </td>
+                      <td>
+                        <span class="badge" :class="STATE_BADGES[layer.state]" :title="layer.error ?? undefined">
+                          {{ layer.state }}
+                        </span>
+                        <div v-if="layer.error" class="text-danger">{{ layer.error }}</div>
+                        <div v-else-if="layer.state !== 'complete' && layer.progressed_at" class="text-body-secondary">
+                          last frame {{ ago(layer.progressed_at, now) }}
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         </div>
@@ -196,8 +203,7 @@ function close() {
 
 <style scoped>
 .chevron {
-  display: inline-block;
-  width: 1ch;
+  flex-shrink: 0;
   transition: transform 0.15s;
 }
 
