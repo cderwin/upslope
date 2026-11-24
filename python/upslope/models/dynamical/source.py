@@ -107,10 +107,28 @@ def grid_window(dataset: xr.Dataset, region: tuple[float, float, float, float]) 
     y_dim, x_dim = dataset[REFERENCE_VARIABLE].dims[-2:]
     xs = dataset[x_dim].values.astype(np.float64)
     ys = dataset[y_dim].values.astype(np.float64)
+    return window_from_coords(xs, ys, dataset["spatial_ref"].attrs["crs_wkt"], region, y_dim, x_dim)
+
+
+def window_from_coords(
+    xs: np.ndarray, ys: np.ndarray, crs: str, region: tuple[float, float, float, float], y_dim: str = "y", x_dim: str = "x"
+) -> GridWindow:
+    """Find the window of a grid covering a region, from its cell-centre coordinates (see `grid_window`).
+
+    Args:
+        xs: Column coordinates in `crs`, regularly spaced and increasing.
+        ys: Row coordinates in `crs`, regularly spaced (either direction).
+        crs: The grid's CRS, as WKT.
+        region: (west, south, east, north) in degrees.
+        y_dim: Name of the row dimension.
+        x_dim: Name of the column dimension.
+
+    Returns:
+        The window. Raises ValueError if the grid is irregular or doesn't cover the region.
+    """
     dx, dy = _spacing(xs, x_dim), _spacing(ys, y_dim)
     if dx <= 0:
         raise ValueError(f"grid coordinate {x_dim} must increase")
-    crs = dataset["spatial_ref"].attrs["crs_wkt"]
 
     # the region's outline, densified so curved edges in the grid's projection are covered
     west, south, east, north = region
