@@ -29,6 +29,7 @@ from upslope.models.manifest import ExportStatus, ModelCheckStatus
 from upslope.models.source import ForecastSource
 from upslope.models.uw_wrf.image_client import ImageClient
 from upslope.models.uw_wrf.source import UwWrfSource
+from upslope.schedule import run_on_schedule, seconds_until_next
 
 logger = get_logger(__name__)
 
@@ -76,13 +77,6 @@ def build_driver(
     )
 
 
-def seconds_until_next(now: datetime, interval: timedelta) -> float:
-    """Seconds from `now` until the next multiple of `interval` past midnight (e.g. :00, :15, :30, :45)."""
-    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    elapsed = now - midnight
-    return (interval - elapsed % interval).total_seconds()
-
-
 def model_statuses(report: CheckReport) -> list[ModelCheckStatus]:
     """Each model's outcome, as the export status records it."""
     return [
@@ -128,22 +122,13 @@ class ExportLoop:
         """
         self.status = await self._read_status()
         logger.info("exporter started: checking every %s, each check limited to %s", self.interval, self.check_timeout)
-        skip_wait = run_immediately
-        while True:
-            if skip_wait:
-                skip_wait = False
-            else:
-                now = self.now()
-                due = self.next_check(now)
-                logger.info("next check at %s", f"{due:%H:%M:%S}Z")
-                await self.sleep((due - now).total_seconds())
-            try:
-                status = await self.run_check()
-                if on_check is not None:
-                    await on_check(status)
-            except Exception:
-                # run_check records its own failures; this is only a backstop so the loop never dies
-                logger.exception("unexpected error in the export loop; continuing at the next check")
+
+        async def check() -> None:
+            status = await self.run_check()
+            if on_check is not None:
+                await on_check(status)
+
+        await run_on_schedule(check, self.interval, self.now, self.sleep, run_immediately)
 
     async def run_check(self, force: bool = False) -> ExportStatus:
         """Run one check and record its outcome. Never raises, except when cancelled.
