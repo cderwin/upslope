@@ -51,6 +51,7 @@ are in [`python/README.md`](python/README.md). The webapp is documented in
 | `dev/georegistration/` | Annotation snapshot for tests and the local stack (never deployed) |
 | `webapp/` | Vite + Vue 3 + TypeScript front end |
 | `justfile` | Every common task; run `just` to list them |
+| `upslope.nu` | Nushell commands (`use upslope.nu`), `upslope logs [group]` (Fly logs in a TUI with search, a tab per process group without one; `--plain` for records), `upslope ls [-p] <dir>` and `upslope cp [-p] [-r] [-d] <key> [dest]` (the buckets in `.env.local`; `-d` returns the parsed contents), `upslope migrate <name>` (`python/migrations/`) |
 | `Dockerfile`, `compose.yaml`, `fly.toml` | Image, local stack, and Fly.io deployment |
 
 ## Getting started
