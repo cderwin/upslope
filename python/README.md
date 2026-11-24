@@ -13,6 +13,9 @@ uv run upslope georegistration upload DIR    # load a snapshot into storage (dra
 uv run upslope georegistration snapshot DIR  # save the published annotations to a directory
 uv run upslope georegistration promote-examples  # draft an image for each configured maptype with none (--hour, --dry-run)
 uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.webp  # preview a dynamical.org frame
+uv run upslope archive-check -m hrrr_3km     # read and standardize a run of an archived model (--run, -o DIR to keep the store)
+uv run upslope archive-run                   # one archive check of every model (or -m MODEL; --force)
+uv run upslope archive-loop                  # the archiver: a check every 15 min, forever (--interval, --run-immediately)
 ```
 
 `registration-error` reads the annotations published in storage;
@@ -467,3 +470,101 @@ model check, a running check's progress shows up when that model finishes.
 `export` is `export-status.json` (see [The exporter](#the-exporter)), or null if
 the exporter has never run. `export_overdue` is true once `export.overdue_after`
 has passed without a newer status: the exporter is stuck or down.
+
+## Forecast archive
+
+The archiver keeps the newest runs of each model in `config/archive.yaml` as
+Zarr v3 stores in the private bucket, all in one standard form: the same
+variable names, units, accumulation conventions and encoding, whether a run
+came from dynamical.org or Open-Meteo's open data. Nothing reads them yet; they
+are the data for point forecasts (and possibly the map) later. The design, the
+chunking benchmarks and the size estimates are in
+[`docs/zarr_architecture.md`](../docs/zarr_architecture.md).
+
+`archive-loop` (`upslope/archive/loop.py`) runs a check every 15 minutes in its
+own process: the `archiver` Fly process group, separate from the server and the
+exporter, and `just up`'s `archiver` service. Exactly one may run (`--ha=false`):
+it's the only writer under `archive/`. `just py-archive` runs one check against
+the S3 settings in `.env.local`.
+
+### Config
+
+`config/archive.yaml` (`upslope/archive/config.py`, comments at its top) lists:
+
+- `variables`: the standard variables, by id: units, `kind` (`instant`, or a
+  `sum` or `mean` over the interval ending at each lead time) and `values`
+  (int16 steps, as for map layers).
+- `defaults`: the chunk shape (`chunks: {leads, rows, cols}`), the shard size
+  in grid cells (`shards: {rows, cols}`), `keep_runs` (8) and `runs_per_check` (2).
+- `models`: each model's `source` (`{kind: dynamical, dataset}` or
+  `{kind: openmeteo, domain}`), `region`, `start_times`, `leads` (the lead-time
+  axis every run is stored with) and `variables`: for each standard variable,
+  the upstream field(s) and how they're converted (`derive`: `run_total`,
+  `rate`, `reset_6h_mean`, `run_total_mean`, `grid_wind_u/v`,
+  `speed_direction_u/v`, `freezing_level`). A model may override `chunks`,
+  `shards` and `keep_runs`.
+
+`archive-check -m <model>` reads and standardizes every variable of a run from
+the live source and reports missing fields, units that don't convert, lead
+times off the axis, and each variable's range; it writes nothing to storage.
+
+### Checks
+
+Each check, per model (two at a time, each in a thread):
+
+1. Walk the model's runs within `lookback_hours` (48), newest first, until
+   `keep_runs` are accounted for. A run already archived under the current
+   config is kept; one archived under an older config (its `fingerprint`
+   differs) or not yet archived is archived once its source has it complete:
+   dynamical.org, when `temperature_2m` has data at the last kept lead time;
+   Open-Meteo, when the run's `meta.json` exists. At most `runs_per_check`
+   are archived per check, so a backlog fills over a few checks.
+2. Archiving a run reads each variable's upstream fields over the region (a
+   dynamical.org variable at every lead time at once; an Open-Meteo file
+   downloaded whole and cropped), standardizes it (`archive/conversions.py`),
+   and writes it to a local store one variable at a time. A variable whose
+   field the source lacks is left out and reported in the status.
+3. The store is uploaded, the run is listed in the model's `index.json`, and
+   runs beyond `keep_runs` are dropped from the index and then deleted. Run
+   folders the index doesn't list (from an archive that stopped part way) are
+   deleted.
+
+A model taking longer than 40 minutes is reported as failed; its thread can't
+be stopped, so the model is skipped until it finishes.
+
+### Archive layout
+
+| Key (private bucket) | Contents |
+| --- | --- |
+| `archive/status.json` | The archiver's last check: `state`, `check`, times, and each model's `state`, archived `runs`, `warnings` and `error` |
+| `archive/<model>/index.json` | The model's runs, newest first: `{init_time, fingerprint, archived_at, variables}` |
+| `archive/<model>/runs/<YYYYMMDDTHH>.zarr/` | One run (below) |
+
+A run's chunks are uploaded first, then each array's `zarr.json`, then the
+root `zarr.json` with the consolidated metadata; the index lists a run only
+once it's uploaded and stops listing it before it's deleted or replaced.
+
+A run is a Zarr v3 group:
+
+| Array | Contents |
+| --- | --- |
+| `<variable>` | `(lead_time, y, x)` int16: CF `scale_factor`/`add_offset` from the variable's `values`, `_FillValue` -32768, `units`, `long_name`, `cell_methods` for sums and means, `source` (the upstream fields and derivation) |
+| `lead_time` | Hours since the run started: the model's whole lead axis, so runs line up; lead times a run lacks are empty |
+| `init_time` | The run's start (CF time) |
+| `y`, `x` | Cell centres in the grid's CRS; `y` north to south |
+| `spatial_ref` | The grid's `crs_wkt` and GDAL `GeoTransform` |
+
+Group attributes: `model`, `source`, `init_time`, `fingerprint`,
+`archived_at`, `attribution`, `layout_version`. Variables are chunked by the
+config's chunk shape, and each shard (one object) holds every lead time of up
+to `shards` rows by cols, so a point's series and one lead time's map each read
+a few chunks of one object. Open a run with
+`xr.open_zarr(store, consolidated=True)`.
+
+Standard conventions: accumulations are the amount (or mean) since the
+variable's previous lead time with data, so summing a run's values gives its
+total whatever the model's step or reset convention; winds are earth-relative
+(grid-relative HRRR and RRFS winds are rotated; HRDPS and NBM winds are
+converted from speed and direction); the freezing level is 0 at or below the
+surface; values beyond a variable's `values` range are clamped to it.
+
