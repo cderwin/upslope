@@ -9,6 +9,8 @@ if TYPE_CHECKING:
 PROJECT_BASE = Path(__file__).resolve().parents[3]
 # Forecast models and their layers
 DEFAULT_MODELS_CONFIG = PROJECT_BASE / "python/config/models.yaml"
+# Models whose runs are archived, and the standard variables
+DEFAULT_ARCHIVE_CONFIG = PROJECT_BASE / "python/config/archive.yaml"
 # Annotation snapshot for local development and tests; production reads annotations from storage
 DEV_GEOREGISTRATION = PROJECT_BASE / "dev/georegistration"
 
