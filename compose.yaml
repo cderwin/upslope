@@ -1,6 +1,7 @@
 # Local end-to-end stack: MinIO as the S3 backend, seeded with the repo's annotation snapshot
-# (dev/georegistration), plus the upslope server and the exporter, which checks every model for new frames
-# at startup and then every 15 minutes (as in production, separate processes sharing the bucket).
+# (dev/georegistration), plus the upslope server, the exporter, which checks every model for new frames
+# at startup and then every 15 minutes, and the archiver, which archives model runs on the same schedule (as in
+# production, separate processes sharing the buckets).
 #   just up      # build and start, then open http://localhost:8000/map
 #   just watch   # the same, then rebuild the server and exporter whenever their source changes
 #   just reset   # stop and wipe MinIO's data (the next `up` seeds the snapshot again)
@@ -111,6 +112,24 @@ services:
         - { action: rebuild, path: ./python/uv.lock }
     depends_on:
       georegistration-seed:
+        condition: service_completed_successfully
+
+  # archives runs of the models in python/config/archive.yaml to archive/ in the private bucket
+  archiver:
+    build: *upslope-build
+    image: upslope:local
+    command: ["upslope", "archive-loop", "--run-immediately"]
+    environment: *s3-env
+    healthcheck:
+      disable: true
+    develop:
+      watch:
+        - { action: rebuild, path: ./python/upslope }
+        - { action: rebuild, path: ./python/config }
+        - { action: rebuild, path: ./python/pyproject.toml }
+        - { action: rebuild, path: ./python/uv.lock }
+    depends_on:
+      minio-init:
         condition: service_completed_successfully
 
 volumes:
