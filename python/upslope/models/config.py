@@ -37,7 +37,7 @@ class ConfigError(ValueError):
     """The models config is invalid."""
 
 
-def _check_id(kind: str, value: str) -> None:
+def check_id(kind: str, value: str) -> None:
     if not ID_PATTERN.match(value) or ".." in value:
         raise ConfigError(f"{kind} id {value!r} must be lowercase letters, digits, '.', '_' or '-'")
 
@@ -85,8 +85,8 @@ class LayerConfig:
     maptype: str
 
     def __attrs_post_init__(self) -> None:
-        _check_id("layer", self.id)
-        _check_id("maptype", self.maptype)
+        check_id("layer", self.id)
+        check_id("maptype", self.maptype)
         try:
             fields = {name for _, name, _, _ in string.Formatter().parse(self.url) if name is not None}
         except ValueError as e:
@@ -215,7 +215,7 @@ class DynamicalLayerConfig:
     def __attrs_post_init__(self) -> None:
         from upslope.models.dynamical.scales import SCALES
 
-        _check_id("layer", self.id)
+        check_id("layer", self.id)
         if self.scale not in SCALES:
             raise ConfigError(f"layer {self.id}: unknown scale {self.scale!r}; known: {', '.join(sorted(SCALES))}")
         if self.field.hours is not None and self.hours.first < self.field.hours:
@@ -301,7 +301,7 @@ class ModelConfig:
     region: tuple[float, float, float, float] | None = None
 
     def __attrs_post_init__(self) -> None:
-        _check_id("model", self.id)
+        check_id("model", self.id)
         if not self.start_times or any(not 0 <= hour < 24 for hour in self.start_times):
             raise ConfigError(f"model {self.id}: start_times must be UTC hours from 0 to 23")
         if not self.layers:
@@ -386,7 +386,7 @@ class VariableConfig:
     values: ValueQuantization | None = None
 
     def __attrs_post_init__(self) -> None:
-        _check_id("variable", self.id)
+        check_id("variable", self.id)
 
 
 @define(frozen=True)

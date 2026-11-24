@@ -42,6 +42,18 @@ py-export *args:
 py-export-loop *args:
     uv run upslope export-loop {{ args }}
 
+# Archive what each model is missing once (-m <model> for one), against the S3 settings in .env.local
+[group('python')]
+[working-directory('python')]
+py-archive *args:
+    uv run upslope archive-run {{ args }}
+
+# Run the archiver (a check every 15 minutes) against the S3 settings in .env.local
+[group('python')]
+[working-directory('python')]
+py-archive-loop *args:
+    uv run upslope archive-loop {{ args }}
+
 # Run a one-off storage migration (python/migrations/) against the S3 settings in .env.local
 [group('python')]
 [working-directory('python')]
@@ -116,7 +128,7 @@ reset:
 
 # --- deploy
 
-# Deploy to Fly.io by hand (merging to main deploys via GitHub Actions; --ha=false keeps one exporter running)
+# Deploy to Fly.io by hand (merging to main deploys via GitHub Actions; --ha=false keeps one exporter and one archiver running)
 [group('deploy')]
 deploy:
     fly deploy --ha=false --build-arg VITE_MAPBOX_TOKEN="${VITE_MAPBOX_TOKEN:-}"

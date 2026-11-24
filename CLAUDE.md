@@ -40,10 +40,13 @@ against MinIO and is safe. Merging a PR to `main` deploys to production
 | `server/admin.py` | Admin API controller; maps `AnnotationError` subclasses to HTTP status codes |
 | `server/forecast.py`, `server/frontend.py` | Forecast API (`/fx/status` from `forecasts/index.json`, refreshed in the background), webapp serving |
 | `export_loop.py` | The exporter process (`upslope export-loop`): checks on the clock, time limits, `export-status.json` (the driver writes `index.json`) |
+| `schedule.py` | Running checks on the clock, shared by the exporter and the archiver |
+| `archive/` | The forecast archive (`upslope archive-loop`, its own process): standardized Zarr runs per model in the private bucket. `config.py` (loads `config/archive.yaml`), `conversions.py` (derivations, units, lead axis), `sources/` (dynamical.org, Open-Meteo), `writer.py`, `store.py`, `driver.py`, `loop.py` |
 | `annotation_service.py` | All annotation edits/publishing (async, locked, conditional writes) |
 | `clients/storage.py` | `StorageClient` over S3/Tigris (`build()` the private bucket, `build_public()` the public one); conditional writes via ETags |
 | `clients/annotations.py` | `AnnotationStore`: draft/published/history/images keys in the bucket |
 | `clients/forecasts.py` | `ForecastStore`: exported runs under `forecasts/` in the public bucket (manifests, frames, `latest.json`, retention, Cache-Control) |
+| `config/archive.yaml` (in `python/`) | The archive's standard variables, chunking and retention, and each archived model's source, leads and field mapping |
 | `config/models.yaml` (in `python/`) | The variables layers show, the default model, and forecast models and their layers (URL templates, hours, maptype) |
 | `models/config.py` | Loads and validates `config/models.yaml` |
 | `models/driver.py`, `models/source.py` | The async export pipeline (`ForecastDriver`, every model concurrently), the same for every model; the `ForecastSource` interface each kind of model implements |
@@ -82,7 +85,9 @@ Match the surrounding code. Specifically:
   `asyncio.Lock` in the server. The export runs in a separate process
   (`upslope export-loop`, the `exporter` Fly process group) that shares only the
   bucket with the server. Exactly one of each runs (`--ha=false`): two exporters
-  would race on manifests. Don't add designs that assume multiple workers.
+  would race on manifests. The archiver (`upslope archive-loop`, the `archiver`
+  group) is likewise the one writer of `archive/`. Don't add designs that assume
+  multiple workers.
 - **The export is async; its blocking work goes to threads.** Sources and the
   driver are async and models run concurrently, so code reached from a source
   may run in several threads at once (guard shared caches; avoid

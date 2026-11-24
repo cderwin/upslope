@@ -11,16 +11,19 @@ primary_region = "sjc"
   dockerfile = "Dockerfile"
   # VITE_MAPBOX_TOKEN is passed as --build-arg by deploy.yml and `just deploy`
 
-# Two process groups, each on its own machine, so exporting never slows down requests:
+# Three process groups, each on its own machine, so exporting and archiving never slow down requests:
 # - web serves the API and webapp;
 # - exporter checks for and exports new frames every 15 minutes. Exactly one may run (two would race on
 #   manifests and retention), so deploys pass --ha=false; Fly keeps a standby that starts only if it fails.
+# - archiver archives new model runs (python/config/archive.yaml) every 15 minutes to archive/ in the private
+#   bucket. Like the exporter, exactly one may run.
 # They share only storage: the exporter writes forecasts/ (including export-status.json, which /fx/status
 # reports) to the public bucket (PUBLIC_BUCKET_NAME), which browsers read directly at PUBLIC_DATA_URL.
 [processes]
   web = "upslope serve"
   # also checks once at startup, so a deploy that changes the layers publishes them right away
   exporter = "upslope export-loop --run-immediately"
+  archiver = "upslope archive-loop --run-immediately"
 
 [http_service]
   processes = ["web"]
@@ -52,3 +55,11 @@ primary_region = "sjc"
   memory = "2gb"
   cpu_kind = "shared"
   cpus = 4
+
+[[vm]]
+  # archives two models at once, each holding one variable of a run (HRRR: ~30 MB as float32) while decoding
+  # full-grid GRIB fields from dynamical.org; Open-Meteo files are downloaded to disk, one at a time
+  processes = ["archiver"]
+  memory = "2gb"
+  cpu_kind = "shared"
+  cpus = 2

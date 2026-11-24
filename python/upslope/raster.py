@@ -227,6 +227,23 @@ def _cog_bytes(data: np.ndarray, crs: str, transform: Affine, nodata: float, pre
                 return cog.read()
 
 
+def quantize(values: np.ndarray, step: float, offset: float) -> np.ndarray:
+    """Values as int16 codes: `round((v - offset) / step)`, clamped to -32767..32767, with NaN as `VALUES_NODATA`.
+
+    Args:
+        values: Values of any shape; NaN (or infinite) where there's no data.
+        step: Value of one code.
+        offset: Value of code 0.
+
+    Returns:
+        The codes, shaped like `values`.
+    """
+    missing = ~np.isfinite(values)
+    codes = np.clip(np.rint((np.where(missing, offset, values) - offset) / step), -32767, 32767).astype(np.int16)
+    codes[missing] = VALUES_NODATA
+    return codes
+
+
 def encode_values(values: np.ndarray, step: float, offset: float, crs: str, transform: Affine, units: str) -> bytes:
     """Store a frame's numbers as an int16 GeoTIFF on the grid they came from (the model's native grid).
 
@@ -244,9 +261,7 @@ def encode_values(values: np.ndarray, step: float, offset: float, crs: str, tran
     Returns:
         The GeoTIFF's bytes.
     """
-    missing = ~np.isfinite(values)
-    codes = np.clip(np.rint((np.where(missing, offset, values) - offset) / step), -32767, 32767).astype(np.int16)
-    codes[missing] = VALUES_NODATA
+    codes = quantize(values, step, offset)
     return _cog_bytes(codes[np.newaxis], crs, transform, VALUES_NODATA, predictor=2, scales=(step,), offsets=(offset,), units=(units,))
 
 

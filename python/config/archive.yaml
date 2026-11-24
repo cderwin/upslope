@@ -1,0 +1,210 @@
+# The forecast archive: recent runs of each model, stored as Zarr in one standard form.
+# Loaded by upslope/archive/config.py; see docs/zarr_architecture.md for the design and python/README.md for the
+# storage layout. Check a model against its live source with `upslope archive-check -m <model>`.
+#
+# variables   The standard variables, by id. Every model stores a variable the same way:
+#   name      Description (the array's long_name).
+#   units     Units it's stored in: degC, m s-1, mm, %, 1, W m-2, hPa, m or degree.
+#   kind      instant (the default), or sum / mean: the amount or mean over the interval ending at each lead time,
+#             since the variable's previous lead time with data. Summing a `sum` over lead times gives the total.
+#   values    {step, min, max}: stored as int16 steps of `step` from min to max (values beyond are clamped).
+#
+# defaults    Settings models take unless they set their own:
+#   chunks    {leads, rows, cols}: the inner chunk, what one read decodes. A point's series reads
+#             leads/chunk-leads chunks; a map of one lead time reads (rows/chunk-rows) x (cols/chunk-cols).
+#   shards    {rows, cols}: grid cells per shard (one stored object, holding every lead time); whole chunks.
+#   keep_runs How many of a model's newest complete runs to keep.
+#   runs_per_check  Most runs of a model archived per check (a new run, plus some backlog).
+#
+# models
+#   id           Storage key; the map's model id where the map shows the model.
+#   source       {kind: dynamical, dataset: <catalog id>} (https://dynamical.org/catalog/), or
+#                {kind: openmeteo, domain: <domain>} (s3://openmeteo/data_run/<domain>/).
+#   region       [west, south, east, north] in degrees: the area kept.
+#   start_times  UTC hours of the runs to archive.
+#   leads        Lead times every run is stored with, as hour ranges {first, last, step}; runs share this axis.
+#   variables    Standard variable -> upstream field: a name, or {fields: [...], derive: ...}:
+#                  value               the field as it is
+#                  run_total           a total since the run started -> the amount over each interval
+#                  run_total_mean      an integral since the run started (W s m-2) -> the mean over each interval
+#                  rate                a rate averaged over each interval (per second) -> the amount over it
+#                  reset_6h_mean       a mean since the last lead divisible by 6 (GFS) -> the mean over each interval
+#                  grid_wind_u/v       eastward / northward wind from grid-relative [u, v]
+#                  speed_direction_u/v eastward / northward wind from [speed, direction it blows from]
+#                  freezing_level      [height] or [height, surface height]: at or below the surface -> 0
+#   chunks, shards, keep_runs   Override the defaults.
+#   lookback_hours  How far back to look for runs (default 48).
+#   attribution  Credit for the data, stored with each run.
+
+variables:
+  temperature_2m: {name: 2 metre temperature, units: degC, values: {step: 0.05, min: -80, max: 60}}
+  dew_point_2m: {name: 2 metre dew point, units: degC, values: {step: 0.05, min: -90, max: 50}}
+  relative_humidity_2m: {name: 2 metre relative humidity, units: "%", values: {step: 0.1, min: 0, max: 100}}
+  wind_u_10m: {name: 10 metre eastward wind, units: m s-1, values: {step: 0.05, min: -150, max: 150}}
+  wind_v_10m: {name: 10 metre northward wind, units: m s-1, values: {step: 0.05, min: -150, max: 150}}
+  wind_gust_10m: {name: 10 metre wind gust, units: m s-1, values: {step: 0.05, min: 0, max: 150}}
+  precipitation: {name: precipitation (water equivalent), units: mm, kind: sum, values: {step: 0.01, min: 0, max: 300}}
+  snowfall_water_equivalent: {name: snowfall water equivalent, units: mm, kind: sum, values: {step: 0.01, min: 0, max: 300}}
+  snow_depth: {name: snow depth, units: m, values: {step: 0.001, min: 0, max: 30}}
+  freezing_level: {name: freezing level height above sea level (0 at or below the surface), units: m, values: {step: 1, min: 0, max: 8000}}
+  cloud_cover: {name: total cloud cover, units: "%", values: {step: 0.1, min: 0, max: 100}}
+  shortwave_radiation: {name: downward shortwave radiation at the surface, units: W m-2, kind: mean, values: {step: 0.1, min: 0, max: 1500}}
+  pressure_msl: {name: pressure reduced to mean sea level, units: hPa, values: {step: 0.01, min: 850, max: 1100}}
+
+defaults:
+  chunks: {leads: 6, rows: 64, cols: 64}
+  shards: {rows: 512, cols: 512}
+  keep_runs: 8
+  runs_per_check: 2
+
+models:
+  - id: hrrr_3km
+    source: {kind: dynamical, dataset: noaa-hrrr-forecast-48-hour-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS NCEP HRRR data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    leads: [{last: 48, step: 1}]
+    variables:
+      temperature_2m: temperature_2m
+      dew_point_2m: dew_point_temperature_2m
+      relative_humidity_2m: relative_humidity_2m
+      # grid-relative components (along the Lambert grid's x and y)
+      wind_u_10m: {fields: [wind_u_10m, wind_v_10m], derive: grid_wind_u}
+      wind_v_10m: {fields: [wind_u_10m, wind_v_10m], derive: grid_wind_v}
+      wind_gust_10m: wind_gust_surface
+      precipitation: {fields: [total_precipitation_run_total_surface], derive: run_total}
+      snowfall_water_equivalent: {fields: [snowfall_water_equivalent_run_total_surface], derive: run_total}
+      snow_depth: snow_thickness_surface
+      # NaN where the freezing level is at or below ground
+      freezing_level: {fields: [geopotential_height_0c_isotherm], derive: freezing_level}
+      cloud_cover: total_cloud_cover_atmosphere
+      shortwave_radiation: downward_short_wave_radiation_flux_surface
+      pressure_msl: pressure_reduced_to_mean_sea_level
+
+  - id: rrfs_3km
+    source: {kind: dynamical, dataset: noaa-rrfs-forecast-84-hour-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS NCEP RRFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    leads: [{last: 84, step: 1}]
+    variables:
+      temperature_2m: temperature_2m
+      dew_point_2m: dew_point_temperature_2m
+      relative_humidity_2m: relative_humidity_2m
+      wind_u_10m: {fields: [wind_u_10m, wind_v_10m], derive: grid_wind_u}
+      wind_v_10m: {fields: [wind_u_10m, wind_v_10m], derive: grid_wind_v}
+      wind_gust_10m: wind_gust_surface
+      precipitation: {fields: [total_precipitation_run_total_surface], derive: run_total}
+      snowfall_water_equivalent: {fields: [total_snow_precipitation_run_total_surface], derive: run_total}
+      snow_depth: snow_thickness_surface
+      # below ground, the height is under the terrain rather than NaN
+      freezing_level: {fields: [geopotential_height_0c_isotherm, geopotential_height_surface], derive: freezing_level}
+      # averaged over the preceding hour: already the mean over each interval
+      cloud_cover: total_cloud_cover_atmosphere
+      shortwave_radiation: downward_short_wave_radiation_flux_surface
+      pressure_msl: pressure_reduced_to_mean_sea_level
+
+  - id: gfs_0.25
+    source: {kind: dynamical, dataset: noaa-gfs-forecast-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS NCEP GFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    leads: [{last: 120, step: 1}, {first: 123, last: 384, step: 3}]
+    # a coarse grid: the region is one chunk across, so longer chunks in time make a point's series fewer reads
+    chunks: {leads: 24}
+    variables:
+      temperature_2m: temperature_2m
+      dew_point_2m: dew_point_temperature_2m
+      relative_humidity_2m: relative_humidity_2m
+      wind_u_10m: wind_u_10m
+      wind_v_10m: wind_v_10m
+      wind_gust_10m: wind_gust_surface
+      precipitation: {fields: [total_precipitation_run_total_surface], derive: run_total}
+      snow_depth: snow_thickness_surface
+      # 0 marks a freezing level at or below the surface
+      freezing_level: {fields: [geopotential_height_0c_isotherm, geopotential_height_surface], derive: freezing_level}
+      cloud_cover: {fields: [total_cloud_cover_atmosphere], derive: reset_6h_mean}
+      shortwave_radiation: {fields: [downward_short_wave_radiation_flux_surface], derive: reset_6h_mean}
+      pressure_msl: pressure_reduced_to_mean_sea_level
+
+  - id: aifs_0.25
+    source: {kind: dynamical, dataset: ecmwf-aifs-single-forecast-virtual}
+    region: [-127, 41.5, -113, 50]
+    attribution: ECMWF AIFS Single forecast data processed by dynamical.org from ECMWF Open Data (CC BY 4.0).
+    start_times: [0, 6, 12, 18]
+    leads: [{last: 360, step: 6}]
+    chunks: {leads: 24}
+    variables:
+      temperature_2m: temperature_2m
+      dew_point_2m: dew_point_temperature_2m
+      wind_u_10m: wind_u_10m
+      wind_v_10m: wind_v_10m
+      precipitation: {fields: [total_precipitation_run_total_surface], derive: run_total}
+      snowfall_water_equivalent: {fields: [snowfall_water_equivalent_run_total_surface], derive: run_total}
+      cloud_cover: total_cloud_cover_atmosphere
+      shortwave_radiation: {fields: [downward_short_wave_radiation_run_total_surface], derive: run_total_mean}
+      pressure_msl: pressure_reduced_to_mean_sea_level
+
+  - id: hrdps_2.5km
+    # a materialized dataset (no virtual one exists): a run appears once it's complete
+    source: {kind: dynamical, dataset: eccc-hrdps-forecast}
+    region: [-127, 41.5, -113, 50]
+    # the ECCC Data Servers End-use Licence 2.1: https://eccc-msc.github.io/open-data/licence/readme_en/
+    attribution: ECCC HRDPS data processed by dynamical.org from Environment and Climate Change Canada (ECCC End-use Licence).
+    start_times: [0, 6, 12, 18]
+    leads: [{last: 48, step: 1}]
+    variables:
+      temperature_2m: temperature_2m
+      dew_point_2m: dew_point_temperature_2m
+      # direction relative to true north, not the rotated grid's
+      wind_u_10m: {fields: [wind_speed_10m, wind_direction_10m], derive: speed_direction_u}
+      wind_v_10m: {fields: [wind_speed_10m, wind_direction_10m], derive: speed_direction_v}
+      wind_gust_10m: wind_gust_10m
+      # a rate averaged since the previous hour
+      precipitation: {fields: [precipitation_surface], derive: rate}
+      # NaN at lead time 0
+      cloud_cover: total_cloud_cover_atmosphere
+      # averaged since the previous hour
+      shortwave_radiation: downward_short_wave_radiation_flux_surface
+      pressure_msl: pressure_reduced_to_mean_sea_level
+
+  - id: ifs_0.25
+    source: {kind: openmeteo, domain: ecmwf_ifs025}
+    region: [-127, 41.5, -113, 50]
+    attribution: ECMWF IFS open data (CC BY 4.0), processed by Open-Meteo (CC BY 4.0).
+    # 00Z and 12Z run to 360 hours; 06Z and 18Z to 144 (their later lead times are empty)
+    start_times: [0, 6, 12, 18]
+    leads: [{last: 144, step: 3}, {first: 150, last: 360, step: 6}]
+    chunks: {leads: 24}
+    variables:
+      temperature_2m: temperature_2m
+      relative_humidity_2m: relative_humidity_2m
+      wind_u_10m: wind_u_component_10m
+      wind_v_10m: wind_v_component_10m
+      wind_gust_10m: wind_gusts_10m
+      # Open-Meteo stores amounts and means over the interval ending at each time
+      precipitation: precipitation
+      snowfall_water_equivalent: snowfall_water_equivalent
+      snow_depth: snow_depth
+      cloud_cover: cloud_cover
+      shortwave_radiation: shortwave_radiation
+      pressure_msl: pressure_msl
+
+  - id: nbm_2.5km
+    source: {kind: openmeteo, domain: ncep_nbm_conus}
+    region: [-127, 41.5, -113, 50]
+    attribution: NOAA NWS National Blend of Models, processed by Open-Meteo (CC BY 4.0).
+    # NBM runs hourly; Open-Meteo keeps one every 3 hours, and the 6-hourly runs share these lead times
+    start_times: [0, 6, 12, 18]
+    leads: [{first: 1, last: 36, step: 1}, {first: 39, last: 192, step: 3}, {first: 198, last: 264, step: 6}]
+    variables:
+      temperature_2m: temperature_2m
+      relative_humidity_2m: relative_humidity_2m
+      wind_u_10m: {fields: [wind_speed_10m, wind_direction_10m], derive: speed_direction_u}
+      wind_v_10m: {fields: [wind_speed_10m, wind_direction_10m], derive: speed_direction_v}
+      wind_gust_10m: wind_gusts_10m
+      # hourly amounts to 36 hours, then 6-hourly (empty at the 3-hourly times between)
+      precipitation: precipitation
+      snowfall_water_equivalent: snowfall_water_equivalent
+      cloud_cover: cloud_cover
+      shortwave_radiation: shortwave_radiation

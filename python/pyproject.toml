@@ -16,6 +16,7 @@ dependencies = [
     "icechunk>=2.3.1",
     "litestar[standard]>=2.25.0",
     "numpy>=2.3.5",
+    "omfiles>=1.2.0",
     "pillow>=11.0.0",
     "pyproj>=3.8.0",
     "pyyaml>=6.0.3",
@@ -46,4 +47,8 @@ module-root = ""
 testpaths = ["tests"]
 # georegistration filters this for the whole process (UW GIFs are placed by our own transform); pytest resets
 # warning filters per test, so mirror it here
-filterwarnings = ["ignore::rasterio.errors.NotGeoreferencedWarning"]
+filterwarnings = [
+    "ignore::rasterio.errors.NotGeoreferencedWarning",
+    # the archive consolidates its Zarr v3 metadata on purpose (one request to open a run)
+    "ignore:Consolidated metadata is currently not part:UserWarning",
+]
