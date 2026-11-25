@@ -179,3 +179,58 @@ def archive_check(config_path: Path, model_id: str, run: datetime | None, output
             each.end_check()
     if problems:
         raise click.ClickException(f"{problems} problem(s)")
+
+
+@click.command()
+@config_option
+@click.option("--bounds", type=float, nargs=4, metavar="W S E N",
+              help="Area in degrees. Defaults to the area every archived model's region fits in.")
+@click.option("-o", "--output", type=click.Path(path_type=Path, file_okay=False),
+              help="Write the build to this folder instead of publishing it to storage.")
+@click.option("--concurrency", type=click.IntRange(1, 16), default=4, show_default=True, help="Tiles built at once.")
+@click.option("-v", "--verbose", is_flag=True, help="Log each tile.")
+def archive_dem(config_path: Path, bounds: tuple[float, float, float, float] | None, output: Path | None, concurrency: int,
+                verbose: bool) -> None:
+    """Build the elevation model point forecasts use and publish it to archive/dem/ in the private bucket.
+
+    USGS 3DEP 1 arc-second, with Copernicus GLO-30 where 3DEP has no data, on one 1 arc-second grid (see
+    upslope/archive/dem.py). Tiles are downloaded from their public buckets, several GB in all. Once uploaded, the
+    build becomes the current one and older builds are deleted. With --output, nothing is written to storage.
+    """
+    import shutil
+    import tempfile
+
+    from upslope.archive.dem import DemBuilder, DemGrid
+    from upslope.archive.store import DEM_BUILD_FORMAT, ArchiveStore, DemIndex
+    from upslope.clients.storage import StorageClient
+
+    configure_logging(verbose)
+    if bounds is None:
+        regions = [model.region for model in load_config(config_path).models]
+        bounds = (min(r[0] for r in regions), min(r[1] for r in regions), max(r[2] for r in regions), max(r[3] for r in regions))
+    try:
+        grid = DemGrid(bounds)
+    except ValueError as e:
+        raise click.ClickException(str(e)) from e
+    # fail on missing credentials before hours of downloading
+    store = None if output is not None else ArchiveStore(StorageClient.build())
+    built_at = datetime.now(UTC)
+    build = f"{built_at:{DEM_BUILD_FORMAT}}.zarr"
+    folder = output or Path(tempfile.mkdtemp(prefix="upslope-dem-"))
+    rows, cols = grid.shape
+    click.echo(f"building {rows} x {cols} cells over {bounds} from {len(grid.tiles())} tiles")
+    try:
+        summary = DemBuilder(grid, concurrency=concurrency).build(folder / build)
+        size = sum(p.stat().st_size for p in (folder / build).rglob("*") if p.is_file())
+        click.echo(f"cells: {summary.cells['3dep']} 3DEP, {summary.cells['glo30']} GLO-30, {summary.cells['none']} empty; "
+                   f"{size / 1e6:.0f} MB")
+        if summary.empty_tiles:
+            click.echo(f"tiles with no data: {', '.join(sorted(summary.empty_tiles))}")
+        if store is None:
+            click.echo(f"wrote {folder / build}")
+            return
+        uploaded = store.publish_dem(folder / build, DemIndex(build, built_at, list(bounds), summary.cells))
+        click.echo(f"published archive/dem/{build} ({uploaded / 1e6:.0f} MB)")
+    finally:
+        if output is None:
+            shutil.rmtree(folder, ignore_errors=True)
