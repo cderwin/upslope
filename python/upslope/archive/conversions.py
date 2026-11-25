@@ -192,7 +192,7 @@ def derive(source: SourceField, fields: list[UpstreamField], grid: RegionGrid) -
             # under the terrain; all are 0, but only at lead times that have data
             below = ~np.isfinite(height) | (height <= 0)
             if len(fields) > 1:
-                surface = _surface(fields[1])
+                surface = time_invariant(fields[1])
                 below |= np.isfinite(surface) & (height <= surface)
             values = np.where(present & below, 0.0, height)
         case _:
@@ -200,7 +200,7 @@ def derive(source: SourceField, fields: list[UpstreamField], grid: RegionGrid) -
     return UpstreamField(first.leads, values.astype(np.float32), units)
 
 
-def _surface(field: UpstreamField) -> np.ndarray:
+def time_invariant(field: UpstreamField) -> np.ndarray:
     """A time-invariant field (e.g. surface height), from its first lead time with data; some models publish it
     at lead time 0 only."""
     present = np.nonzero(_has_data(field.values))[0]

@@ -502,11 +502,22 @@ the S3 settings in `.env.local`.
   the upstream field(s) and how they're converted (`derive`: `run_total`,
   `rate`, `reset_6h_mean`, `run_total_mean`, `grid_wind_u/v`,
   `speed_direction_u/v`, `freezing_level`). A model may override `chunks`,
-  `shards` and `keep_runs`.
+  `shards` and `keep_runs`, and gives its `terrain` (below).
 
-`archive-check -m <model>` reads and standardizes every variable of a run from
-the live source and reports missing fields, units that don't convert, lead
-times off the axis, and each variable's range; it writes nothing to storage.
+Each model's `terrain` is its surface height, stored with every run so point
+forecasts can adjust temperatures from the model's surface to a point's
+elevation: `{field: <name>}` reads an upstream field of the run (its first lead
+time with data), and `{openmeteo: <domain>}` reads Open-Meteo's static
+`data/<domain>/static/HSURF.om` (the sea at 0 m), used only where its grid's
+cells line up with the run's to within a tenth of a cell. The model's own field
+comes first; HRDPS (none on dynamical.org), IFS and NBM use Open-Meteo's. A run
+whose terrain can't be read is still archived, without it, and the check's
+status says why.
+
+`archive-check -m <model>` reads and standardizes every variable of a run, and
+its terrain, from the live source and reports missing fields, units that don't
+convert, lead times off the axis, and each variable's range; it writes nothing
+to storage.
 
 ### Checks
 
@@ -522,8 +533,9 @@ Each check, per model (two at a time, each in a thread):
 2. Archiving a run reads each variable's upstream fields over the region (a
    dynamical.org variable at every lead time at once; an Open-Meteo file
    downloaded whole and cropped), standardizes it (`archive/conversions.py`),
-   and writes it to a local store one variable at a time. A variable whose
-   field the source lacks is left out and reported in the status.
+   and writes it to a local store one variable at a time, then the model's
+   terrain. A variable whose field the source lacks, or terrain that can't be
+   read, is left out and reported in the status.
 3. The store is uploaded, the run is listed in the model's `index.json`, and
    runs beyond `keep_runs` are dropped from the index and then deleted. Run
    folders the index doesn't list (from an archive that stopped part way) are
@@ -553,6 +565,7 @@ A run is a Zarr v3 group:
 | `init_time` | The run's start (CF time) |
 | `y`, `x` | Cell centres in the grid's CRS; `y` north to south |
 | `spatial_ref` | The grid's `crs_wkt` and GDAL `GeoTransform` |
+| `surface_height` | `(y, x)` int16: the model's terrain in whole metres (CF encoding as for variables), `source` saying where it came from; absent if it couldn't be read |
 
 Group attributes: `model`, `source`, `init_time`, `fingerprint`,
 `archived_at`, `attribution`, `layout_version`. Variables are chunked by the

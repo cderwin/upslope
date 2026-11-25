@@ -7,12 +7,16 @@ longitude, which with the file's shape gives the grid (Open-Meteo's grids are re
 
 A file is downloaded whole and cropped locally: its chunks are time series, so reading a region by ranges takes
 thousands of requests, while the whole file (50-180 MB) downloads in seconds.
+
+Each domain's surface height is a static file, `data/<domain>/static/HSURF.om` (y, x), whose CRS (with the same
+BBOX convention) is in the `meta.json` beside it. Sea cells hold -999 there.
 """
 
 import json
 import re
 import shutil
 import tempfile
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -25,6 +29,7 @@ from upslope.archive.config import ArchiveModel, OpenMeteoRunsConfig
 from upslope.archive.conversions import MissingField, UpstreamField
 from upslope.archive.grid import RegionGrid
 from upslope.archive.sources.base import FieldCache
+from upslope.archive.terrain import StaticGrid
 from upslope.logging import get_logger, log_duration
 from upslope.models.dynamical.source import GridWindow, window_from_coords
 
@@ -32,6 +37,9 @@ logger = get_logger(__name__)
 
 # The open-data bucket (us-west-2), read anonymously over HTTPS
 BASE_URL = "https://openmeteo.s3.amazonaws.com/data_run"
+STATIC_URL = "https://openmeteo.s3.amazonaws.com/data/{domain}/static"
+# What Open-Meteo's static surface height holds over the sea
+SEA_HEIGHT = -999.0
 # Generous read timeout: a file streams for several seconds, but no single read should stall this long
 HTTP_TIMEOUT = httpx.Timeout(60.0, connect=10.0)
 _BBOX = re.compile(r"BBOX\[([^\]]+)\]")
@@ -86,6 +94,22 @@ def read_om(path: Path, region: tuple[float, float, float, float], initialized: 
     if window.flip:
         values = values[:, ::-1, :]
     return UpstreamField((times - reference) / 3600.0, np.ascontiguousarray(values), units), window
+
+
+def read_static_height(path: Path, crs: str) -> StaticGrid:
+    """Read a domain's `HSURF.om` (blocking): its surface height in metres, with the sea at 0."""
+    from omfiles import OmFileReader
+
+    reader = OmFileReader.from_path(str(path))
+    try:
+        if len(reader.shape) != 2:
+            raise ValueError(f"{path.name} is shaped {reader.shape}, not (y, x)")
+        values = np.asarray(reader.read_array((slice(None), slice(None))), dtype=np.float32)
+    finally:
+        reader.close()
+    xs, ys = file_grid(crs, values.shape)
+    # the sea's surface is at sea level; Open-Meteo marks it so its own point lookups prefer land cells
+    return StaticGrid(np.where(values == SEA_HEIGHT, np.float32(0), values), crs, xs, ys)
 
 
 @define
@@ -149,6 +173,8 @@ class OpenMeteoRunSource:
     """
 
     client: httpx.Client = field(factory=lambda: httpx.Client(timeout=HTTP_TIMEOUT, follow_redirects=True))
+    _lock: threading.Lock = field(factory=threading.Lock, init=False)
+    _heights: dict[str, StaticGrid] = field(factory=dict, init=False)
 
     def run_meta(self, model: ArchiveModel, initialized: datetime) -> dict | None:
         """A run's `meta.json` (its variables and valid times), or None if the run isn't complete."""
@@ -169,5 +195,30 @@ class OpenMeteoRunSource:
         variables = frozenset(meta.get("variables", ()))
         return OpenMeteoRunReader(self.client, run_url(_domain(model), initialized), model.region, initialized.astimezone(UTC), variables)
 
+    def surface_height(self, domain: str) -> StaticGrid:
+        """A domain's static surface height in metres, read once per check (see `StaticHeights`).
+
+        Raises MissingField if the domain has none.
+        """
+        with self._lock:
+            if (heights := self._heights.get(domain)) is not None:
+                return heights
+        url = STATIC_URL.format(domain=domain)
+        meta = self.client.get(f"{url}/meta.json")
+        response = self.client.get(f"{url}/HSURF.om")
+        if meta.status_code in (403, 404) or response.status_code in (403, 404):
+            raise MissingField(f"{url} has no surface height")
+        meta.raise_for_status()
+        response.raise_for_status()
+        with tempfile.NamedTemporaryFile(prefix="upslope-om-", suffix=".om") as file:
+            file.write(response.content)
+            file.flush()
+            heights = read_static_height(Path(file.name), json.loads(meta.content)["crs_wkt"])
+        with self._lock:
+            self._heights[domain] = heights
+        return heights
+
     def end_check(self) -> None:
-        """Nothing is kept between runs."""
+        """Drop the static heights read in the check; nothing else is kept between runs."""
+        with self._lock:
+            self._heights.clear()

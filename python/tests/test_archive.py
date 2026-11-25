@@ -22,14 +22,16 @@ from upslope.archive.config import (
     OpenMeteoRunsConfig,
     ShardShape,
     SourceField,
+    TerrainConfig,
 )
 from upslope.archive.conversions import MissingField, UpstreamField, align, convert_units, derive, standardize
 from upslope.archive.driver import ArchiveDriver
 from upslope.archive.grid import RegionGrid
 from upslope.archive.loop import ArchiveLoop
 from upslope.archive.sources.dynamical import DynamicalRunSource
-from upslope.archive.sources.openmeteo import OpenMeteoRunSource, run_url
+from upslope.archive.sources.openmeteo import STATIC_URL, OpenMeteoRunSource, run_url
 from upslope.archive.store import STATUS, ArchiveStore
+from upslope.archive.terrain import StaticGrid, sample_static
 from upslope.archive.writer import RunWriter
 from upslope.cli import DEFAULT_ARCHIVE_CONFIG
 from upslope.models.config import ConfigError, HourRange, ValueQuantization
@@ -121,6 +123,39 @@ def test_fingerprint_follows_what_is_stored() -> None:
     assert config(model(chunks=ChunkShape(leads=4))).fingerprint(model(chunks=ChunkShape(leads=4))) != base.fingerprint(base.models[0])
     other = model(variables={"temperature_2m": SourceField(("t2m",))})
     assert config(other).fingerprint(other) != base.fingerprint(base.models[0])
+    # adding terrain archives runs again, which is how existing runs gain it
+    with_terrain = model(terrain=TerrainConfig(field="geopotential_height_surface"))
+    assert config(with_terrain).fingerprint(with_terrain) != base.fingerprint(base.models[0])
+
+
+def test_terrain_config() -> None:
+    for wrong in (TerrainConfig, lambda: TerrainConfig(field="h", openmeteo="d")):
+        with pytest.raises(ConfigError, match="one of field or openmeteo"):
+            wrong()
+    loaded = ArchiveConfig.load(DEFAULT_ARCHIVE_CONFIG)
+    assert all(m.terrain is not None for m in loaded.models)
+    assert loaded.model("hrrr_3km").terrain == TerrainConfig(field="geopotential_height_surface")
+    assert loaded.model("hrdps_2.5km").terrain == TerrainConfig(openmeteo="cmc_gem_hrdps")
+
+
+# --- terrain
+
+
+def static_lat_lon(offset: float = 0.25, south: float = 30.0) -> StaticGrid:
+    """A 0.5° static grid, rows south to north like Open-Meteo's: height = 10 x latitude + longitude. The default
+    offset puts its cell centres on `lat_lon_grid`'s."""
+    lats, lons = np.arange(south, 60.0, 0.5) + offset, np.arange(-140.0, -100.0, 0.5) + offset
+    return StaticGrid((10 * lats[:, None] + lons[None, :]).astype(np.float32), CRS.from_epsg(4326).to_wkt(), lons, lats)
+
+
+def test_static_terrain_is_sampled_only_where_the_grids_line_up() -> None:
+    grid = lat_lon_grid((10, 20))
+    lon, lat = grid.lon_lat()
+    np.testing.assert_allclose(sample_static(static_lat_lon(), grid), 10 * lat + lon)  # north up, like the run
+    with pytest.raises(ValueError, match="0.50 cells"):
+        sample_static(static_lat_lon(offset=0.0), grid)  # cells half a cell apart: another model's grid
+    with pytest.raises(ValueError, match="beyond the static grid"):
+        sample_static(static_lat_lon(south=46.0), grid)
 
 
 # --- conversions
@@ -269,10 +304,22 @@ class FakeSource:
         return FakeReader(lat_lon_grid(shape), {
             "temperature_2m": field([0, 3, 6], [initialized.hour, 1, 2], "degree_Celsius", shape),
             "total_precipitation_run_total_surface": field([0, 3, 6], [0, 1, 3], "kg m-2", shape),
+            # published at lead time 3 only
+            "geopotential_height_surface": field([0, 3, 6], [np.nan, 1234, np.nan], "m", shape),
         })
 
     def end_check(self) -> None:
         self.ended += 1
+
+
+def download_run(storage, model_id: str, initialized: datetime, folder: Path) -> xr.Dataset:
+    """An uploaded run, copied to a local folder and opened."""
+    prefix = ArchiveStore.run_prefix(model_id, initialized)
+    for key in storage.list_keys(prefix):
+        local = folder / key.removeprefix(prefix)
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_bytes(storage.objects[key][0])
+    return xr.open_zarr(folder, consolidated=True)
 
 
 def driver(storage, complete: set[datetime], archive_config: ArchiveConfig | None = None, now: datetime = NOW) -> ArchiveDriver:
@@ -309,11 +356,7 @@ def test_driver_uploads_the_root_metadata_last_and_round_trips(memory_storage, t
     assert run_puts.index(prefix + "precipitation/zarr.json") > run_puts.index(prefix + "precipitation/c/0/0/0")
     assert memory_storage.puts[-1] == "archive/test/index.json"
     # the uploaded objects are a readable store
-    for key in memory_storage.list_keys(prefix):
-        local = tmp_path / key.removeprefix(prefix)
-        local.parent.mkdir(parents=True, exist_ok=True)
-        local.write_bytes(memory_storage.objects[key][0])
-    dataset = xr.open_zarr(tmp_path, consolidated=True)
+    dataset = download_run(memory_storage, "test", RUN, tmp_path)
     np.testing.assert_allclose(dataset["precipitation"].values[:, 0, 0], [np.nan, 1, 2], atol=0.006)
     np.testing.assert_allclose(dataset["temperature_2m"].values[:, 0, 0], [0, 1, 2], atol=0.03)
 
@@ -326,6 +369,24 @@ def test_driver_archives_again_when_the_config_changes(memory_storage) -> None:
     assert archive.store.read_index("test").runs[0].fingerprint == archive.config.fingerprint(changed)
     assert asyncio.run(archive.run())[0].runs == []
     assert asyncio.run(archive.run(force=True))[0].runs == ["20261108T00"]
+
+
+def test_driver_stores_the_terrain_or_says_why_not(memory_storage, tmp_path: Path) -> None:
+    with_terrain = model(terrain=TerrainConfig(field="geopotential_height_surface"))
+    status = asyncio.run(driver(memory_storage, {RUN}, config(with_terrain)).run())[0]
+    assert status.state == "ok" and status.warnings == []
+    terrain = download_run(memory_storage, "test", RUN, tmp_path / "with")["surface_height"]
+    assert terrain.dims == ("y", "x") and terrain.attrs["units"] == "m"
+    assert terrain.attrs["source"] == "geopotential_height_surface"
+    np.testing.assert_array_equal(terrain.values, 1234)  # its first lead time with data
+
+    # a model whose source lacks the field is still archived, without terrain, and the status says why
+    lacking = model(terrain=TerrainConfig(field="orography"))
+    status = asyncio.run(driver(memory_storage, {RUN}, config(lacking)).run())[0]
+    assert status.state == "ok" and status.runs == ["20261108T00"]
+    assert "no terrain" in status.warnings[0] and "orography" in status.warnings[0]
+    dataset = download_run(memory_storage, "test", RUN, tmp_path / "without")
+    assert "surface_height" not in dataset and "temperature_2m" in dataset
 
 
 def test_driver_reports_missing_fields_and_removes_strays(memory_storage) -> None:
@@ -417,6 +478,13 @@ def test_dynamical_source_reads_runs_over_the_region() -> None:
 # --- Open-Meteo source
 
 
+def write_static_om(path: Path, data: np.ndarray) -> None:
+    from omfiles import OmFileWriter
+
+    writer = OmFileWriter(str(path))
+    writer.close(writer.write_array(data.astype(np.float32), chunks=[10, 10], scale_factor=10, name=""))
+
+
 def write_om(path: Path, data: np.ndarray, crs: str, reference: datetime, leads: list[int], unit: str) -> None:
     from omfiles import OmFileWriter
 
@@ -449,6 +517,12 @@ def openmeteo_transport(tmp_path: Path) -> httpx.MockTransport:
     write_om(tmp_path / "temperature_2m.om", temperature, OM_WKT, RUN, leads, "°C")
     files = {f"{run_url('test_domain', RUN)}/temperature_2m.om": (tmp_path / "temperature_2m.om").read_bytes()}
     files[f"{run_url('test_domain', RUN)}/meta.json"] = json.dumps({"variables": ["temperature_2m", "cloud_cover"]}).encode()
+    # the domain's static surface height, on the same grid: 10 x latitude + longitude, with one sea cell
+    heights = 10 * lats[:, None] + lons[None, :]
+    heights[0, 0] = -999
+    write_static_om(tmp_path / "HSURF.om", heights)
+    files[f"{STATIC_URL.format(domain='test_domain')}/HSURF.om"] = (tmp_path / "HSURF.om").read_bytes()
+    files[f"{STATIC_URL.format(domain='test_domain')}/meta.json"] = json.dumps({"crs_wkt": OM_WKT}).encode()
 
     def handle(request: httpx.Request) -> httpx.Response:
         data = files.get(str(request.url))
@@ -487,3 +561,31 @@ def test_openmeteo_run_archives_end_to_end(tmp_path: Path, memory_storage) -> No
     archive = ArchiveDriver(config(m), {"openmeteo": source}, ArchiveStore(memory_storage), now=lambda: NOW)
     status = asyncio.run(archive.run())[0]
     assert status.state == "ok" and status.runs == ["20261108T00"]
+
+
+def test_openmeteo_static_heights(tmp_path: Path) -> None:
+    source = OpenMeteoRunSource(httpx.Client(transport=openmeteo_transport(tmp_path)))
+    heights = source.surface_height("test_domain")
+    assert heights.values.shape == (61, 81) and heights.ys[0] == 30.0 and heights.xs[0] == -140.0
+    assert heights.values[0, 0] == 0  # the sea
+    assert heights.values[1, 0] == pytest.approx(10 * 30.5 - 140)
+    assert source.surface_height("test_domain") is heights  # read once per check
+    source.end_check()
+    assert source.surface_height("test_domain") is not heights
+    with pytest.raises(MissingField):
+        source.surface_height("other_domain")
+
+
+def test_openmeteo_run_archives_with_static_terrain(tmp_path: Path, memory_storage) -> None:
+    source = OpenMeteoRunSource(httpx.Client(transport=openmeteo_transport(tmp_path)))
+    m = model(OpenMeteoRunsConfig("test_domain"), variables={"temperature_2m": SourceField(("temperature_2m",))},
+              terrain=TerrainConfig(openmeteo="test_domain"))
+    archive = ArchiveDriver(config(m), {"openmeteo": source}, ArchiveStore(memory_storage), heights=source,
+                            now=lambda: NOW)
+    status = asyncio.run(archive.run())[0]
+    assert status.state == "ok" and status.warnings == []
+    dataset = download_run(memory_storage, "test", RUN, tmp_path / "run")
+    terrain = dataset["surface_height"]
+    expected = 10 * dataset["y"].values[:, None] + dataset["x"].values[None, :]
+    np.testing.assert_allclose(terrain.values, expected, atol=0.5)  # whole metres
+    assert terrain.attrs["source"] == "Open-Meteo test_domain static HSURF"

@@ -108,8 +108,8 @@ def archive_check(config_path: Path, model_id: str, run: datetime | None, output
     """Check a model's config against its live source: read and standardize every variable of a run.
 
     Reports each variable's upstream fields that are missing, units that don't convert, lead times that don't fit
-    the model's lead axis, and the range of its values (a quick check of units and conversions). Nothing is
-    written to storage; with --output, the run's store is written to a local folder.
+    the model's lead axis, and the range of its values (a quick check of units and conversions), then the same for
+    the model's terrain. Nothing is written to storage; with --output, the run's store is written to a local folder.
     """
     import tempfile
 
@@ -117,13 +117,17 @@ def archive_check(config_path: Path, model_id: str, run: datetime | None, output
 
     from upslope.archive.conversions import MissingField, standardize
     from upslope.archive.loop import build_sources
+    from upslope.archive.sources.openmeteo import OpenMeteoRunSource
+    from upslope.archive.terrain import model_terrain
     from upslope.archive.writer import RunWriter
 
     configure_logging(verbose)
     config = load_config(config_path, (model_id,))
     model = config.model(model_id)
     assert model is not None
-    source = build_sources()[model.source.kind]
+    sources = build_sources()
+    source = sources[model.source.kind]
+    heights = sources["openmeteo"] if isinstance(sources["openmeteo"], OpenMeteoRunSource) else None
     initialized = resolve_run(source, model, run)
     click.echo(f"{model.id} ({model.source.describe()}) run {initialized:%Y-%m-%d %HZ}, {len(model.lead_hours)} lead times:")
     problems = 0
@@ -153,6 +157,17 @@ def archive_check(config_path: Path, model_id: str, run: datetime | None, output
             if output is not None:
                 writer = writer or RunWriter(folder / f"{initialized:%Y%m%dT%H}.zarr", reader.grid, model.lead_hours, chunks, shards, initialized, {"model": model.id})
                 writer.write(variable, values, source_field.describe())
+        if model.terrain is not None:
+            try:
+                terrain, terrain_source = model_terrain(model, reader, heights)
+                finite = terrain[np.isfinite(terrain)]
+                summary = f"{finite.min():.0f} to {finite.max():.0f} m" if finite.size else "no data"
+                click.echo(f"  ok       terrain <- {terrain_source}: {summary}, {finite.size}/{terrain.size} cells")
+                if writer is not None:
+                    writer.write_terrain(terrain, terrain_source)
+            except (MissingField, ValueError) as e:
+                problems += 1
+                click.echo(f"  PROBLEM  terrain <- {model.terrain.describe()}: {e}")
         if writer is not None:
             writer.finish()
             click.echo(f"wrote {folder / f'{initialized:%Y%m%dT%H}.zarr'}")
@@ -160,6 +175,7 @@ def archive_check(config_path: Path, model_id: str, run: datetime | None, output
         click.echo(f"grid: {grid.shape[0]} x {grid.shape[1]} cells, transform {grid.geo_transform}")
     finally:
         reader.close()
-        source.end_check()
+        for each in sources.values():
+            each.end_check()
     if problems:
-        raise click.ClickException(f"{problems} variable(s) with problems")
+        raise click.ClickException(f"{problems} problem(s)")

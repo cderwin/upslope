@@ -109,9 +109,12 @@ later the map) are written against.
   as 0 by GFS, NaN by HRRR and a negative height by RRFS; the archive stores one convention.
 - **Wind is stored as earth-relative u/v** (HRRR and RRFS components are grid-relative upstream and need
   rotating), so speed and direction can both be derived.
-- **Static fields per model (planned):** model surface elevation (orography) and land mask. At mountain points, model
-  terrain can be far below the real elevation. At Camp Muir, GFS gave 34.5 °F and HRRR 8.7 °F for the same hour.
-  The terrain height is what allows an elevation adjustment.
+- **Model terrain is stored with every run** (`surface_height`, whole metres). At mountain points, model terrain can
+  be far below the real elevation. At Camp Muir, GFS gave 34.5 °F and HRRR 8.7 °F for the same hour. The terrain
+  height is what allows an elevation adjustment. It comes from the model's own surface height field where the source
+  publishes one (HRRR, RRFS, GFS, AIFS), else from Open-Meteo's static height for the same model (HRDPS, IFS, NBM),
+  checked to be on the same grid. It's kept in each run, not a separate static store, so it always matches the run's
+  grid and needs no lifecycle of its own; it costs well under 1 MB per run. A land mask is still planned.
 - **Encoding:** int16 values in fixed steps per variable, decoded with CF `scale_factor` (and `_FillValue`
   -32768 for missing data). This is the same idea as the `values: {step, min, max}` of `config/models.yaml`, and
   Open-Meteo stores its data the same way. Blosc zstd level 5 with byte shuffle. The measured size is 0.5–0.7
@@ -128,7 +131,7 @@ archive/<model>/runs/<YYYYMMDDTHH>.zarr/      one run (Zarr v3, consolidated met
     lead_time/  init_time/  y/  x/            coordinates (1-D; the grid is regular in its own CRS)
     spatial_ref/                              grid CRS (WKT) and GeoTransform
     <variable>/c/0/0/0                        a shard: (lead_time, y, x) int16
-archive/<model>/static.zarr/                  orography, land mask (planned)
+    surface_height/                           the model's terrain: (y, x) int16 metres
 archive/<model>/view.icechunk/                virtual multi-run view (planned; see below)
 ```
 

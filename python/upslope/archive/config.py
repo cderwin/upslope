@@ -137,6 +137,30 @@ class OpenMeteoRunsConfig:
 
 ArchiveSourceConfig = DynamicalRunsConfig | OpenMeteoRunsConfig
 
+
+@define(frozen=True)
+class TerrainConfig:
+    """Where a model's terrain (surface height above sea level) comes from; give exactly one.
+
+    Prefer the model's own `field` where its source publishes one; otherwise Open-Meteo's static surface height for
+    the same model (`openmeteo`), used only where its grid lines up with the run's.
+
+    Attributes:
+        field: An upstream field of the run, e.g. `geopotential_height_surface` (its first lead time with data).
+        openmeteo: An Open-Meteo domain whose `data/<domain>/static/HSURF.om` gives it, e.g. `cmc_gem_hrdps`.
+    """
+
+    field: str | None = None
+    openmeteo: str | None = None
+
+    def __attrs_post_init__(self) -> None:
+        if (self.field is None) == (self.openmeteo is None):
+            raise ConfigError("terrain takes one of field or openmeteo")
+
+    def describe(self) -> str:
+        """Where the terrain came from, for the stored array's `source` attribute."""
+        return self.field if self.field is not None else f"Open-Meteo {self.openmeteo} static HSURF"
+
 # How a standard variable is computed from upstream fields (see SourceField)
 Derivation = Literal[
     "value", "run_total", "run_total_mean", "rate", "reset_6h_mean", "grid_wind_u", "grid_wind_v",
@@ -205,6 +229,7 @@ class ArchiveModel:
         keep_runs: How many of its newest runs to keep; None for `defaults.keep_runs`.
         lookback_hours: How far back to look for runs to archive.
         attribution: Credit for the data, stored with each run.
+        terrain: Where the model's terrain comes from, stored with each run; None if it has none.
     """
 
     id: str
@@ -218,6 +243,7 @@ class ArchiveModel:
     keep_runs: int | None = None
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS
     attribution: str | None = None
+    terrain: TerrainConfig | None = None
 
     def __attrs_post_init__(self) -> None:
         check_id("model", self.id)
@@ -305,7 +331,7 @@ class ArchiveConfig:
         return model.keep_runs or self.defaults.keep_runs
 
     def fingerprint(self, model: ArchiveModel) -> str:
-        """Identify what a run of `model` is stored as: its source, grid, leads, chunking and each variable.
+        """Identify what a run of `model` is stored as: its source, grid, leads, chunking, variables and terrain.
 
         Returns:
             A short hex digest. A run archived under another digest is archived again (see `ArchiveDriver`).
@@ -321,6 +347,7 @@ class ArchiveConfig:
                               self.variable(variable_id).kind, self.variable(variable_id).values.fingerprint_payload()]
                 for variable_id, source in sorted(model.variables.items())
             },
+            "terrain": [model.terrain.field, model.terrain.openmeteo] if model.terrain else None,
         }
         return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
