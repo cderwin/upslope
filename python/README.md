@@ -16,6 +16,7 @@ uv run upslope render-frame -m gfs_0.25 -l surface-temp --hour 24 out.webp  # pr
 uv run upslope archive-check -m hrrr_3km     # read and standardize a run of an archived model (--run, -o DIR to keep the store)
 uv run upslope archive-run                   # one archive check of every model (or -m MODEL; --force)
 uv run upslope archive-loop                  # the archiver: a check every 15 min, forever (--interval, --run-immediately)
+uv run upslope archive-dem                   # build and publish the elevation model (-o DIR to keep it local; --bounds)
 ```
 
 `registration-error` reads the annotations published in storage;
@@ -544,6 +545,25 @@ Each check, per model (two at a time, each in a thread):
 A model taking longer than 40 minutes is reported as failed; its thread can't
 be stopped, so the model is skipped until it finishes.
 
+### Elevation model
+
+Point forecasts adjust temperatures from a model's terrain to a point's own
+elevation, taken from one DEM over the archived models' area: USGS 3DEP
+1 arc-second (bare earth, which covers the US and southern BC), with
+Copernicus GLO-30 (a surface model that includes the tree canopy) where 3DEP
+has no data. Both have 1° tiles in public buckets. The DEM uses 3DEP's
+1 arc-second (~30 m) grid, so 3DEP cells are copied as they are. GLO-30's cells
+are half a cell off that grid, so each DEM cell takes the mean of the 2 × 2
+GLO-30 cells around it. Heights are whole metres, and cells neither covers
+(the sea) are empty. A `source` array records where each cell came from
+(`upslope/archive/dem.py`).
+
+It changes only when rebuilt by hand: `upslope archive-dem` downloads every
+tile, builds the store locally (about 1 GB, a few minutes) and publishes it.
+The build is uploaded first, then named in `archive/dem/index.json`, and only
+then are older builds deleted. `-o DIR` writes the build locally and doesn't
+publish it; `--bounds W S E N` builds a smaller area.
+
 ### Archive layout
 
 | Key (private bucket) | Contents |
@@ -551,6 +571,8 @@ be stopped, so the model is skipped until it finishes.
 | `archive/status.json` | The archiver's last check: `state`, `check`, times, and each model's `state`, archived `runs`, `warnings` and `error` |
 | `archive/<model>/index.json` | The model's runs, newest first: `{init_time, fingerprint, archived_at, variables}` |
 | `archive/<model>/runs/<YYYYMMDDTHH>.zarr/` | One run (below) |
+| `archive/dem/index.json` | The current elevation model build: `{build, built_at, bounds, cells}` (cells by source) |
+| `archive/dem/<YYYYMMDDTHHMM>.zarr/` | One build: `elevation` (`(y, x)` int16 metres, -32768 where unknown) and `source` (uint8: 0 none, 1 3DEP, 2 GLO-30), each 1° tile one shard; `y`, `x` (latitude north to south, longitude), `spatial_ref`, attribution |
 
 A run's chunks are uploaded first, then each array's `zarr.json`, then the
 root `zarr.json` with the consolidated metadata; the index lists a run only

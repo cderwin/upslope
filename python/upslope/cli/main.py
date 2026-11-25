@@ -1,6 +1,6 @@
 import click
 
-from upslope.cli.archive import archive_check, archive_loop, archive_run
+from upslope.cli.archive import archive_check, archive_dem, archive_loop, archive_run
 from upslope.cli.dynamical import render_frame
 from upslope.cli.georegistration import georegistration
 from upslope.cli.manifest import export_loop, export_web
@@ -23,6 +23,7 @@ main.add_command(render_frame)
 main.add_command(archive_loop)
 main.add_command(archive_run)
 main.add_command(archive_check)
+main.add_command(archive_dem)
 
 
 if __name__ == "__main__":
