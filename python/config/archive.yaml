@@ -18,6 +18,7 @@
 #
 # models
 #   id           Storage key; the map's model id where the map shows the model.
+#   name         Display name (point forecasts); defaults to the id.
 #   source       {kind: dynamical, dataset: <catalog id>} (https://dynamical.org/catalog/), or
 #                {kind: openmeteo, domain: <domain>} (s3://openmeteo/data_run/<domain>/).
 #   region       [west, south, east, north] in degrees: the area kept.
@@ -63,6 +64,7 @@ defaults:
 
 models:
   - id: hrrr_3km
+    name: HRRR
     source: {kind: dynamical, dataset: noaa-hrrr-forecast-48-hour-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS NCEP HRRR data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
@@ -87,6 +89,7 @@ models:
       pressure_msl: pressure_reduced_to_mean_sea_level
 
   - id: rrfs_3km
+    name: RRFS
     source: {kind: dynamical, dataset: noaa-rrfs-forecast-84-hour-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS NCEP RRFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
@@ -111,6 +114,7 @@ models:
       pressure_msl: pressure_reduced_to_mean_sea_level
 
   - id: gfs_0.25
+    name: GFS
     source: {kind: dynamical, dataset: noaa-gfs-forecast-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS NCEP GFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
@@ -135,6 +139,7 @@ models:
       pressure_msl: pressure_reduced_to_mean_sea_level
 
   - id: aifs_0.25
+    name: ECMWF AIFS
     source: {kind: dynamical, dataset: ecmwf-aifs-single-forecast-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: ECMWF AIFS Single forecast data processed by dynamical.org from ECMWF Open Data (CC BY 4.0).
@@ -154,6 +159,7 @@ models:
       pressure_msl: pressure_reduced_to_mean_sea_level
 
   - id: hrdps_2.5km
+    name: HRDPS
     # a materialized dataset (no virtual one exists): a run appears once it's complete
     source: {kind: dynamical, dataset: eccc-hrdps-forecast}
     region: [-127, 41.5, -113, 50]
@@ -179,6 +185,7 @@ models:
       pressure_msl: pressure_reduced_to_mean_sea_level
 
   - id: ifs_0.25
+    name: ECMWF IFS
     source: {kind: openmeteo, domain: ecmwf_ifs025}
     region: [-127, 41.5, -113, 50]
     attribution: ECMWF IFS open data (CC BY 4.0), processed by Open-Meteo (CC BY 4.0).
@@ -202,6 +209,7 @@ models:
       pressure_msl: pressure_msl
 
   - id: nbm_2.5km
+    name: NBM
     source: {kind: openmeteo, domain: ncep_nbm_conus}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS National Blend of Models, processed by Open-Meteo (CC BY 4.0).
