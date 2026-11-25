@@ -5,7 +5,8 @@ newest first, so a new run is archived promptly and a backlog (a new model, a co
 over a few checks. A run archived under an older config (its fingerprint differs) is archived again.
 
 Archiving a run reads each standard variable's upstream fields, standardizes it (`conversions.standardize`) and
-writes it to a local Zarr store one variable at a time, then uploads the store and lists it in the model's index.
+writes it to a local Zarr store one variable at a time, with the model's terrain (`archive/terrain.py`), then
+uploads the store and lists it in the model's index. A run whose terrain can't be had is archived without it.
 All of that is blocking, so each model runs in a thread; models run concurrently, a few at a time.
 """
 
@@ -23,6 +24,7 @@ from upslope.archive.config import ArchiveConfig, ArchiveModel
 from upslope.archive.conversions import MissingField, standardize
 from upslope.archive.sources.base import ArchiveSource
 from upslope.archive.store import ArchivedRun, ArchiveIndex, ArchiveStore, ModelArchiveStatus, run_key
+from upslope.archive.terrain import StaticHeights, model_terrain
 from upslope.archive.writer import RunWriter
 from upslope.logging import get_logger, log_context, log_duration
 
@@ -44,16 +46,24 @@ class RunResult:
         missing: Standard variables left out because the upstream doesn't publish their fields.
         dropped: Variable -> upstream lead times left out because they aren't on the model's lead-time axis.
         bytes: Size of the stored run.
+        terrain_problem: Why the run has no terrain, if the model has one configured but it couldn't be stored.
     """
 
     run: ArchivedRun
     missing: list[str]
     dropped: dict[str, list[float]]
     bytes: int
+    terrain_problem: str | None = None
 
 
 def archive_run(
-    config: ArchiveConfig, model: ArchiveModel, source: ArchiveSource, initialized: datetime, folder: Path, now: datetime
+    config: ArchiveConfig,
+    model: ArchiveModel,
+    source: ArchiveSource,
+    initialized: datetime,
+    folder: Path,
+    now: datetime,
+    heights: StaticHeights | None = None,
 ) -> tuple[RunResult, Path]:
     """Read and standardize one run into a local store (blocking).
 
@@ -64,6 +74,7 @@ def archive_run(
         initialized: When the run started.
         folder: Folder to write the store in.
         now: When it's archived.
+        heights: Open-Meteo's static heights, for models whose terrain comes from there.
 
     Returns:
         The result (its size not yet known) and the store's folder. Raises MissingField if the source has none of
@@ -105,11 +116,20 @@ def archive_run(
             written.append(variable_id)
         if writer is None:
             raise MissingField(f"{model.source.describe()} has none of {model.id}'s variables")
+        terrain_problem = None
+        if model.terrain is not None:
+            try:
+                terrain, terrain_source = model_terrain(model, reader, heights)
+                writer.write_terrain(terrain, terrain_source)
+            except (MissingField, ValueError) as e:
+                # the forecast is still worth keeping; point forecasts just can't adjust it to an elevation
+                logger.warning("terrain left out: %s", e)
+                terrain_problem = str(e)
         writer.finish()
     finally:
         reader.close()
     run = ArchivedRun(initialized, config.fingerprint(model), now, written)
-    return RunResult(run, missing, dropped, 0), path
+    return RunResult(run, missing, dropped, 0, terrain_problem), path
 
 
 def _sorted_runs(runs: list[ArchivedRun]) -> list[ArchivedRun]:
@@ -124,6 +144,7 @@ class ArchiveDriver:
         config: The archive config.
         sources: Source of each kind (`dynamical`, `openmeteo`).
         store: The archive in the bucket.
+        heights: Open-Meteo's static surface heights, for models whose terrain comes from there.
         concurrency: Models archived at once.
         model_timeout: Most seconds a model may take in a check; None for no limit.
         now: Clock, for tests.
@@ -132,6 +153,7 @@ class ArchiveDriver:
     config: ArchiveConfig
     sources: dict[str, ArchiveSource]
     store: ArchiveStore
+    heights: StaticHeights | None = None
     concurrency: int = MODEL_CONCURRENCY
     model_timeout: float | None = MODEL_TIMEOUT
     now: Callable[[], datetime] = lambda: datetime.now(UTC)
@@ -218,6 +240,8 @@ class ArchiveDriver:
                 warnings.append(f"{initialized:%Y-%m-%d %HZ}: no upstream data for {', '.join(result.missing)}")
             for variable_id, leads in result.dropped.items():
                 warnings.append(f"{initialized:%Y-%m-%d %HZ}: {variable_id} lead times {leads} aren't on the lead axis")
+            if result.terrain_problem:
+                warnings.append(f"{initialized:%Y-%m-%d %HZ}: no terrain: {result.terrain_problem}")
             index.runs = _sorted_runs([*index.runs, result.run])
             self._prune(model, index, keep)
             archived.append(f"{initialized:%Y%m%dT%H}")
@@ -232,7 +256,7 @@ class ArchiveDriver:
         folder = Path(tempfile.mkdtemp(prefix="upslope-archive-"))
         try:
             with log_duration(logger, f"archived {initialized:%Y-%m-%d %HZ}"):
-                result, path = archive_run(self.config, model, source, initialized, folder, self.now())
+                result, path = archive_run(self.config, model, source, initialized, folder, self.now(), self.heights)
                 result.bytes = self.store.upload_run(model.id, initialized, path)
             logger.info(
                 "archived %s: %d variables, %.1f MB", f"{initialized:%Y-%m-%d %HZ}", len(result.run.variables), result.bytes / 1e6

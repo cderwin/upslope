@@ -8,6 +8,7 @@
   y, x                 cell-centre coordinates in the grid's CRS (y north to south)
   spatial_ref          the grid's CRS and transform (CF grid mapping, GDAL's GeoTransform)
   <variable>           (lead_time, y, x) int16 steps, CF scale_factor/add_offset, -32768 for no data
+  surface_height       (y, x) the model's terrain in whole metres, the same way; left out if unknown
 ```
 
 Variables are chunked lead times x rows x cols (the config's chunk shape), and the chunks are grouped into
@@ -146,6 +147,38 @@ class RunWriter:
         # values beyond the variable's range are clamped to it, e.g. an upstream's small negative precipitation
         clamped = np.clip(values, quantization.min, quantization.max)
         array[:] = quantize(clamped, quantization.step, quantization.offset)
+
+    def write_terrain(self, values: np.ndarray, source: str) -> None:
+        """Store the model's terrain (see `upslope.archive.terrain`).
+
+        Args:
+            values: Height above sea level in metres, shaped like the grid; NaN where unknown.
+            source: Where it came from, for the array's attributes.
+        """
+        from zarr.codecs import BloscCodec
+
+        from upslope.archive.terrain import TERRAIN_ARRAY, TERRAIN_VALUES
+
+        if values.shape != self.grid.shape:
+            raise ValueError(f"the terrain is shaped {values.shape}, not {self.grid.shape}")
+        (_, chunk_rows, chunk_cols), (_, shard_rows, shard_cols) = self.shape()
+        quantization = TERRAIN_VALUES
+        array = self._group.create_array(
+            TERRAIN_ARRAY, shape=self.grid.shape, dtype="int16", chunks=(chunk_rows, chunk_cols),
+            shards=(shard_rows, shard_cols), fill_value=VALUES_NODATA,
+            compressors=BloscCodec(cname="zstd", clevel=5, shuffle="shuffle"), dimension_names=["y", "x"],
+            attributes={
+                "long_name": "model surface height above sea level",
+                "standard_name": "surface_altitude",
+                "units": "m",
+                "scale_factor": quantization.step,
+                "add_offset": quantization.offset,
+                "_FillValue": VALUES_NODATA,
+                "grid_mapping": "spatial_ref",
+                "source": source,
+            },
+        )
+        array[:] = quantize(np.clip(values, quantization.min, quantization.max), quantization.step, quantization.offset)
 
     def finish(self) -> None:
         """Consolidate the metadata into the root `zarr.json`, so a reader opens the run with one request."""

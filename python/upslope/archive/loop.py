@@ -38,7 +38,12 @@ def build_sources() -> dict[str, ArchiveSource]:
 
 def build_driver(config: ArchiveConfig, storage: StorageClient) -> ArchiveDriver:
     """Create the archive driver, writing to the private bucket `storage`."""
-    return ArchiveDriver(config=config, sources=build_sources(), store=ArchiveStore(storage))
+    from upslope.archive.sources.openmeteo import OpenMeteoRunSource
+
+    sources = build_sources()
+    openmeteo = sources["openmeteo"]
+    heights = openmeteo if isinstance(openmeteo, OpenMeteoRunSource) else None
+    return ArchiveDriver(config=config, sources=sources, store=ArchiveStore(storage), heights=heights)
 
 
 @define

@@ -35,6 +35,10 @@
 #   chunks, shards, keep_runs   Override the defaults.
 #   lookback_hours  How far back to look for runs (default 48).
 #   attribution  Credit for the data, stored with each run.
+#   terrain      The model's surface height, stored with each run (point forecasts adjust temperatures with it):
+#                {field: <upstream field>} from the run itself where the source has one, else
+#                {openmeteo: <domain>}, Open-Meteo's static HSURF for the same model (used only where its grid's
+#                cells line up with the run's). A run whose terrain can't be read is archived without it.
 
 variables:
   temperature_2m: {name: 2 metre temperature, units: degC, values: {step: 0.05, min: -80, max: 60}}
@@ -62,6 +66,7 @@ models:
     source: {kind: dynamical, dataset: noaa-hrrr-forecast-48-hour-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS NCEP HRRR data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    terrain: {field: geopotential_height_surface}
     start_times: [0, 6, 12, 18]
     leads: [{last: 48, step: 1}]
     variables:
@@ -85,6 +90,7 @@ models:
     source: {kind: dynamical, dataset: noaa-rrfs-forecast-84-hour-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS NCEP RRFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    terrain: {field: geopotential_height_surface}
     start_times: [0, 6, 12, 18]
     leads: [{last: 84, step: 1}]
     variables:
@@ -108,6 +114,7 @@ models:
     source: {kind: dynamical, dataset: noaa-gfs-forecast-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS NCEP GFS data processed by dynamical.org from NOAA Open Data Dissemination archives (CC BY 4.0).
+    terrain: {field: geopotential_height_surface}
     start_times: [0, 6, 12, 18]
     leads: [{last: 120, step: 1}, {first: 123, last: 384, step: 3}]
     # a coarse grid: the region is one chunk across, so longer chunks in time make a point's series fewer reads
@@ -131,6 +138,7 @@ models:
     source: {kind: dynamical, dataset: ecmwf-aifs-single-forecast-virtual}
     region: [-127, 41.5, -113, 50]
     attribution: ECMWF AIFS Single forecast data processed by dynamical.org from ECMWF Open Data (CC BY 4.0).
+    terrain: {field: geopotential_height_surface}
     start_times: [0, 6, 12, 18]
     leads: [{last: 360, step: 6}]
     chunks: {leads: 24}
@@ -151,6 +159,8 @@ models:
     region: [-127, 41.5, -113, 50]
     # the ECCC Data Servers End-use Licence 2.1: https://eccc-msc.github.io/open-data/licence/readme_en/
     attribution: ECCC HRDPS data processed by dynamical.org from Environment and Climate Change Canada (ECCC End-use Licence).
+    # dynamical.org's HRDPS has no surface height
+    terrain: {openmeteo: cmc_gem_hrdps}
     start_times: [0, 6, 12, 18]
     leads: [{last: 48, step: 1}]
     variables:
@@ -172,6 +182,7 @@ models:
     source: {kind: openmeteo, domain: ecmwf_ifs025}
     region: [-127, 41.5, -113, 50]
     attribution: ECMWF IFS open data (CC BY 4.0), processed by Open-Meteo (CC BY 4.0).
+    terrain: {openmeteo: ecmwf_ifs025}
     # 00Z and 12Z run to 360 hours; 06Z and 18Z to 144 (their later lead times are empty)
     start_times: [0, 6, 12, 18]
     leads: [{last: 144, step: 3}, {first: 150, last: 360, step: 6}]
@@ -194,6 +205,7 @@ models:
     source: {kind: openmeteo, domain: ncep_nbm_conus}
     region: [-127, 41.5, -113, 50]
     attribution: NOAA NWS National Blend of Models, processed by Open-Meteo (CC BY 4.0).
+    terrain: {openmeteo: ncep_nbm_conus}
     # NBM runs hourly; Open-Meteo keeps one every 3 hours, and the 6-hourly runs share these lead times
     start_times: [0, 6, 12, 18]
     leads: [{first: 1, last: 36, step: 1}, {first: 39, last: 192, step: 3}, {first: 198, last: 264, step: 6}]
