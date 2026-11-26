@@ -31,9 +31,13 @@ the URL and can be shared.
 The **Annotation** nav link appears only while an admin token is stored; the
 page itself still works by URL and asks for the token. The gear button in the
 navbar opens **Settings** (`src/settings/`): log in or out (store or clear the
-token), set the playback speed, turn the map's 3D terrain on or off and pick a
-default model for the map. Settings are kept in `localStorage`, along with
-whether the map's controls are collapsed.
+token), pick the theme and units, set the playback speed, turn the map's 3D
+terrain on or off and pick a default model for the map. Settings are kept in
+`localStorage`, along with whether the map's controls are collapsed. The navbar's
+sun/moon switches between the dark (default) and light themes.
+
+The look comes from design tokens: see [STYLE.md](STYLE.md) (colors, Geist,
+theming Bootstrap, and the lint rules that keep them consistent).
 
 On phones (narrower than Bootstrap's `sm`, 576px) there is no navbar: the map
 fills the screen, and its ⋮ menu has **Model runs** (with the status dot) and
@@ -156,9 +160,9 @@ window (24 h to all) and whether the hours between a model's steps are filled.
 Nights are shaded (sunrise and sunset computed for the point, `sun.ts`), a line
 marks now, and reference lines mark freezing and, on the freezing level, the
 point's elevation. Each chart's expand button shows it on its own, much bigger,
-with the controls still applying. Each model keeps its color everywhere
-(`palette.ts`: a blue-leaning palette in a fixed, color-blind-checked order,
-stepped for light and dark mode). GFS and RRFS report
+with the controls still applying. Each model keeps its series color everywhere
+(`modelColor` in `src/theme/charts.ts`, from the `--up-series-*` tokens), and the
+charts re-read their colors when the theme changes. GFS and RRFS report
 a freezing level of 0 when it's below their terrain; the charts leave a gap
 (issue #46).
 
@@ -234,13 +238,18 @@ src/pointForecast/
   point.ts                     ?point= parsing
   units.ts                     Display units (imperial/metric) and formatting
   charts.ts                    Which charts, and each one's ECharts option
-  palette.ts                   Model colors and the charts' theme (Bootstrap's colors)
   sun.ts                       Sunrise and sunset, for night shading
   components/                  PointMenu (the map click menu), PointForecastDialog, PointForecastControls,
                                ForecastChart
 src/settings/
   settings.ts                  Viewer preferences (localStorage)
-  SettingsDialog.vue           Login/logout, playback speed, units and default model
+  SettingsDialog.vue           Login/logout, theme, playback speed, units and default model
+src/styles/
+  tokens.css                   Design tokens (--up-*): every color, both themes, and the font
+  bootstrap-theme.scss         Bootstrap compiled and themed from the tokens
+src/theme/
+  useTheme.ts                  Dark/light theme (data-bs-theme), kept in localStorage
+  charts.ts                    Chart and map colors from the tokens (model series, chrome, status)
 src/annotation/
   types.ts                     Admin API document and dialog payload types
   api.ts                       /admin/georegistration client
