@@ -12,8 +12,8 @@ default:
 
 # --- everything
 
-# Python tests and webapp typecheck
-test: py-test web-typecheck
+# Python tests, webapp typecheck and style lint
+test: py-test web-typecheck web-lint
 
 # Build the webapp and the Docker image
 build: web-build docker-build
@@ -82,6 +82,13 @@ web-dev:
 [working-directory('webapp')]
 web-typecheck:
     npm run typecheck
+
+# Style guardrails: no hard-coded colors or fonts outside the design tokens (webapp/STYLE.md)
+[group('webapp')]
+[working-directory('webapp')]
+web-lint:
+    npm run lint
+    npm run lint:style
 
 [group('webapp')]
 [working-directory('webapp')]

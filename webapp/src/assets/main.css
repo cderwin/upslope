@@ -1,7 +1,3 @@
-:root {
-  color-scheme: light dark;
-}
-
 /* dvh: a phone's browser bars come and go, and 100vh would put the map's bottom under them. */
 body {
   min-height: 100dvh;

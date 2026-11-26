@@ -6,7 +6,7 @@ import { fetchPointForecast, runLabel } from '@/forecast/api'
 import type { LngLat } from '@/forecast/types'
 import { settings } from '@/settings/settings'
 import { CHARTS, chartOption, chartUnit, windowRange, type ChartContext } from '../charts'
-import { modelOrder, useChartTheme } from '../palette'
+import { modelOrder, useChartChrome } from '@/theme/charts'
 import { nights } from '../sun'
 import type { ElevationSource, ModelInfo, PointForecast } from '../types'
 import { displayUnit, formatHeight, formatHeightChange, formatLatLon, heightToMetres } from '../units'
@@ -109,7 +109,7 @@ watch(interpolate, () => void load())
 
 // --- charts
 
-const theme = useChartTheme()
+const chrome = useChartChrome()
 /** The models shown; null until the viewer changes it (then every model with data). */
 const selected = ref<Set<string> | null>(null)
 const windowHours = ref<number | null>(72)
@@ -149,7 +149,7 @@ const context = computed<ChartContext | null>(() => {
     nights: nights(range[0], range[1], current.point.lat, current.point.lon),
     now: loadedAt.value,
     units: system.value,
-    theme: theme.value,
+    chrome: chrome.value,
   }
 })
 const options = computed(() =>
@@ -182,7 +182,7 @@ function adjustment(info: ModelInfo): string {
         <div class="modal-header align-items-start">
           <div class="me-3">
             <h5 id="point-forecast-title" class="modal-title">Point forecast</h5>
-            <div class="small text-body-secondary">{{ formatLatLon(props.point[1], props.point[0]) }}</div>
+            <div class="meta text-body-secondary tnum">{{ formatLatLon(props.point[1], props.point[0]) }}</div>
           </div>
           <form class="elevation ms-auto d-flex align-items-center gap-1 small" @submit.prevent="applyElevation">
             <Mountain :size="16" aria-hidden="true" class="text-body-secondary flex-shrink-0" />
@@ -234,7 +234,6 @@ function adjustment(info: ModelInfo): string {
               v-model:highlight="highlight"
               class="controls-bar sticky-top"
               :models="modelChoices"
-              :dark="theme.dark"
               :charts="availableCharts"
             />
 
@@ -246,7 +245,7 @@ function adjustment(info: ModelInfo): string {
                 <div class="d-flex align-items-center gap-2">
                   <h6 class="chart-title mb-0">
                     {{ chart.title }}
-                    <span class="text-body-secondary fw-normal">{{ chartUnit(chart, forecast, system) }}</span>
+                    <span class="unit text-body-secondary">{{ chartUnit(chart, forecast, system) }}</span>
                   </h6>
                   <button
                     type="button"
@@ -310,6 +309,13 @@ function adjustment(info: ModelInfo): string {
 </template>
 
 <style scoped>
+/* Meta: coordinates and elevation. */
+.meta,
+.elevation {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
 .elevation .input-group {
   width: 8.5rem;
 }
@@ -330,6 +336,12 @@ function adjustment(info: ModelInfo): string {
 }
 
 .chart-title {
-  font-size: 0.875rem;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* The unit after a chart's title. */
+.chart-title .unit {
+  font-weight: 400;
 }
 </style>

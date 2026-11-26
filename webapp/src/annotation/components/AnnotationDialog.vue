@@ -110,11 +110,11 @@ function submit() {
           <div class="row g-2 mb-3">
             <div class="col-6">
               <label class="form-label mb-1" for="field-px">Pixel X</label>
-              <input id="field-px" v-model="pixelX" type="number" step="1" class="form-control font-monospace" required />
+              <input id="field-px" v-model="pixelX" type="number" step="1" class="form-control tnum" required />
             </div>
             <div class="col-6">
               <label class="form-label mb-1" for="field-py">Pixel Y</label>
-              <input id="field-py" v-model="pixelY" type="number" step="1" class="form-control font-monospace" required />
+              <input id="field-py" v-model="pixelY" type="number" step="1" class="form-control tnum" required />
             </div>
           </div>
 
@@ -138,7 +138,7 @@ function submit() {
 
           <div class="mb-2">
             <label class="form-label mb-1" for="field-key">Key</label>
-            <input id="field-key" :value="keyPreview" type="text" class="form-control font-monospace" readonly />
+            <input id="field-key" :value="keyPreview" type="text" class="form-control tnum" readonly />
             <div class="form-text">
               {{
                 isNewPoint
@@ -151,11 +151,11 @@ function submit() {
           <div class="row g-2">
             <div class="col-6">
               <label class="form-label mb-1" for="field-lat">Latitude</label>
-              <input id="field-lat" v-model="latitude" type="number" step="any" class="form-control font-monospace" placeholder="48.385978" required />
+              <input id="field-lat" v-model="latitude" type="number" step="any" class="form-control tnum" placeholder="48.385978" required />
             </div>
             <div class="col-6">
               <label class="form-label mb-1" for="field-lon">Longitude</label>
-              <input id="field-lon" v-model="longitude" type="number" step="any" class="form-control font-monospace" placeholder="-124.726914" required />
+              <input id="field-lon" v-model="longitude" type="number" step="any" class="form-control tnum" placeholder="-124.726914" required />
             </div>
           </div>
 

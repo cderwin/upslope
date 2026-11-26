@@ -10,6 +10,22 @@ const props = defineProps<{
   attribution: string | null
 }>()
 
+/** A continuous legend: the stops as a gradient, labelled at its ticks, placed by value. */
+const gradient = computed(() => {
+  const legend = props.legend
+  if (!legend?.continuous || legend.stops.length < 2) return null
+  const first = legend.stops[0].value
+  const span = legend.stops[legend.stops.length - 1].value - first || 1
+  const at = (value: number) => ((value - first) / span) * 100
+  return {
+    background: `linear-gradient(to right, ${legend.stops.map((stop) => `${stop.color} ${at(stop.value)}%`).join(', ')})`,
+    ticks: (legend.ticks ?? legend.stops.map((stop) => stop.value)).map((value) => ({
+      left: at(value),
+      label: formatValue(value, { units: '', decimals: legend.decimals }),
+    })),
+  }
+})
+
 /** One labeled step per stop; each color applies from its value up to the next. */
 const steps = computed(() =>
   (props.legend?.stops ?? []).map((stop) => ({
@@ -24,7 +40,15 @@ const steps = computed(() =>
     <div class="card-body p-2">
       <template v-if="legend">
         <div class="fw-medium mb-1">{{ name }} ({{ legend.units }})</div>
-        <div class="legend-steps" role="img" :aria-label="`Color scale for ${name}`">
+        <div v-if="gradient" class="legend-gradient" role="img" :aria-label="`Color scale for ${name}`">
+          <div class="legend-ramp" :style="{ background: gradient.background }"></div>
+          <div class="legend-ticks">
+            <span v-for="tick in gradient.ticks" :key="tick.left" class="legend-tick tnum" :style="{ left: `${tick.left}%` }">
+              {{ tick.label }}
+            </span>
+          </div>
+        </div>
+        <div v-else class="legend-steps" role="img" :aria-label="`Color scale for ${name}`">
           <div v-for="(step, i) in steps" :key="i" class="legend-step">
             <div class="legend-swatch" :style="{ background: step.color }"></div>
             <div class="legend-label">{{ step.label }}</div>
@@ -64,13 +88,40 @@ const steps = computed(() =>
   min-width: 0;
 }
 
-.legend-swatch {
+.legend-swatch,
+.legend-ramp {
   height: 10px;
+}
+
+.legend-ticks {
+  position: relative;
+  height: 1.2em;
+}
+
+/* centred on its value, except at the ends, which stay inside the legend */
+.legend-tick {
+  position: absolute;
+  top: 0;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+  color: var(--up-muted);
+  transform: translateX(-50%);
+}
+
+.legend-tick:first-child {
+  transform: none;
+}
+
+.legend-tick:last-child {
+  transform: translateX(-100%);
 }
 
 /* each label sits under its step's left edge, where that color starts */
 .legend-label {
-  font-size: 0.7rem;
+  font-size: 11px;
+  color: var(--up-muted);
+  font-variant-numeric: tabular-nums;
   line-height: 1.2;
   white-space: nowrap;
   transform: translateX(-2px);
@@ -85,6 +136,6 @@ const steps = computed(() =>
 }
 
 .attribution {
-  font-size: 0.7rem;
+  font-size: 11px;
 }
 </style>

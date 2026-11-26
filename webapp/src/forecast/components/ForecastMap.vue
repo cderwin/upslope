@@ -5,6 +5,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { displayPosition, formatValue, loadLookup, loadValues, valueAt } from '@/forecast/frameValues'
 import { preloadGeotiff } from '@/forecast/valueDecoder'
 import type { ForecastLayer, LngLat } from '@/forecast/types'
+import { token } from '@/theme/charts'
 
 const props = defineProps<{
   token: string
@@ -30,8 +31,9 @@ const SOURCE_ID = 'forecast'
 const LAYER_ID = 'forecast-raster'
 const EXTENT_SOURCE_ID = 'forecast-extent'
 const EXTENT_LAYER_ID = 'forecast-extent-line'
-// Burnt orange: stands out on the satellite basemap and on the forecast's own colors without matching either.
-const EXTENT_COLOR = '#cc5500'
+// Burnt orange (--up-map-extent): stands out on the satellite basemap and on the forecast's own colors without
+// matching either. Read when drawn: Mapbox can't parse OKLCH.
+const EXTENT_TOKEN = '--up-map-extent'
 // Satellite imagery with roads and place names; the same in light and dark mode.
 const STYLE_URL = 'mapbox://styles/mapbox/satellite-streets-v12'
 const DEM_SOURCE_ID = 'mapbox-dem'
@@ -95,7 +97,7 @@ function addForecastLayer() {
       id: EXTENT_LAYER_ID,
       type: 'line',
       source: EXTENT_SOURCE_ID,
-      paint: { 'line-color': EXTENT_COLOR, 'line-width': 2, 'line-opacity': 0.9 },
+      paint: { 'line-color': token(EXTENT_TOKEN), 'line-width': 2, 'line-opacity': 0.9 },
     },
     firstSymbol,
   )
@@ -225,7 +227,6 @@ function onMoveStart(event: { originalEvent?: unknown }) {
 }
 
 // The marker on the clicked point (menu open), else on `pin` (the open point forecast's point).
-const PIN_COLOR = EXTENT_COLOR
 let marker: mapboxgl.Marker | undefined
 const pinAt = computed<LngLat | null>(() => menu.value?.lngLat ?? props.pin ?? null)
 
@@ -239,7 +240,6 @@ function updateMarker(at: LngLat | null) {
   if (!marker) {
     const element = document.createElement('div')
     element.className = 'point-pin'
-    element.style.setProperty('--pin-color', PIN_COLOR)
     marker = new mapboxgl.Marker({ element, anchor: 'center' })
   }
   marker.setLngLat(at).addTo(map)
@@ -378,9 +378,9 @@ watch(
   width: 14px;
   height: 14px;
   border-radius: 50%;
-  background: var(--pin-color);
-  border: 2px solid #fff;
-  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35), 0 1px 4px rgb(0 0 0 / 0.4);
+  background: var(--up-map-extent);
+  border: 2px solid var(--up-overlay-ink);
+  box-shadow: 0 0 0 1px var(--up-overlay-shadow), 0 1px 4px var(--up-overlay-shadow);
   pointer-events: none;
 }
 </style>

@@ -1,7 +1,6 @@
 import type { EChartsCoreOption } from 'echarts/core'
 import type { Units } from '@/settings/settings'
-import type { ChartTheme } from './palette'
-import { modelColor } from './palette'
+import { modelColor, type ChartChrome } from '@/theme/charts'
 import type { PointForecast } from './types'
 import { displayUnit, type DisplayUnit } from './units'
 
@@ -68,7 +67,8 @@ export interface ChartContext {
   nights: [number, number][]
   now: number
   units: Units
-  theme: ChartTheme
+  /** The theme's chart colors (src/theme/charts.ts). */
+  chrome: ChartChrome
 }
 
 const AXIS_TIME = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Los_Angeles', hour: 'numeric' })
@@ -117,7 +117,7 @@ function referenceLines(spec: ChartSpec, context: ChartContext, unit: DisplayUni
 
 /** One variable's chart: every selected model's series, the night shading, now, and reference lines. */
 export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCoreOption {
-  const { forecast, theme } = context
+  const { forecast, chrome } = context
   const variable = forecast.variables[spec.variable]
   const unit = displayUnit(variable.units, context.units)
   const times = forecast.times.map((t) => t * 1000)
@@ -126,11 +126,13 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
   const names = Object.fromEntries(context.models.map((id) => [id, forecast.models[id]?.name ?? id]))
   const ids = Object.fromEntries(context.models.map((id) => [names[id], id]))
 
+  // Thin lines, a little heavier when there are only a few to tell apart.
+  const lineWidth = context.models.filter((id) => variable.series[id]).length <= 3 ? 2 : 1.5
   const series: object[] = context.models
     .filter((id) => variable.series[id])
     .map((id) => {
       const values = displayed(variable.series[id], unit, spec.variable)
-      const color = modelColor(id, theme.dark)
+      const color = modelColor(id)
       return {
         id,
         name: names[id],
@@ -144,8 +146,8 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
               symbolSize: 4,
               connectNulls: !forecast.interpolated,
               triggerLineEvent: true,
-              lineStyle: { width: 1.5 },
-              emphasis: { focus: 'series', lineStyle: { width: 2.5 } },
+              lineStyle: { width: lineWidth },
+              emphasis: { focus: 'series', lineStyle: { width: lineWidth + 1 } },
               blur: { lineStyle: { opacity: 0.25 }, itemStyle: { opacity: 0.25 } },
             }),
       }
@@ -160,7 +162,7 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
     silent: true,
     markArea: {
       silent: true,
-      itemStyle: { color: theme.shade },
+      itemStyle: { color: chrome.night },
       blur: { itemStyle: { opacity: 1 } },
       data: context.nights.map(([start, end]) => [{ xAxis: start }, { xAxis: end }]),
     },
@@ -170,11 +172,18 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
       animation: false,
       blur: { lineStyle: { opacity: 1 }, label: { opacity: 1 } },
       data: [
-        { xAxis: context.now, lineStyle: { color: theme.muted, type: 'solid', width: 1 }, label: { show: false } },
+        { xAxis: context.now, lineStyle: { color: chrome.now, type: 'solid', width: 1 }, label: { show: false } },
         ...referenceLines(spec, context, unit).map((line) => ({
           yAxis: line.yAxis,
-          lineStyle: { color: theme.muted, type: 'dashed', width: 1 },
-          label: { formatter: line.name, position: 'insideEndTop', color: theme.muted, fontSize: 10 },
+          lineStyle: { color: chrome.tick, type: [4, 4], width: 1 },
+          label: {
+            formatter: line.name,
+            position: 'insideEndTop',
+            align: 'right',
+            color: chrome.tick,
+            fontSize: 10,
+            fontFamily: chrome.font,
+          },
         })),
       ],
     },
@@ -183,17 +192,17 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
   const direction = spec.variable === 'wind_direction_10m'
   return {
     animation: false,
-    textStyle: { fontFamily: theme.fontFamily, color: theme.text },
+    textStyle: { fontFamily: chrome.font, color: chrome.text },
     grid: { left: 52, right: 14, top: 10, bottom: 26 },
     xAxis: {
       type: 'time',
       min: context.window[0],
       max: context.window[1],
-      axisLine: { lineStyle: { color: theme.grid } },
+      axisLine: { lineStyle: { color: chrome.grid } },
       axisTick: { show: false },
-      axisLabel: { color: theme.muted, fontSize: 11, hideOverlap: true, formatter: timeLabel },
+      axisLabel: { color: chrome.tick, fontSize: 11, fontFamily: chrome.font, hideOverlap: true, formatter: timeLabel },
       splitLine: { show: false },
-      axisPointer: { snap: true, lineStyle: { color: theme.muted, width: 1 } },
+      axisPointer: { snap: true, lineStyle: { color: chrome.tick, width: 1 } },
     },
     yAxis: {
       type: 'value',
@@ -203,21 +212,23 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
       interval: direction ? 90 : undefined,
       splitNumber: 4,
       axisLabel: {
-        color: theme.muted,
+        color: chrome.tick,
         fontSize: 11,
+        fontFamily: chrome.font,
         formatter: direction
           ? (value: number) => ['N', 'E', 'S', 'W', 'N'][Math.round(value / 90)] ?? ''
           : (value: number) => `${formatNumber(value, value % 1 === 0 ? 0 : 1)}${unit.label === '%' ? '%' : ''}`,
       },
-      splitLine: { lineStyle: { color: theme.grid } },
+      splitLine: { lineStyle: { color: chrome.grid, width: 1 } },
     },
     tooltip: {
       trigger: 'axis',
       confine: true,
       order: 'valueDesc',
-      backgroundColor: theme.surface,
-      borderColor: theme.grid,
-      textStyle: { color: theme.text, fontSize: 12 },
+      backgroundColor: chrome.tooltipBg,
+      borderColor: chrome.tooltipBorder,
+      textStyle: { color: chrome.text, fontSize: 12, fontFamily: chrome.font },
+      extraCssText: 'border-radius: 8px; font-variant-numeric: tabular-nums;',
       axisPointer: { type: 'line' },
       formatter: (params: unknown) => {
         const items = (Array.isArray(params) ? params : [params]) as {
@@ -237,7 +248,7 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
               const index = forecast.times.indexOf(item.value[0] / 1000)
               const raw = companion.series[ids[item.seriesName]]?.[index]
               if (raw !== null && raw !== undefined) {
-                text += ` <span style="color:${theme.muted}">(${formatNumber(companionUnit.convert(raw), companionUnit.decimals)} ${escapeHtml(companionUnit.label)} ${spec.companion?.label})</span>`
+                text += ` <span style="color:${chrome.tick}">(${formatNumber(companionUnit.convert(raw), companionUnit.decimals)} ${escapeHtml(companionUnit.label)} ${spec.companion?.label})</span>`
               }
             }
             return (
@@ -247,7 +258,7 @@ export function chartOption(spec: ChartSpec, context: ChartContext): EChartsCore
               `<span style="font-variant-numeric:tabular-nums;font-weight:600">${text}</span></div>`
             )
           })
-        return `<div style="margin-bottom:4px;color:${theme.muted}">${escapeHtml(time)}</div>${rows.join('') || '<span>No data</span>'}`
+        return `<div style="margin-bottom:4px;color:${chrome.tick}">${escapeHtml(time)}</div>${rows.join('') || '<span>No data</span>'}`
       },
     },
     series,

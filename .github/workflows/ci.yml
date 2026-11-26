@@ -1,4 +1,4 @@
-# Backend tests and webapp typecheck (what `just test` runs). Required on PRs, and
+# Backend tests, webapp typecheck and style lint (what `just test` runs). Required on PRs, and
 # reused by deploy.yml so main only deploys when they pass.
 name: CI
 
@@ -42,3 +42,6 @@ jobs:
           cache-dependency-path: webapp/package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
+      # Style guardrails (webapp/STYLE.md); the job keeps its name, which branch protection requires.
+      - run: npm run lint
+      - run: npm run lint:style

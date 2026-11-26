@@ -1,0 +1,358 @@
+// Bootstrap, themed from the design tokens (tokens.css). Sass variables set what Bootstrap compiles; the runtime
+// --bs-* variables and the few rules below point stock components at the tokens, so components need no colors of
+// their own. Bootstrap's contextual utilities (text-bg-success, bg-danger, …) compile to rgb() from Sass, so
+// those are re-pointed here too.
+
+$font-family-sans-serif: var(--up-font);
+$font-family-monospace: var(--up-font);
+$font-size-base: 0.875rem; // 14px body and controls
+$border-radius: 6px;
+$border-radius-lg: 10px;
+$border-radius-pill: 999px;
+
+@import "bootstrap/scss/bootstrap";
+
+:root,
+[data-bs-theme] {
+  --bs-body-bg: var(--up-bg);
+  --bs-body-color: var(--up-ink);
+  --bs-secondary-color: var(--up-muted);
+  --bs-tertiary-color: var(--up-muted);
+  --bs-tertiary-bg: var(--up-surface);
+  --bs-secondary-bg: var(--up-raised);
+  --bs-border-color: var(--up-line);
+  --bs-border-color-translucent: var(--up-line);
+  --bs-emphasis-color: var(--up-ink);
+  --bs-heading-color: var(--up-ink);
+  --bs-link-color: var(--up-link);
+  --bs-link-hover-color: var(--up-ink);
+  --bs-primary: var(--up-accent);
+  --bs-focus-ring-color: color-mix(in oklch, var(--up-accent) 40%, transparent);
+  --bs-success: var(--up-good);
+  --bs-warning: var(--up-warning);
+  --bs-danger: var(--up-danger);
+  --bs-form-valid-color: var(--up-good);
+  --bs-form-valid-border-color: var(--up-good);
+  --bs-form-invalid-color: var(--up-danger);
+  --bs-form-invalid-border-color: var(--up-danger);
+}
+
+// --- status: Bootstrap's success / warning / danger, and info (a run in progress), onto the status tokens
+
+$status-levels: (
+  "success": "good",
+  "warning": "warning",
+  "danger": "danger",
+);
+
+@each $tone, $level in $status-levels {
+  :root,
+  [data-bs-theme] {
+    --bs-#{$tone}-bg-subtle: var(--up-#{$level}-bg);
+    --bs-#{$tone}-text-emphasis: var(--up-#{$level}-fg);
+    --bs-#{$tone}-border-subtle: color-mix(in oklch, var(--up-#{$level}) 45%, transparent);
+  }
+
+  .text-bg-#{$tone} {
+    color: var(--up-#{$level}-fg) !important;
+    background-color: var(--up-#{$level}-bg) !important;
+  }
+
+  .bg-#{$tone} {
+    background-color: var(--up-#{$level}) !important;
+  }
+
+  .text-#{$tone} {
+    color: var(--up-#{$level}) !important;
+  }
+
+  .btn-outline-#{$tone} {
+    --bs-btn-color: var(--up-#{$level});
+    --bs-btn-border-color: var(--up-#{$level});
+    --bs-btn-hover-bg: var(--up-#{$level}-bg);
+    --bs-btn-hover-color: var(--up-#{$level}-fg);
+    --bs-btn-hover-border-color: var(--up-#{$level});
+    --bs-btn-active-bg: var(--up-#{$level}-bg);
+    --bs-btn-active-color: var(--up-#{$level}-fg);
+    --bs-btn-active-border-color: var(--up-#{$level});
+    --bs-btn-disabled-color: var(--up-#{$level});
+    --bs-btn-disabled-border-color: var(--up-#{$level});
+  }
+}
+
+// In progress: informational, so the accent rather than a status level.
+:root,
+[data-bs-theme] {
+  --bs-info-bg-subtle: color-mix(in oklch, var(--up-accent) 18%, var(--up-surface));
+  --bs-info-text-emphasis: var(--up-ink);
+  --bs-info-border-subtle: color-mix(in oklch, var(--up-accent) 45%, transparent);
+  --bs-secondary-bg-subtle: var(--up-raised);
+  --bs-secondary-text-emphasis: var(--up-ink);
+  --bs-secondary-border-subtle: var(--up-line);
+}
+
+.text-bg-info {
+  color: var(--up-ink) !important;
+  background-color: color-mix(in oklch, var(--up-accent) 22%, var(--up-surface)) !important;
+}
+
+.bg-info {
+  background-color: var(--up-accent) !important;
+}
+
+.text-bg-primary {
+  color: var(--up-on-accent) !important;
+  background-color: var(--up-accent) !important;
+}
+
+.text-bg-secondary {
+  color: var(--up-muted) !important;
+  background-color: var(--up-raised) !important;
+}
+
+.bg-secondary {
+  background-color: var(--up-muted) !important;
+}
+
+.text-secondary {
+  color: var(--up-muted) !important;
+}
+
+// --- buttons
+
+.btn-primary {
+  --bs-btn-bg: var(--up-accent);
+  --bs-btn-border-color: var(--up-accent);
+  --bs-btn-color: var(--up-on-accent);
+  --bs-btn-hover-bg: color-mix(in oklch, var(--up-accent) 88%, var(--up-ink));
+  --bs-btn-hover-border-color: var(--bs-btn-hover-bg);
+  --bs-btn-hover-color: var(--up-on-accent);
+  --bs-btn-active-bg: color-mix(in oklch, var(--up-accent) 80%, var(--up-ink));
+  --bs-btn-active-border-color: var(--bs-btn-active-bg);
+  --bs-btn-active-color: var(--up-on-accent);
+  --bs-btn-disabled-bg: var(--up-accent);
+  --bs-btn-disabled-border-color: var(--up-accent);
+  --bs-btn-disabled-color: var(--up-on-accent);
+}
+
+.btn-outline-primary {
+  --bs-btn-color: var(--up-accent);
+  --bs-btn-border-color: var(--up-accent);
+  --bs-btn-hover-bg: var(--up-accent);
+  --bs-btn-hover-border-color: var(--up-accent);
+  --bs-btn-hover-color: var(--up-on-accent);
+  --bs-btn-active-bg: var(--up-accent);
+  --bs-btn-active-border-color: var(--up-accent);
+  --bs-btn-active-color: var(--up-on-accent);
+}
+
+.btn-secondary {
+  --bs-btn-bg: var(--up-raised);
+  --bs-btn-border-color: var(--up-line);
+  --bs-btn-color: var(--up-ink);
+  --bs-btn-hover-bg: var(--up-surface);
+  --bs-btn-hover-border-color: var(--up-line);
+  --bs-btn-hover-color: var(--up-ink);
+  --bs-btn-active-bg: var(--up-surface);
+  --bs-btn-active-border-color: var(--up-line);
+  --bs-btn-active-color: var(--up-ink);
+}
+
+// segmented controls, icon buttons
+.btn-outline-secondary {
+  --bs-btn-color: var(--up-muted);
+  --bs-btn-border-color: var(--up-line);
+  --bs-btn-hover-bg: var(--up-raised);
+  --bs-btn-hover-color: var(--up-ink);
+  --bs-btn-hover-border-color: var(--up-line);
+  --bs-btn-active-bg: var(--up-accent);
+  --bs-btn-active-color: var(--up-on-accent);
+  --bs-btn-active-border-color: var(--up-accent);
+  --bs-btn-disabled-color: var(--up-muted);
+  --bs-btn-disabled-border-color: var(--up-line);
+}
+
+.btn-link {
+  --bs-btn-color: var(--up-link);
+  --bs-btn-hover-color: var(--up-ink);
+  --bs-btn-active-color: var(--up-ink);
+}
+
+.btn-close {
+  --bs-btn-close-focus-shadow: 0 0 0 0.25rem var(--bs-focus-ring-color);
+}
+
+.btn:focus-visible {
+  box-shadow: 0 0 0 0.25rem var(--bs-focus-ring-color);
+}
+
+// --- surfaces and forms
+
+.navbar {
+  background: var(--up-nav-bg);
+  border-bottom: 1px solid var(--up-line);
+  --bs-navbar-color: var(--up-nav-muted);
+  --bs-navbar-hover-color: var(--up-nav-ink);
+  --bs-navbar-active-color: var(--up-nav-link);
+  --bs-navbar-brand-color: var(--up-nav-ink);
+  --bs-navbar-brand-hover-color: var(--up-nav-ink);
+}
+
+.navbar .nav-link {
+  color: var(--up-nav-muted);
+}
+
+.navbar .nav-link:hover,
+.navbar .nav-link:focus-visible {
+  color: var(--up-nav-ink);
+}
+
+.navbar .nav-link.active,
+.navbar .router-link-active {
+  color: var(--up-nav-link);
+}
+
+.navbar-brand {
+  color: var(--up-nav-ink);
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+[data-bs-theme="light"] .navbar {
+  border-bottom-color: transparent;
+}
+
+.modal-content,
+.dropdown-menu,
+.card,
+.popover {
+  background: var(--up-surface);
+  border-color: var(--up-line);
+}
+
+.modal {
+  --bs-modal-bg: var(--up-surface);
+  --bs-modal-border-color: var(--up-line);
+  --bs-modal-header-border-color: var(--up-line);
+  --bs-modal-footer-border-color: var(--up-line);
+}
+
+.modal-title {
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.dropdown-menu {
+  --bs-dropdown-bg: var(--up-surface);
+  --bs-dropdown-border-color: var(--up-line);
+  --bs-dropdown-divider-bg: var(--up-line);
+  --bs-dropdown-link-color: var(--up-ink);
+  --bs-dropdown-link-hover-color: var(--up-ink);
+  --bs-dropdown-link-hover-bg: var(--up-raised);
+  --bs-dropdown-link-active-color: var(--up-on-accent);
+  --bs-dropdown-link-active-bg: var(--up-accent);
+  --bs-dropdown-header-color: var(--up-muted);
+}
+
+.card {
+  --bs-card-bg: var(--up-surface);
+  --bs-card-border-color: var(--up-line);
+}
+
+.form-control,
+.form-select {
+  background-color: var(--up-raised);
+  border-color: var(--up-line);
+  color: var(--up-ink);
+}
+
+.form-control:focus,
+.form-select:focus {
+  background-color: var(--up-raised);
+  border-color: var(--up-accent);
+  color: var(--up-ink);
+  box-shadow: 0 0 0 0.25rem var(--bs-focus-ring-color);
+}
+
+.form-control::placeholder {
+  color: var(--up-muted);
+}
+
+.input-group-text {
+  background-color: var(--up-surface);
+  border-color: var(--up-line);
+  color: var(--up-muted);
+}
+
+.form-check-input {
+  background-color: var(--up-raised);
+  border-color: var(--up-line);
+}
+
+.form-check-input:checked {
+  background-color: var(--up-accent);
+  border-color: var(--up-accent);
+}
+
+.form-check-input:focus {
+  border-color: var(--up-accent);
+  box-shadow: 0 0 0 0.25rem var(--bs-focus-ring-color);
+}
+
+.form-range::-webkit-slider-thumb {
+  background-color: var(--up-accent);
+}
+
+.form-range::-moz-range-thumb {
+  background-color: var(--up-accent);
+}
+
+.form-range::-webkit-slider-runnable-track,
+.form-range::-moz-range-track {
+  background-color: var(--up-line);
+}
+
+.table {
+  --bs-table-color: var(--up-ink);
+  --bs-table-bg: transparent;
+  --bs-table-border-color: var(--up-line);
+  --bs-table-hover-bg: var(--up-raised);
+  --bs-table-hover-color: var(--up-ink);
+  --bs-table-striped-bg: var(--up-raised);
+  --bs-table-striped-color: var(--up-ink);
+  --bs-table-active-bg: var(--up-raised);
+  --bs-table-active-color: var(--up-ink);
+}
+
+.list-group {
+  --bs-list-group-bg: var(--up-surface);
+  --bs-list-group-border-color: var(--up-line);
+  --bs-list-group-color: var(--up-ink);
+  --bs-list-group-action-hover-bg: var(--up-raised);
+  --bs-list-group-action-hover-color: var(--up-ink);
+  --bs-list-group-active-bg: var(--up-accent);
+  --bs-list-group-active-border-color: var(--up-accent);
+  --bs-list-group-active-color: var(--up-on-accent);
+}
+
+.progress {
+  --bs-progress-bg: var(--up-raised);
+  --bs-progress-bar-bg: var(--up-accent);
+}
+
+.nav-tabs {
+  --bs-nav-tabs-border-color: var(--up-line);
+  --bs-nav-tabs-link-active-bg: var(--up-surface);
+  --bs-nav-tabs-link-active-border-color: var(--up-line) var(--up-line) var(--up-surface);
+}
+
+// Overlines: a small uppercase label above a group.
+.overline {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--up-muted);
+}

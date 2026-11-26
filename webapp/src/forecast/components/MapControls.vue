@@ -87,7 +87,7 @@ const framesLabel = computed(() =>
         <PlaybackButtons v-model:playing="playing" @step="(delta) => emit('step', delta)" />
         <span class="small min-width-0">
           <span class="fw-semibold">{{ validLabel }}</span>
-          <span v-if="offsetLabel" class="text-body-secondary font-monospace text-nowrap ms-1">{{ offsetLabel }}</span>
+          <span v-if="offsetLabel" class="text-body-secondary tnum text-nowrap ms-1">{{ offsetLabel }}</span>
         </span>
       </div>
 
@@ -175,7 +175,7 @@ const framesLabel = computed(() =>
         <!-- The run is in the model picker's label; only a run other than the latest needs calling out. -->
         <div class="small d-flex flex-wrap align-items-center column-gap-1">
           <span class="fw-semibold">{{ validLabel }}</span>
-          <span v-if="offsetLabel" class="text-body-secondary font-monospace">{{ offsetLabel }}</span>
+          <span v-if="offsetLabel" class="text-body-secondary tnum">{{ offsetLabel }}</span>
           <span v-if="layer.inProgress && !layer.latest" class="badge text-bg-info">in progress</span>
           <span v-else-if="!layer.latest" class="badge text-bg-warning">not the latest</span>
           <span v-if="partial" class="text-body-secondary">· {{ framesLabel }}</span>
