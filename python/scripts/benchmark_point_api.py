@@ -111,12 +111,17 @@ SUMS = {"precipitation"}
 
 @define
 class Timed:
-    """A response's JSON body, how long it took, and its size on the wire."""
+    """A response's JSON body, how long it took, its size on the wire, and the server's own timings.
+
+    Attributes:
+        server: The `Server-Timing` header's durations in seconds (`read`, `build`, `total`); empty if none.
+    """
 
     body: dict[str, Any]
     seconds: float
     wire_bytes: int
     status: int
+    server: dict[str, float]
 
 
 async def get(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Timed:
@@ -124,19 +129,33 @@ async def get(client: httpx.AsyncClient, url: str, params: dict[str, Any]) -> Ti
     response = await client.get(url, params=params)
     body = response.json() if response.content else {}
     seconds = time.perf_counter() - start
-    return Timed(body, seconds, response.num_bytes_downloaded, response.status_code)
+    return Timed(body, seconds, response.num_bytes_downloaded, response.status_code, server_timing(response.headers))
+
+
+def server_timing(headers: httpx.Headers) -> dict[str, float]:
+    """`Server-Timing: read;dur=12.3, build;dur=4.5, total;dur=17.9` as {name: seconds}."""
+    timings = {}
+    for metric in headers.get("server-timing", "").split(","):
+        name, *params = (part.strip() for part in metric.split(";"))
+        for param in params:
+            if param.startswith("dur="):
+                timings[name] = float(param.removeprefix("dur=")) / 1000
+    return timings
 
 
 def point_params(point: Point, interpolate: bool) -> dict[str, Any]:
     return {"lat": point.lat, "lon": point.lon} | ({"interpolate": "true"} if interpolate else {})
 
 
-def open_meteo_params(point: Point, elevation: float | None, variables: list[str]) -> dict[str, Any]:
+def open_meteo_params(
+    point: Point, elevation: float | None, variables: list[str], models: list[str] | None = None
+) -> dict[str, Any]:
+    """One Open-Meteo request for every model in `models` (default all of `MODELS`) at once."""
     params: dict[str, Any] = {
         "latitude": point.lat,
         "longitude": point.lon,
         "hourly": ",".join(variables),
-        "models": ",".join(m.model for m in MODELS.values()),
+        "models": ",".join(models or [m.model for m in MODELS.values()]),
         "timeformat": "unixtime",
         "timezone": "GMT",
         "wind_speed_unit": "ms",
@@ -153,13 +172,18 @@ def open_meteo_params(point: Point, elevation: float | None, variables: list[str
 
 @define
 class Latency:
-    """`/fx/point` timings for one point."""
+    """`/fx/point` timings for one point.
 
-    first: float
-    repeats: list[float]
-    interpolated: list[float]
-    wire_bytes: int
-    interpolated_wire_bytes: int
+    Attributes:
+        first: The first request.
+        repeats, interpolated: The repeats without and with `interpolate`.
+        per_model: Repeats asking for one model at a time (with `interpolate`), by model.
+    """
+
+    first: Timed
+    repeats: list[Timed]
+    interpolated: list[Timed]
+    per_model: dict[str, list[Timed]]
 
 
 async def measure(client: httpx.AsyncClient, url: str, point: Point, repeats: int) -> tuple[Latency, Timed]:
@@ -173,14 +197,11 @@ async def measure(client: httpx.AsyncClient, url: str, point: Point, repeats: in
         raise click.ClickException(f"{point.name}: /fx/point answered {first.status}: {first.body}")
     plain = [await get(client, url, point_params(point, False)) for _ in range(repeats)]
     interpolated = [await get(client, url, point_params(point, True)) for _ in range(repeats)]
-    latency = Latency(
-        first.seconds,
-        [t.seconds for t in plain],
-        [t.seconds for t in interpolated],
-        first.wire_bytes,
-        interpolated[-1].wire_bytes,
-    )
-    return latency, interpolated[-1]
+    per_model = {
+        model: [await get(client, url, point_params(point, True) | {"models": model}) for _ in range(repeats)]
+        for model in MODELS
+    }
+    return Latency(first, plain, interpolated, per_model), interpolated[-1]
 
 
 # --- comparison
@@ -297,6 +318,18 @@ def ms(seconds: list[float]) -> str:
     return f"{statistics.median(seconds) * 1000:.0f}/{max(seconds) * 1000:.0f}"
 
 
+def median_ms(timed: list[Timed], key: str | None = None) -> str:
+    """Median of the client's time (key None), of a Server-Timing metric, or of the client's time less the
+    server's total (key "outside": the network, TLS, and encoding and gzipping the JSON)."""
+    if key is None:
+        values = [t.seconds for t in timed]
+    elif key == "outside":
+        values = [t.seconds - t.server["total"] for t in timed if "total" in t.server]
+    else:
+        values = [t.server[key] for t in timed if key in t.server]
+    return f"{statistics.median(values) * 1000:.0f}" if values else "-"
+
+
 def number(value: float, digits: int) -> str:
     return f"{value:+.{digits}f}"
 
@@ -333,6 +366,7 @@ async def run(base_url: str, repeats: int, hours: int, json_path: Path | None) -
 
         runs = await open_meteo_runs(client)
         theirs: dict[str, Timed] = {}
+        theirs_one: dict[str, Timed] = {}
         their_heights: dict[str, float | None] = {}
         for point in POINTS:
             ours = forecasts[point.name]
@@ -341,34 +375,91 @@ async def run(base_url: str, repeats: int, hours: int, json_path: Path | None) -
             )
             if theirs[point.name].status != 200:
                 raise click.ClickException(f"{point.name}: Open-Meteo answered {theirs[point.name].body}")
+            # the same for HRRR alone, to compare with one model from /fx/point
+            theirs_one[point.name] = await get(
+                client,
+                OPEN_METEO_URL,
+                open_meteo_params(
+                    point, ours["point"]["elevation_m"], list(VARIABLES.values()), [MODELS["hrrr_3km"].model]
+                ),
+            )
             # Open-Meteo's own height for the point (its 90 m DEM), for the elevation table
             own = await get(
                 client, OPEN_METEO_URL, open_meteo_params(point, None, ["temperature_2m"]) | {"forecast_days": 1}
             )
             their_heights[point.name] = own.body.get("elevation")
 
-    click.echo(f"/fx/point at {base_url}: milliseconds, median/max of {repeats}; sizes on the wire (gzip)\n")
+    click.echo(
+        f"/fx/point at {base_url}, every model: milliseconds as the client sees them, median/max of {repeats}; "
+        "sizes on the wire (gzip).\nOpen-Meteo: one request for all 7 models (12 variables, 17 days), and one for "
+        "HRRR alone\n"
+    )
     click.echo(
         table(
-            ["point", "first", "plain", "interpolated", "plain KB", "interp. KB", "Open-Meteo"],
+            ["point", "first", "plain", "interpolated", "plain KB", "interp. KB", "OM 7 models", "OM HRRR"],
             [
                 [
                     name,
-                    f"{lat.first * 1000:.0f}",
-                    ms(lat.repeats),
-                    ms(lat.interpolated),
-                    f"{lat.wire_bytes / 1000:.0f}",
-                    f"{lat.interpolated_wire_bytes / 1000:.0f}",
+                    f"{lat.first.seconds * 1000:.0f}",
+                    ms([t.seconds for t in lat.repeats]),
+                    ms([t.seconds for t in lat.interpolated]),
+                    f"{lat.first.wire_bytes / 1000:.0f}",
+                    f"{lat.interpolated[-1].wire_bytes / 1000:.0f}",
                     f"{theirs[name].seconds * 1000:.0f}",
+                    f"{theirs_one[name].seconds * 1000:.0f}",
                 ]
                 for name, lat in latencies.items()
             ],
         )
     )
+
+    click.echo(
+        "\nWhere the time goes (Server-Timing), every model, medians in ms: read (the models' runs and the DEM, "
+        "concurrently), build (the response), total (the handler), and outside (the client's time less total: "
+        "network, TLS, JSON encoding, gzip)\n"
+    )
+    rows = []
+    for name, lat in latencies.items():
+        for mode, timed in (("plain", [lat.first, *lat.repeats]), ("interpolated", lat.interpolated)):
+            rows.append(
+                [
+                    name if mode == "plain" else "",
+                    mode,
+                    *(median_ms(timed, key) for key in ("read", "build", "total", "outside", None)),
+                ]
+            )
+    everything = [t for lat in latencies.values() for t in (lat.first, *lat.repeats, *lat.interpolated)]
+    rows.append(["all", "", *(median_ms(everything, key) for key in ("read", "build", "total", "outside", None))])
+    click.echo(table(["point", "mode", "read", "build", "total", "outside", "client"], rows))
+
+    click.echo(f"\nOne model per request (interpolated): median server read / total in ms over {repeats} requests\n")
+    model_rows = []
+    for model in MODELS:
+        timed_by_point = [latencies[p.name].per_model[model] for p in POINTS]
+        everywhere = [t for timed in timed_by_point for t in timed]
+        model_rows.append(
+            [
+                model,
+                *(f"{median_ms(timed, 'read')} / {median_ms(timed, 'total')}" for timed in timed_by_point),
+                f"{median_ms(everywhere, 'read')} / {median_ms(everywhere, 'total')}",
+            ]
+        )
+    click.echo(table(["model", *(p.name for p in POINTS), "all points"], model_rows))
+    reads = [
+        statistics.median([t.server["read"] for t in latencies[p.name].per_model[m] if "read" in t.server] or [0])
+        for p in POINTS
+        for m in MODELS
+    ]
+    click.echo(
+        f"\nSum of the per-model median reads, averaged over points: {sum(reads) / len(POINTS) * 1000:.0f} ms "
+        f"(against the all-models read above, where they run concurrently on the server's threads)"
+    )
+
     slowest = max(t.seconds for t in burst)
     click.echo(
         f"\nAll {len(POINTS)} points at once (interpolated): {burst_seconds * 1000:.0f} ms in all, "
-        f"slowest {slowest * 1000:.0f} ms; statuses {sorted({t.status for t in burst})}"
+        f"slowest {slowest * 1000:.0f} ms; statuses {sorted({t.status for t in burst})}; "
+        f"server reads {', '.join(median_ms([t], 'read') for t in burst)} ms"
     )
 
     click.echo("\nElevations (m): the point, each side's DEM, and the model cells ours adjusts from\n")
@@ -433,7 +524,15 @@ async def run(base_url: str, repeats: int, hours: int, json_path: Path | None) -
                     "base_url": base_url,
                     "measured_at": datetime.now(UTC).isoformat(),
                     "points": [{"name": p.name, "lat": p.lat, "lon": p.lon, "note": p.note} for p in POINTS],
-                    "latency_s": {name: asdict(lat) for name, lat in latencies.items()},
+                    "latency_s": {
+                        name: {
+                            "first": _timing(lat.first),
+                            "plain": [_timing(t) for t in lat.repeats],
+                            "interpolated": [_timing(t) for t in lat.interpolated],
+                            "per_model": {m: [_timing(t) for t in ts] for m, ts in lat.per_model.items()},
+                        }
+                        for name, lat in latencies.items()
+                    },
                     "open_meteo_runs": {m: r.isoformat() if r else None for m, r in runs.items()},
                     "comparisons": {
                         name: {m: {v: asdict(c) for v, c in got.items()} for m, got in result.items()}
@@ -444,6 +543,10 @@ async def run(base_url: str, repeats: int, hours: int, json_path: Path | None) -
             )
         )
         click.echo(f"\nWrote {json_path}")
+
+
+def _timing(timed: Timed) -> dict[str, Any]:
+    return {"client": timed.seconds, "wire_bytes": timed.wire_bytes, "server": timed.server}
 
 
 def _cell(forecast: dict[str, Any], model: str) -> str:
