@@ -6,7 +6,8 @@ every `refresh_interval` seconds, each model's `index.json` and the DEM's are re
 index costs one small request). A new run is downloaded beside the current one, under a `.partial` name, renamed
 into place once complete, opened, and only then swapped in, so requests always read a complete run. The run before
 the current one is kept until the next swap, so a request that started reading it just before a swap finishes
-safely; older ones are deleted.
+safely; older ones are deleted. A downloaded copy that can't be opened (a corrupt shard index, say) is deleted so
+the next refresh downloads it again, and the previous run stays in use meanwhile.
 
 The server's disk is wiped when its machine restarts, so a fresh start downloads everything (~1.2 GB with the
 DEM). Requests wait up to `ready_timeout` for that; after it, a model still downloading is reported as loading.
@@ -217,7 +218,11 @@ class ArchiveCache:
                             _replace_with_download, self.storage, ArchiveStore.run_prefix(model.id, newest), target
                         )
                 logger.info("cached %s %s: %.1f MB", model.id, name, size / 1e6)
-            self._runs[model.id] = await asyncio.to_thread(OpenRun.open, model, target)
+            try:
+                self._runs[model.id] = await asyncio.to_thread(OpenRun.open, model, target)
+            except Exception:
+                await self._discard(model.id, target)
+                raise
             self._swap(model.id, folder, name)
         except Exception:
             self._etags.pop(key, None)  # read the index again next time
@@ -243,11 +248,29 @@ class ArchiveCache:
                             _replace_with_download, self.storage, f"{DEM_PREFIX}/{index.build}/", target
                         )
                 logger.info("cached the DEM %s: %.0f MB", index.build, size / 1e6)
-            self._dem = await asyncio.to_thread(_open_group, target)
+            try:
+                self._dem = await asyncio.to_thread(_open_group, target)
+            except Exception:
+                await self._discard("dem", target)
+                raise
             self._swap("dem", folder, index.build)
         except Exception:
             self._etags.pop(key, None)
             logger.exception("could not cache the elevation model")
+
+    async def _discard(self, name: str, target: Path) -> None:
+        """Delete a copy that failed to open (a corrupt shard index, truncated metadata, ...).
+
+        A complete folder on disk is reused rather than downloaded again, so without this a bad copy would keep the
+        model (or the DEM) on its previous run until a newer one is published. Only one download is tried per
+        refresh; `run_forever` tries again after `refresh_interval`.
+        """
+        current = self._current.get(name)
+        # Requests may still be reading the current copy or the one before it
+        if current is not None and target.name in (current.name, current.previous):
+            return
+        logger.warning("removing %s, which could not be opened, to download it again", target)
+        await asyncio.to_thread(shutil.rmtree, target, True)
 
     def _swap(self, name: str, folder: Path, current: str) -> None:
         """Record what's now in use and delete what's older than the one it replaced."""
