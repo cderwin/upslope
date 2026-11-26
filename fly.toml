@@ -11,6 +11,11 @@ primary_region = "sjc"
   dockerfile = "Dockerfile"
   # VITE_MAPBOX_TOKEN is passed as --build-arg by deploy.yml and `just deploy`
 
+[env]
+  # where the web machine keeps the newest archived runs and the DEM (~1.2 GB) for /fx/point: its own disk, wiped
+  # with the machine and downloaded again at startup. The exporter and archiver don't use it.
+  ARCHIVE_CACHE_DIR = "/tmp/upslope-archive"
+
 # Three process groups, each on its own machine, so exporting and archiving never slow down requests:
 # - web serves the API and webapp;
 # - exporter checks for and exports new frames every 15 minutes. Exactly one may run (two would race on

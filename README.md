@@ -19,6 +19,7 @@ UW WRF plots (GIF)          annotations in S3 (control points)
   upslope serve (Litestar) ◄── index.json, export-status.json ─────────────────────────┘      │
     ├── /fx/status      each model's latest and retained runs, the exporter's health and      │
     │                   data_url, where the browser loads manifests and frames from ◄─────────┘
+    ├── /fx/point       every archived model's forecast at a point (from the newest runs, kept on local disk)
     ├── /admin/...      annotation editing API (bearer token)
     ├── /health
     └── /               built webapp (/map, /annotation)

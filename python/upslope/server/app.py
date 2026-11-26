@@ -11,12 +11,15 @@ from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from litestar import Litestar, get
+from litestar.config.compression import CompressionConfig
 from litestar.datastructures import State
 from litestar.exceptions import HTTPException
 from litestar.types import Scope
 
 from upslope.annotation_service import AnnotationError, AnnotationService
-from upslope.cli import DEFAULT_MODELS_CONFIG, PROJECT_BASE
+from upslope.archive.cache import ArchiveCache
+from upslope.archive.config import ArchiveConfig
+from upslope.cli import DEFAULT_ARCHIVE_CONFIG, DEFAULT_MODELS_CONFIG, PROJECT_BASE
 from upslope.clients.annotations import AnnotationStore
 from upslope.clients.forecasts import ForecastStore
 from upslope.clients.storage import StorageClient
@@ -25,6 +28,7 @@ from upslope.models.config import ModelsConfig
 from upslope.server.admin import AdminGeoregistrationController
 from upslope.server.forecast import ForecastController, StatusCache
 from upslope.server.frontend import create_frontend_router
+from upslope.server.point import PointController
 
 logger = get_logger(__name__)
 
@@ -52,6 +56,8 @@ def create_app(
     config: ModelsConfig | None = None,
     public_storage: StorageClient | None = None,
     data_url: str | None = None,
+    archive_cache_dir: Path | None = None,
+    archive_config: ArchiveConfig | None = None,
 ) -> Litestar:
     """Build the app.
 
@@ -64,6 +70,9 @@ def create_app(
             given, else built from the environment (`PUBLIC_BUCKET_NAME`) at startup.
         data_url: Where browsers load forecast files from (`forecasts/` in the public bucket), reported at
             `/fx/status`. Defaults to `$PUBLIC_DATA_URL`; raises RuntimeError without one.
+        archive_cache_dir: Local folder for the archive's newest runs and the DEM, which point forecasts
+            (`/fx/point`) are answered from. Defaults to `$ARCHIVE_CACHE_DIR`; without one, `/fx/point` is disabled.
+        archive_config: Archive config. Loaded from `python/config/archive.yaml` at startup if omitted.
     """
     configure_logging()
 
@@ -80,6 +89,11 @@ def create_app(
     if webapp_dist is None:
         webapp_dist = Path(os.environ.get("UPSLOPE_WEBAPP_DIST", DEFAULT_WEBAPP_DIST))
 
+    if archive_cache_dir is None and os.environ.get("ARCHIVE_CACHE_DIR"):
+        archive_cache_dir = Path(os.environ["ARCHIVE_CACHE_DIR"])
+    if archive_cache_dir is None:
+        logger.warning("ARCHIVE_CACHE_DIR is not set; point forecasts (/fx/point) are disabled")
+
     @asynccontextmanager
     async def lifespan(app: Litestar) -> AsyncIterator[None]:
         # build up front so missing config or credentials fail at startup, not on first use
@@ -93,14 +107,24 @@ def create_app(
         except Exception:
             logger.exception("could not read forecast status at startup; will retry on request")
         refresher = asyncio.create_task(status.run_forever(), name="forecast-status-refresh")
+        tasks = [refresher]
+        app.state.archive_cache = None
+        if archive_cache_dir is not None:
+            # downloads in the background: the first requests wait for it briefly (ArchiveCache.ready_timeout)
+            archive = app.state.archive_cache = ArchiveCache(
+                app.state.storage, archive_config or ArchiveConfig.load(DEFAULT_ARCHIVE_CONFIG), archive_cache_dir
+            )
+            tasks.append(asyncio.create_task(archive.run_forever(), name="archive-cache-refresh"))
         try:
             yield
         finally:
-            refresher.cancel()
-            with suppress(asyncio.CancelledError):
-                await refresher
+            for task in tasks:
+                task.cancel()
+            for task in tasks:
+                with suppress(asyncio.CancelledError):
+                    await task
 
-    route_handlers = [health, ForecastController, AdminGeoregistrationController]
+    route_handlers = [health, ForecastController, PointController, AdminGeoregistrationController]
     if (webapp_dist / "index.html").is_file():
         route_handlers.append(create_frontend_router(webapp_dist, reserved_prefixes=("fx", "health", "admin")))
     else:
@@ -115,4 +139,6 @@ def create_app(
         after_exception=[log_server_error],
         logging_config=None,
         openapi_config=None,
+        # point forecasts are a few hundred KB of JSON, mostly repeated digits
+        compression_config=CompressionConfig(backend="gzip", minimum_size=1024),
     )

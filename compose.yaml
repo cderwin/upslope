@@ -81,6 +81,8 @@ services:
       <<: *s3-env
       # token for /admin and the annotation page; set ADMIN_TOKEN in .env.local to override
       ADMIN_TOKEN: ${ADMIN_TOKEN:-upslope-local-admin}
+      # point forecasts (/fx/point) from the archive in MinIO, cached inside the container
+      ARCHIVE_CACHE_DIR: /tmp/upslope-archive
     depends_on:
       georegistration-seed:
         condition: service_completed_successfully

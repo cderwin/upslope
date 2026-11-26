@@ -448,6 +448,48 @@ requires), shown on the map.
 | Method and path | Purpose |
 | --- | --- |
 | `GET /fx/status` | Each configured model's `layers` (variable ids), `latest` run, `in_progress` run and retained `runs` (`{initialized, path}`); the `variables` (`{id, name, group}`) and `default_model` from the config; and the exporter's health (`export`, `export_overdue`), from memory; refreshed in the background every minute |
+| `GET /fx/point?lat=&lon=` | Every archived model's forecast at a point, for charts comparing models (below). Options: `elevation` (metres, instead of the DEM's), `interpolate=true`, `models` and `variables` (comma-separated ids) |
+
+#### Point forecasts
+
+`/fx/point` answers from each archived model's newest run (see Forecast
+archive), which the server keeps on local disk with the elevation model:
+`ArchiveCache` (`upslope/archive/cache.py`) checks every model's `index.json`
+and `archive/dem/index.json` each minute (with ETags), downloads anything new
+beside the current copy and swaps it in once complete. The run before is kept
+until the next swap; older ones are deleted. The folder is `ARCHIVE_CACHE_DIR`.
+Without it, `/fx/point` answers 503. A fresh start downloads ~1.2 GB in the
+background; requests wait up to 15 s for it, then list models still
+downloading as `loading`.
+
+The response (`upslope/archive/point.py`) puts every model on one hourly axis,
+grouped by variable, so a chart for a variable plots each model's series
+against the same times:
+
+- `point`: `lat`, `lon`, `elevation_m` and `elevation_source` (`usgs_3dep`,
+  `copernicus_glo30`, `request`, or null when unknown).
+- `times`: the hourly axis, Unix seconds, from the first hour any model has a
+  value to the last.
+- `variables`: `{id: {name, units, kind, series: {model: [value or null per
+  hour]}}}`, in standard units, rounded to each variable's stored step. `kind`
+  is `instant`, `sum` / `mean` over the interval ending at each value, or
+  `total` (running totals since `accumulation_start`, the newest run's start,
+  so every model's total covers the same hours). Derived on the server:
+  `wind_speed_10m`, `wind_direction_10m` (from, degrees),
+  `precipitation_accumulated`, `snowfall_water_equivalent_accumulated`.
+- `models`: `{id: {name, init_time, steps: [{until_hour, step}], cell: {lat,
+  lon, elevation_m}, adjustment, attribution}}`. `adjustment` says whether
+  values were moved from the model's terrain (`cell.elevation_m`) to the
+  point's elevation: `{applied: true, method: "standard_lapse_rate",
+  lapse_rate_k_per_km: 6.5, delta_m, variables}` (temperature at 6.5 K/km, dew
+  point at 1.8 K/km and capped at the temperature, humidity recomputed), or
+  `{applied: false, reason}` (`no model terrain`, `point elevation unknown`).
+- `missing`: `{model: reason}` for models left out: `outside the model's
+  region`, `no archived run`, `loading`, `no data at this point`.
+- `interpolated`: without `interpolate`, a model's values sit at the hours it
+  forecasts and other hours are null; with it, the hours between are filled (a
+  sum split evenly over its interval, a mean repeated, an instant value
+  interpolated linearly). `steps` shows which hours are the model's own.
 
 `data_url` is where the webapp loads manifests
 (`<data_url>/<model>/<run path>/manifest.json`) and frames (their paths are
@@ -477,8 +519,8 @@ has passed without a newer status: the exporter is stuck or down.
 The archiver keeps the newest runs of each model in `config/archive.yaml` as
 Zarr v3 stores in the private bucket, all in one standard form: the same
 variable names, units, accumulation conventions and encoding, whether a run
-came from dynamical.org or Open-Meteo's open data. Nothing reads them yet; they
-are the data for point forecasts (and possibly the map) later. The design, the
+came from dynamical.org or Open-Meteo's open data. The server answers point
+forecasts (`/fx/point`) from them; the map may use them later. The design, the
 chunking benchmarks and the size estimates are in
 [`docs/zarr_architecture.md`](../docs/zarr_architecture.md).
 
