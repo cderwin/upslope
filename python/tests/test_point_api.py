@@ -178,6 +178,51 @@ def test_cache_survives_a_failing_download(tmp_path: Path) -> None:
     assert "fine" in forecast.models
 
 
+def _damage(storage: MemoryStorage, key: str) -> bytes:
+    """Flip a byte near the end of a stored object (in a shard, its index); returns the good bytes."""
+    good, content_type = storage.objects[key]
+    data = bytearray(good)
+    data[-10] ^= 0xFF
+    storage.objects[key] = (bytes(data), content_type)
+    return good
+
+
+def test_cache_downloads_a_corrupt_run_again(tmp_path: Path) -> None:
+    storage = MemoryStorage()
+    archive = cache(storage, tmp_path)
+    publish_run(storage, tmp_path, RUN, temperature=0.0)
+    asyncio.run(archive.refresh())
+    newer = RUN + timedelta(hours=6)
+    publish_run(storage, tmp_path, newer, temperature=1.0)
+    shard = ArchiveStore.run_prefix("fine", newer) + "temperature_2m/c/0/0/0"
+    good = _damage(storage, shard)
+
+    forecast = asyncio.run(_refresh_then_point(archive, elevation=1000))
+    assert forecast.variables["temperature_2m"].series["fine"][0] == 0  # still the previous run
+    assert not (tmp_path / "cache" / "fine" / run_key(newer)).exists()  # so the next refresh downloads it again
+
+    storage.objects[shard] = (good, storage.objects[shard][1])
+    forecast = asyncio.run(_refresh_then_point(archive, elevation=1000))
+    assert forecast.variables["temperature_2m"].series["fine"][0] == 1
+
+
+def test_cache_downloads_a_corrupt_dem_again(tmp_path: Path) -> None:
+    storage = MemoryStorage()
+    publish_dem(storage, tmp_path)
+    metadata = next(key for key in storage.list_keys("archive/dem/") if key.endswith(".zarr/zarr.json"))
+    good = storage.objects[metadata]
+    storage.objects[metadata] = (good[0][: len(good[0]) // 2], good[1])  # truncated
+    archive = cache(storage, tmp_path)
+
+    forecast = asyncio.run(_refresh_then_point(archive))
+    assert forecast.point.elevation_m is None
+    assert not (tmp_path / "cache" / "dem" / "20261125T1200.zarr").exists()
+
+    storage.objects[metadata] = good
+    forecast = asyncio.run(_refresh_then_point(archive))
+    assert forecast.point.elevation_m == 2000
+
+
 # --- the API
 
 
