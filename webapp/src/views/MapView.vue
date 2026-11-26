@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import ForecastMap from '@/forecast/components/ForecastMap.vue'
 import MapControls from '@/forecast/components/MapControls.vue'
@@ -26,11 +26,16 @@ import {
   type LoadedLayers,
 } from '@/forecast/selection'
 import { openRunStatus, setStatus, statusLabel, statusTone } from '@/forecast/status'
-import type { ForecastLayer, ForecastStatus, RunRef } from '@/forecast/types'
+import type { ForecastLayer, ForecastStatus, LngLat, RunRef } from '@/forecast/types'
 import { usePlayback } from '@/forecast/usePlayback'
 import { adminToken } from '@/admin/token'
 import { useAnnotationStore } from '@/annotation/store'
 import { openSettings, settings } from '@/settings/settings'
+import PointMenu from '@/pointForecast/components/PointMenu.vue'
+import { pointFromParam, pointParam } from '@/pointForecast/point'
+
+// Loaded on first use: the point forecast (and later its charts) isn't needed to show the map.
+const PointForecastDialog = defineAsyncComponent(() => import('@/pointForecast/components/PointForecastDialog.vue'))
 
 /** Route params, so the selected model and variable (layer) are a shareable URL under /map. */
 const props = defineProps<{ model?: string; layer?: string }>()
@@ -135,6 +140,7 @@ watch([selectedLayer, () => frame.value?.hour, opacity], ([current, hour, alpha]
       run: runQuery.value,
       hour: hour === undefined ? undefined : String(hour),
       opacity: String(alpha),
+      point: route.query.point,
     },
   })
 })
@@ -256,6 +262,35 @@ watch(
   { immediate: true },
 )
 
+// --- the point forecast, open while the URL has ?point=lat,lon (so it can be shared, and Back closes it)
+
+const forecastPoint = computed(() => pointFromParam(route.query.point))
+/** The point the dialog shows: kept while it animates closed. */
+const dialogPoint = ref<LngLat | null>(forecastPoint.value)
+watch(forecastPoint, (point) => point && (dialogPoint.value = point))
+/** Whether this page added ?point= (so closing goes back), rather than the page loading with it. */
+let pushedPoint = false
+
+const forecastOpen = computed({
+  get: () => forecastPoint.value !== null,
+  set: (isOpen: boolean) => {
+    if (isOpen || !forecastPoint.value) return
+    if (pushedPoint) router.back()
+    else void router.replace({ query: { ...route.query, point: undefined } })
+    pushedPoint = false
+  },
+})
+
+function openPointForecast(lngLat: LngLat) {
+  pushedPoint = true
+  void router.push({ query: { ...route.query, point: pointParam(lngLat) } })
+}
+
+// Back (or forward) out of the forecast: the history entry this page pushed is gone.
+watch(forecastPoint, (point) => {
+  if (!point) pushedPoint = false
+})
+
 /** Opacity changes in tenths; values from older links (e.g. 0.75) land on the nearest tenth. */
 function stepOpacity(delta: 1 | -1) {
   opacity.value = Math.min(Math.max(Math.round(opacity.value * 10 + delta) / 10, 0), 1)
@@ -264,6 +299,7 @@ function stepOpacity(delta: 1 | -1) {
 function onKeydown(event: KeyboardEvent) {
   const target = event.target as HTMLElement | null
   if (target?.closest('input, select, textarea, button')) return
+  if (forecastPoint.value) return // the forecast dialog covers the map
   if (event.key === ' ') playing.value = !playing.value
   else if (event.key === 'ArrowLeft') step(-1)
   else if (event.key === 'ArrowRight') step(1)
@@ -338,7 +374,12 @@ onBeforeUnmount(() => {
         :values-url="frame?.valuesUrl ?? null"
         :opacity="opacity"
         :terrain="terrain"
-      />
+        :pin="forecastPoint"
+      >
+        <template #point-menu="{ lngLat, value, close }">
+          <PointMenu :lng-lat="lngLat" :value="value" @forecast="(at) => (close(), openPointForecast(at))" />
+        </template>
+      </ForecastMap>
       <MapLegend :name="layer.name" :legend="layer.legend" :attribution="layer.attribution" />
       <MapControls
         v-model:index="index"
@@ -391,6 +432,7 @@ onBeforeUnmount(() => {
     <div v-else class="d-flex h-100 align-items-center justify-content-center text-body-secondary">
       Loading forecast…
     </div>
+    <PointForecastDialog v-if="dialogPoint" v-model:open="forecastOpen" :point="dialogPoint" />
   </div>
 </template>
 

@@ -12,7 +12,9 @@ import {
   setDefaultModel,
   setFrameInterval,
   setTerrain,
+  setUnits,
   settings,
+  type Units,
 } from './settings'
 
 const open = defineModel<boolean>('open', { required: true })
@@ -111,6 +113,20 @@ function logIn() {
               <label class="form-check-label" for="settings-terrain">3D terrain</label>
               <div class="form-text mt-0">Ctrl-drag or right-drag the map to tilt and rotate.</div>
             </div>
+          </section>
+
+          <section>
+            <h6>Units</h6>
+            <label class="form-label small mb-1" for="settings-units">For point forecasts.</label>
+            <select
+              id="settings-units"
+              class="form-select form-select-sm"
+              :value="settings.units"
+              @change="setUnits(($event.target as HTMLSelectElement).value as Units)"
+            >
+              <option value="imperial">Imperial (°F, ft, in, mph)</option>
+              <option value="metric">Metric (°C, m, mm, m/s)</option>
+            </select>
           </section>
 
           <section>

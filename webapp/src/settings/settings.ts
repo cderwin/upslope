@@ -11,6 +11,9 @@ export const FRAME_INTERVAL_DEFAULT_MS = 2000
 export const FRAME_INTERVAL_MIN_MS = 250
 export const FRAME_INTERVAL_MAX_MS = 4000
 
+/** Imperial: °F, ft, in, mph. Metric: °C, m, mm, m/s. */
+export type Units = 'imperial' | 'metric'
+
 interface Settings {
   /** Playback delay between forecast frames. */
   frameIntervalMs: number
@@ -20,6 +23,8 @@ interface Settings {
   terrain: boolean
   /** The map's control panel is collapsed to the valid time and playback buttons. */
   controlsCollapsed: boolean
+  /** Units for point forecasts (the server sends metric). */
+  units: Units
 }
 
 function clampInterval(ms: number): number {
@@ -33,6 +38,7 @@ function readStored(): Settings {
     defaultModel: null,
     terrain: false,
     controlsCollapsed: false,
+    units: 'imperial',
   }
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<Settings>
@@ -40,6 +46,7 @@ function readStored(): Settings {
     if (typeof stored.defaultModel === 'string') settings.defaultModel = stored.defaultModel
     if (typeof stored.terrain === 'boolean') settings.terrain = stored.terrain
     if (typeof stored.controlsCollapsed === 'boolean') settings.controlsCollapsed = stored.controlsCollapsed
+    if (stored.units === 'imperial' || stored.units === 'metric') settings.units = stored.units
   } catch {
     // Unreadable or blocked storage: use the defaults.
   }
@@ -73,6 +80,10 @@ export function setTerrain(enabled: boolean): void {
 
 export function setControlsCollapsed(collapsed: boolean): void {
   state.controlsCollapsed = collapsed
+}
+
+export function setUnits(units: Units): void {
+  state.units = units
 }
 
 /** Whether the Settings dialog is open: the navbar opens it, and on phones (no navbar) the map's ⋮ menu. */
