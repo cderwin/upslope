@@ -502,6 +502,11 @@ against the same times:
   sum split evenly over its interval, a mean repeated, an instant value
   interpolated linearly). `steps` shows which hours are the model's own.
 
+`scripts/benchmark_point_api.py` times `/fx/point` at six Cascade and Olympic
+points (production by default; `--base-url` for another server) and compares
+each model's forecast with Open-Meteo's for the same model at the same
+elevation: `uv run scripts/benchmark_point_api.py` from `python/`.
+
 `data_url` is where the webapp loads manifests
 (`<data_url>/<model>/<run path>/manifest.json`) and frames (their paths are
 relative to the run's folder) from: `PUBLIC_DATA_URL`, the public bucket's
