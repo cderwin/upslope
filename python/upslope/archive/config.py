@@ -230,6 +230,7 @@ class ArchiveModel:
         lookback_hours: How far back to look for runs to archive.
         attribution: Credit for the data, stored with each run.
         terrain: Where the model's terrain comes from, stored with each run; None if it has none.
+        name: Display name, e.g. `HRRR`; defaults to the id.
     """
 
     id: str
@@ -244,6 +245,7 @@ class ArchiveModel:
     lookback_hours: int = DEFAULT_LOOKBACK_HOURS
     attribution: str | None = None
     terrain: TerrainConfig | None = None
+    name: str | None = None
 
     def __attrs_post_init__(self) -> None:
         check_id("model", self.id)
@@ -259,6 +261,10 @@ class ArchiveModel:
             raise ConfigError(f"model {self.id} has no variables")
         if self.keep_runs is not None and self.keep_runs < 1:
             raise ConfigError(f"model {self.id}: keep_runs must be at least 1")
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.id
 
     @property
     def lead_hours(self) -> list[int]:

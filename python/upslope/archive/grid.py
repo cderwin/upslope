@@ -4,6 +4,9 @@ Runs are stored north up on the model's own grid (no resampling), so a point is 
 transform, and winds keep the model's grid geometry until they're rotated to true north here.
 """
 
+import math
+from functools import cache
+
 import numpy as np
 from affine import Affine
 from attrs import define, field
@@ -11,6 +14,11 @@ from pyproj import Transformer
 
 # How far north (degrees) to step when finding which way true north points on the grid
 _NORTH_STEP = 0.01
+
+
+@cache
+def _transformer(source: str, target: str) -> Transformer:
+    return Transformer.from_crs(source, target, always_xy=True)
 
 
 @define(frozen=True)
@@ -64,3 +72,25 @@ class RegionGrid:
         """The transform as GDAL's GeoTransform attribute: 'c a b f d e'."""
         t = self.transform
         return " ".join(repr(float(v)) for v in (t.c, t.a, t.b, t.f, t.d, t.e))
+
+    @classmethod
+    def from_attributes(cls, crs: str, geo_transform: str, shape: tuple[int, int]) -> "RegionGrid":
+        """The grid of a stored run, from its `spatial_ref` attributes (`crs_wkt`, `GeoTransform`) and shape."""
+        return cls(crs, Affine.from_gdal(*(float(v) for v in geo_transform.split())), shape)
+
+    def cell(self, lon: float, lat: float) -> tuple[int, int] | None:
+        """(row, col) of the cell holding a point, or None if it's outside the grid."""
+        x, y = _transformer("EPSG:4326", self.crs).transform(lon, lat)
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None
+        col, row = ~self.transform @ (x, y)
+        row, col = math.floor(row), math.floor(col)
+        if not (0 <= row < self.shape[0] and 0 <= col < self.shape[1]):
+            return None
+        return row, col
+
+    def cell_centre(self, row: int, col: int) -> tuple[float, float]:
+        """(lon, lat) of a cell's centre."""
+        x, y = self.transform @ (col + 0.5, row + 0.5)
+        lon, lat = _transformer(self.crs, "EPSG:4326").transform(x, y)
+        return float(lon), float(lat)
