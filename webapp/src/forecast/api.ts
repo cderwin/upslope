@@ -27,16 +27,17 @@ export function fetchStatus(signal: AbortSignal | null = null): Promise<Forecast
 }
 
 /**
- * Every archived model's forecast at a point, with the hours between each model's values filled in.
+ * Every archived model's forecast at a point; with `interpolate`, the hours between each model's values filled in.
  * `elevation` (metres) replaces the server's elevation model, e.g. for a point the viewer knows better.
  */
 export function fetchPointForecast(
   lat: number,
   lon: number,
-  elevation: number | null = null,
+  { elevation = null, interpolate = true }: { elevation?: number | null; interpolate?: boolean } = {},
   signal: AbortSignal | null = null,
 ): Promise<PointForecast> {
-  const params = new URLSearchParams({ lat: String(lat), lon: String(lon), interpolate: 'true' })
+  const params = new URLSearchParams({ lat: String(lat), lon: String(lon) })
+  if (interpolate) params.set('interpolate', 'true')
   if (elevation !== null) params.set('elevation', String(elevation))
   return getJson<PointForecast>(`${FORECAST_BASE_URL}/point?${params}`, 'the point forecast', signal)
 }

@@ -5,8 +5,13 @@ import { useBootstrapModal } from '@/annotation/useBootstrapModal'
 import { fetchPointForecast, runLabel } from '@/forecast/api'
 import type { LngLat } from '@/forecast/types'
 import { settings } from '@/settings/settings'
+import { CHARTS, chartOption, chartUnit, windowRange, type ChartContext } from '../charts'
+import { modelOrder, useChartTheme } from '../palette'
+import { nights } from '../sun'
 import type { ElevationSource, ModelInfo, PointForecast } from '../types'
 import { displayUnit, formatHeight, formatHeightChange, formatLatLon, heightToMetres } from '../units'
+import ForecastChart from './ForecastChart.vue'
+import PointForecastControls from './PointForecastControls.vue'
 
 /** Every archived model's forecast at a point (`/fx/point`). Opened from the map's point menu, or `?point=`. */
 const props = defineProps<{ point: LngLat }>()
@@ -20,6 +25,10 @@ const loading = ref(false)
 const error = ref('')
 /** The viewer's elevation for the point, in metres; null for the server's elevation model. */
 const elevation = ref<number | null>(null)
+/** Fill the hours between each model's values (the server does it), or show only the hours each model has. */
+const interpolate = ref(true)
+/** When the forecast loaded: the charts' "now". */
+const loadedAt = ref(Date.now())
 
 let abort = new AbortController()
 let generation = 0
@@ -33,8 +42,10 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const result = await fetchPointForecast(lat, lon, elevation.value, signal)
-    if (gen === generation) forecast.value = result
+    const result = await fetchPointForecast(lat, lon, { elevation: elevation.value, interpolate: interpolate.value }, signal)
+    if (gen !== generation) return
+    forecast.value = result
+    loadedAt.value = Date.now()
   } catch (e) {
     if (!signal.aborted && gen === generation) error.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -48,6 +59,7 @@ watch(
   () => {
     elevation.value = null
     forecast.value = null
+    selected.value = null
     if (open.value) void load()
   },
 )
@@ -92,6 +104,52 @@ function resetElevation() {
   elevation.value = null
   void load()
 }
+
+watch(interpolate, () => void load())
+
+// --- charts
+
+const theme = useChartTheme()
+/** The models shown; null until the viewer changes it (then every model with data). */
+const selected = ref<Set<string> | null>(null)
+const windowHours = ref<number | null>(72)
+const visible = ref(new Set(CHARTS.filter((chart) => chart.default).map((chart) => chart.variable)))
+/** A model to emphasize in every chart (its control is hovered). */
+const highlight = ref<string | null>(null)
+
+const modelChoices = computed(() => {
+  const current = forecast.value
+  if (!current) return []
+  const ids = [...Object.keys(current.models), ...Object.keys(current.missing)].sort(modelOrder)
+  return ids.map((id) => ({ id, name: current.models[id]?.name ?? id, missing: current.missing[id] ?? null }))
+})
+const shownModels = computed({
+  get: () => selected.value ?? new Set(Object.keys(forecast.value?.models ?? {})),
+  set: (models: Set<string>) => (selected.value = models),
+})
+/** The charts this forecast has data for. */
+const availableCharts = computed(() => CHARTS.filter((chart) => forecast.value?.variables[chart.variable]))
+const shownCharts = computed(() => availableCharts.value.filter((chart) => visible.value.has(chart.variable)))
+
+const context = computed<ChartContext | null>(() => {
+  const current = forecast.value
+  if (!current) return null
+  const range = windowRange(current, windowHours.value, loadedAt.value)
+  return {
+    forecast: current,
+    models: Object.keys(current.models)
+      .filter((id) => shownModels.value.has(id))
+      .sort(modelOrder),
+    window: range,
+    nights: nights(range[0], range[1], current.point.lat, current.point.lon),
+    now: loadedAt.value,
+    units: system.value,
+    theme: theme.value,
+  }
+})
+const options = computed(() =>
+  context.value ? Object.fromEntries(shownCharts.value.map((chart) => [chart.variable, chartOption(chart, context.value!)])) : {},
+)
 
 // --- models
 
@@ -162,7 +220,33 @@ function adjustment(info: ModelInfo): string {
             Loading the forecast…
           </div>
 
-          <template v-if="forecast">
+          <template v-if="forecast && context">
+            <PointForecastControls
+              v-model:selected="shownModels"
+              v-model:window-hours="windowHours"
+              v-model:visible="visible"
+              v-model:interpolate="interpolate"
+              v-model:highlight="highlight"
+              class="controls-bar sticky-top"
+              :models="modelChoices"
+              :dark="theme.dark"
+              :charts="availableCharts"
+            />
+
+            <div class="row row-cols-1 row-cols-lg-2 g-3" :class="{ 'opacity-50': loading }">
+              <section v-for="chart in shownCharts" :key="chart.variable" class="col">
+                <h6 class="chart-title mb-0">
+                  {{ chart.title }}
+                  <span class="text-body-secondary fw-normal">{{ chartUnit(chart, forecast, system) }}</span>
+                </h6>
+                <ForecastChart :option="options[chart.variable]" group="point-forecast" :highlight="highlight" />
+              </section>
+            </div>
+            <p class="form-text mb-0">
+              Times are Pacific. Shading marks night; the vertical line is now. Hover a chart to read every model's
+              value at that hour.
+            </p>
+
             <section>
               <h6 class="mb-2">Models</h6>
               <div class="table-responsive">
@@ -204,5 +288,18 @@ function adjustment(info: ModelInfo): string {
 <style scoped>
 .elevation .input-group {
   width: 8.5rem;
+}
+
+/* The controls stay in view while the charts scroll under them. */
+.controls-bar {
+  top: calc(-1 * var(--bs-modal-padding));
+  margin: calc(-1 * var(--bs-modal-padding)) calc(-1 * var(--bs-modal-padding)) 0;
+  padding: 0.75rem var(--bs-modal-padding);
+  background: var(--bs-modal-bg);
+  border-bottom: var(--bs-border-width) solid var(--bs-border-color-translucent);
+}
+
+.chart-title {
+  font-size: 0.875rem;
 }
 </style>

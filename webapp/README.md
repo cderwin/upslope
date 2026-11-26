@@ -142,9 +142,27 @@ with Esc, a click elsewhere, or by moving the map. **Point forecast** adds
 and opens a dialog with every archived model's forecast at the point, from
 `/fx/point` (see `python/README.md`). Its header shows the point's elevation from
 the server's elevation model; typing another refetches with `elevation=`, since
-temperatures are adjusted to it. A table lists each model's run, terrain height
-and adjustment, and the models left out and why. The dialog loads on first use,
-so the map page doesn't download it. Heights and values show in the units chosen
+temperatures are adjusted to it.
+
+Below it, one chart per variable compares every model (ECharts,
+`src/pointForecast/charts.ts`): temperature, freezing level, precipitation and
+snowfall totals, snow depth, wind speed, gusts and direction, cloud cover,
+humidity, dew point, solar radiation and pressure (hourly amounts and wind
+components can be turned on under **Charts**). The charts share their time axis
+and hover: a crosshair at one time shows on all of them, with the hovered
+chart's tooltip listing every model's value. Hovering a line, or a model's chip
+in the controls, emphasizes that model. The controls pick the models, the time
+window (24 h to all) and whether the hours between a model's steps are filled.
+Nights are shaded (sunrise and sunset computed for the point, `sun.ts`), a line
+marks now, and reference lines mark freezing and, on the freezing level, the
+point's elevation. Each model keeps its color everywhere (`palette.ts`: a fixed,
+color-blind-checked order, stepped for light and dark mode). GFS and RRFS report
+a freezing level of 0 when it's below their terrain; the charts leave a gap
+(issue #46).
+
+A table under the charts lists each model's run, terrain height and adjustment,
+and the models left out and why. The dialog, ECharts included, loads on first
+use, so the map page doesn't download it. Heights and values show in the units chosen
 in Settings (imperial by default; the server sends metric,
 `src/pointForecast/units.ts`).
 
@@ -213,7 +231,11 @@ src/pointForecast/
   types.ts                     /fx/point response
   point.ts                     ?point= parsing
   units.ts                     Display units (imperial/metric) and formatting
-  components/                  PointMenu (the map click menu), PointForecastDialog
+  charts.ts                    Which charts, and each one's ECharts option
+  palette.ts                   Model colors and the charts' theme (Bootstrap's colors)
+  sun.ts                       Sunrise and sunset, for night shading
+  components/                  PointMenu (the map click menu), PointForecastDialog, PointForecastControls,
+                               ForecastChart
 src/settings/
   settings.ts                  Viewer preferences (localStorage)
   SettingsDialog.vue           Login/logout, playback speed, units and default model
