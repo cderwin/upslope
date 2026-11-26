@@ -462,6 +462,14 @@ Without it, `/fx/point` answers 503. A fresh start downloads ~1.2 GB in the
 background; requests wait up to 15 s for it, then list models still
 downloading as `loading`.
 
+A point reads one cell of every variable straight from the run's shard files
+(`upslope/archive/shards.py`): each array's shard indexes are read and
+checksummed once when a run is opened, then a read is one `pread` and one Blosc
+decode per inner chunk, several times faster than through zarr-python (about
+6 ms instead of 50 for HRRR). Only the layout `RunWriter` writes is read this
+way; an array stored any other way logs a warning when the run is opened and is
+read through zarr.
+
 The response (`upslope/archive/point.py`) puts every model on one hourly axis,
 grouped by variable, so a chart for a variable plots each model's series
 against the same times:

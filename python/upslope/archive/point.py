@@ -15,9 +15,12 @@ Steps, per model:
    filled: a sum is split evenly over its interval, a mean repeated over it, and an instant value interpolated
    linearly. Derived variables follow: wind speed and direction, and running totals of precipitation and snowfall.
 
-Reading is blocking (zarr over a local store); the rest is pure.
+Reading is blocking (local files); the rest is pure. A run's arrays are read straight from their shard files
+(`upslope.archive.shards`), which is several times faster than zarr-python for one cell; an array stored any other
+way is read through zarr.
 """
 
+import json
 import math
 from collections.abc import Iterable, Mapping
 from datetime import UTC, datetime
@@ -29,10 +32,14 @@ from attrs import define, field
 
 from upslope.archive.config import ArchiveConfig, ArchiveModel
 from upslope.archive.grid import RegionGrid
+from upslope.archive.shards import ShardedArray, UnsupportedLayout
 from upslope.archive.terrain import TERRAIN_ARRAY
+from upslope.logging import get_logger
 
 if TYPE_CHECKING:
     import zarr
+
+logger = get_logger(__name__)
 
 # The standard atmosphere's lapse rate: temperature falls this much per metre of height
 LAPSE_RATE = 0.0065
@@ -109,6 +116,8 @@ class OpenRun:
         group: The run's Zarr group.
         grid: The run's grid.
         leads: Lead times in hours.
+        readers: Array name -> a reader of its shard files, for each gridded array stored in the layout they read;
+            other arrays are read through `group`.
     """
 
     model: ArchiveModel
@@ -116,6 +125,7 @@ class OpenRun:
     group: "zarr.Group"
     grid: RegionGrid
     leads: np.ndarray
+    readers: dict[str, ShardedArray] = field(factory=dict)
 
     @classmethod
     def open(cls, model: ArchiveModel, path: Path) -> "OpenRun":
@@ -130,7 +140,8 @@ class OpenRun:
         shape = (_array(group, "y").shape[0], _array(group, "x").shape[0])
         grid = RegionGrid.from_attributes(str(spatial_ref["crs_wkt"]), str(spatial_ref["GeoTransform"]), shape)
         init_time = datetime.fromisoformat(str(group.attrs["init_time"])).astimezone(UTC)
-        return cls(model, init_time, group, grid, np.asarray(_array(group, "lead_time")[:], dtype=np.int64))
+        leads = np.asarray(_array(group, "lead_time")[:], dtype=np.int64)
+        return cls(model, init_time, group, grid, leads, _shard_readers(model, path))
 
 
 @define
@@ -165,6 +176,31 @@ def _array(group: "zarr.Group", name: str) -> "zarr.Array":
     return member
 
 
+def _shard_readers(model: ArchiveModel, path: Path) -> dict[str, ShardedArray]:
+    """A shard reader for each array on the grid (dimensions ending y, x) in the run's consolidated metadata."""
+    metadata = json.loads((path / "zarr.json").read_bytes())["consolidated_metadata"]["metadata"]
+    readers = {}
+    for name, array in metadata.items():
+        if array.get("node_type") != "array" or (array.get("dimension_names") or [])[-2:] != ["y", "x"]:
+            continue
+        try:
+            readers[name] = ShardedArray.from_metadata(path / name, array)
+        except UnsupportedLayout as e:
+            # correct either way, just slower: zarr reads whatever layout it was written in
+            logger.warning("%s %s: reading %s through zarr: %s", model.id, path.name, name, e)
+    return readers
+
+
+def _read_cell(run: OpenRun, name: str, row: int, col: int) -> tuple[np.ndarray, Mapping]:
+    """A cell's raw values over the leading axis (one value for a 2-D array), and the array's attributes."""
+    reader = run.readers.get(name)
+    if reader is not None:
+        raw = reader.series(row, col) if len(reader.layout.shape) == 3 else np.array([reader.value(row, col)])
+        return raw, reader.attributes
+    array = _array(run.group, name)
+    return np.asarray(array[..., row, col]).reshape(-1), array.attrs
+
+
 def _decode(raw: np.ndarray, attrs: Mapping) -> np.ndarray:
     fill = attrs.get("_FillValue")
     values = raw.astype(np.float64) * float(attrs.get("scale_factor", 1.0)) + float(attrs.get("add_offset", 0.0))
@@ -185,13 +221,11 @@ def read_run_point(run: OpenRun, variables: Iterable[str], lat: float, lon: floa
     row, col = cell
     values = {}
     for variable_id in variables:
-        if variable_id in run.group:
-            array = _array(run.group, variable_id)
-            values[variable_id] = _decode(np.asarray(array[:, row, col]), array.attrs)
+        if variable_id in run.readers or variable_id in run.group:
+            values[variable_id] = _decode(*_read_cell(run, variable_id, row, col))
     terrain = None
-    if TERRAIN_ARRAY in run.group:
-        array = _array(run.group, TERRAIN_ARRAY)
-        height = float(_decode(np.asarray(array[row, col]).reshape(1), array.attrs)[0])
+    if TERRAIN_ARRAY in run.readers or TERRAIN_ARRAY in run.group:
+        height = float(_decode(*_read_cell(run, TERRAIN_ARRAY, row, col))[0])
         terrain = height if math.isfinite(height) else None
     cell_lon, cell_lat = run.grid.cell_centre(row, col)
     return RunPoint(run.model, run.init_time, run.leads, cell_lon, cell_lat, terrain, values)

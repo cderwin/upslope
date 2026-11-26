@@ -283,6 +283,10 @@ At CONUS scale, HRRR alone is about 11× larger (1.9M cells, about 1 GB per run)
   coordinates and shard indexes are cached. Derived quantities (wind speed, 3-hour totals, elevation adjustment)
   are computed at read time from standard variables. The zarr reads are async (zarr-python v3), and decoding is
   blocking work, so it goes to a thread like the server's other blocking calls.
+  - As built, the server keeps each model's newest run on local disk and reads a point's cell straight from the
+    shard files (`upslope/archive/shards.py`): shard indexes are loaded once per run, then one `pread` and one Blosc
+    decode per inner chunk. zarr-python's per-call overhead was about 85% of a 45–90 ms read per model; read
+    directly, HRRR takes about 6 ms and GFS about 13 ms. Arrays in any other layout fall back to zarr.
 - **Map** (exporter, optional): read one shard per variable for the run (all leads in one or two requests), then
   render frames as today. Exporting reads upstream once (ingest) instead of once per frame.
 - **Comparing runs**: read through the view (`init_time` × `lead_time`), or per run.
