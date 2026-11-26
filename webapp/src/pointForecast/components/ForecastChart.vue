@@ -20,6 +20,8 @@ const props = defineProps<{
   group: string
   /** A model to emphasize (its series id), e.g. while its control is hovered; null for none. */
   highlight: string | null
+  /** CSS height, e.g. `170px`. */
+  height: string
 }>()
 
 const element = ref<HTMLDivElement | null>(null)
@@ -80,12 +82,11 @@ watch(
 </script>
 
 <template>
-  <div ref="element" class="forecast-chart"></div>
+  <div ref="element" class="forecast-chart" :style="{ height: props.height }"></div>
 </template>
 
 <style scoped>
 .forecast-chart {
   width: 100%;
-  height: 170px;
 }
 </style>

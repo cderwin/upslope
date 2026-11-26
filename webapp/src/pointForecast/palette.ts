@@ -6,12 +6,15 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
  */
 
 /**
- * A categorical palette in a fixed order, checked for color-blind separation between neighbours, and stepped for
- * each mode (the dark column is the same hues, re-stepped for Bootstrap's dark surface, #212529). In light mode
- * four of the hues are under 3:1 against white, so values are always readable in the hover tooltip.
+ * A categorical palette leaning blue: blue, cyan, violet and periwinkle, with coral, green and berry between them.
+ * It's in a fixed order whose neighbours pass color-blind and normal-vision separation checks, stepped for each mode
+ * (the dark column is the same hues, lighter, for Bootstrap's dark surface, #212529). With four cool hues, seven lines
+ * can't all be told apart pairwise (blue sits closest to violet and periwinkle), and in light mode cyan and
+ * periwinkle are under 3:1 against white: so the hover tooltip names every line with its value, and hovering a
+ * model's chip picks its lines out.
  */
-const LIGHT = ['#257de0', '#f47230', '#00b894', '#f2a600', '#ee7fac', '#008a17', '#6a4ce2', '#ec4647']
-const DARK = ['#338ced', '#e76624', '#00a888', '#d28e05', '#e24d8b', '#0aac23', '#9887ef', '#eb6263']
+const LIGHT = ['#2971c6', '#ea6d56', '#06b7bf', '#654db6', '#55a144', '#8a9af2', '#ab366e', '#8a6d3b']
+const DARK = ['#3d84db', '#ed7059', '#00b1b9', '#765fca', '#65b153', '#8494eb', '#bf4a7f', '#a8875a']
 const OTHER = { light: '#8a8a8a', dark: '#9c9c9c' }
 
 /**

@@ -155,8 +155,10 @@ in the controls, emphasizes that model. The controls pick the models, the time
 window (24 h to all) and whether the hours between a model's steps are filled.
 Nights are shaded (sunrise and sunset computed for the point, `sun.ts`), a line
 marks now, and reference lines mark freezing and, on the freezing level, the
-point's elevation. Each model keeps its color everywhere (`palette.ts`: a fixed,
-color-blind-checked order, stepped for light and dark mode). GFS and RRFS report
+point's elevation. Each chart's expand button shows it on its own, much bigger,
+with the controls still applying. Each model keeps its color everywhere
+(`palette.ts`: a blue-leaning palette in a fixed, color-blind-checked order,
+stepped for light and dark mode). GFS and RRFS report
 a freezing level of 0 when it's below their terrain; the charts leave a gap
 (issue #46).
 

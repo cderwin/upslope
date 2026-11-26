@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Mountain, RotateCcw } from '@lucide/vue'
+import { Maximize2, Minimize2, Mountain, RotateCcw } from '@lucide/vue'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useBootstrapModal } from '@/annotation/useBootstrapModal'
 import { fetchPointForecast, runLabel } from '@/forecast/api'
@@ -116,6 +116,8 @@ const windowHours = ref<number | null>(72)
 const visible = ref(new Set(CHARTS.filter((chart) => chart.default).map((chart) => chart.variable)))
 /** A model to emphasize in every chart (its control is hovered). */
 const highlight = ref<string | null>(null)
+/** The chart shown on its own, much bigger (the controls still apply); null for every chart. */
+const expanded = ref<string | null>(null)
 
 const modelChoices = computed(() => {
   const current = forecast.value
@@ -130,6 +132,9 @@ const shownModels = computed({
 /** The charts this forecast has data for. */
 const availableCharts = computed(() => CHARTS.filter((chart) => forecast.value?.variables[chart.variable]))
 const shownCharts = computed(() => availableCharts.value.filter((chart) => visible.value.has(chart.variable)))
+/** The expanded chart, while it's one of the charts shown. */
+const expandedChart = computed(() => shownCharts.value.find((chart) => chart.variable === expanded.value) ?? null)
+const charts = computed(() => (expandedChart.value ? [expandedChart.value] : shownCharts.value))
 
 const context = computed<ChartContext | null>(() => {
   const current = forecast.value
@@ -233,13 +238,32 @@ function adjustment(info: ModelInfo): string {
               :charts="availableCharts"
             />
 
-            <div class="row row-cols-1 row-cols-lg-2 g-3" :class="{ 'opacity-50': loading }">
-              <section v-for="chart in shownCharts" :key="chart.variable" class="col">
-                <h6 class="chart-title mb-0">
-                  {{ chart.title }}
-                  <span class="text-body-secondary fw-normal">{{ chartUnit(chart, forecast, system) }}</span>
-                </h6>
-                <ForecastChart :option="options[chart.variable]" group="point-forecast" :highlight="highlight" />
+            <div
+              class="row row-cols-1 g-3"
+              :class="{ 'opacity-50': loading, 'row-cols-lg-2': !expandedChart }"
+            >
+              <section v-for="chart in charts" :key="chart.variable" class="col">
+                <div class="d-flex align-items-center gap-2">
+                  <h6 class="chart-title mb-0">
+                    {{ chart.title }}
+                    <span class="text-body-secondary fw-normal">{{ chartUnit(chart, forecast, system) }}</span>
+                  </h6>
+                  <button
+                    type="button"
+                    class="expand-button btn btn-link btn-sm ms-auto text-body-secondary d-inline-flex align-items-center gap-1"
+                    :title="expandedChart ? 'Back to every chart' : `Show ${chart.title.toLowerCase()} bigger`"
+                    @click="expanded = expandedChart ? null : chart.variable"
+                  >
+                    <component :is="expandedChart ? Minimize2 : Maximize2" :size="14" aria-hidden="true" />
+                    <span :class="{ 'visually-hidden': !expandedChart }">{{ expandedChart ? 'All charts' : 'Expand' }}</span>
+                  </button>
+                </div>
+                <ForecastChart
+                  :option="options[chart.variable]"
+                  group="point-forecast"
+                  :highlight="highlight"
+                  :height="expandedChart ? 'max(320px, calc(100dvh - 300px))' : '170px'"
+                />
               </section>
             </div>
             <p class="form-text mb-0">
@@ -297,6 +321,12 @@ function adjustment(info: ModelInfo): string {
   padding: 0.75rem var(--bs-modal-padding);
   background: var(--bs-modal-bg);
   border-bottom: var(--bs-border-width) solid var(--bs-border-color-translucent);
+}
+
+.expand-button {
+  --bs-btn-padding-y: 0;
+  --bs-btn-padding-x: 0.25rem;
+  text-decoration: none;
 }
 
 .chart-title {
