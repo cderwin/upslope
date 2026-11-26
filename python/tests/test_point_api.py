@@ -2,6 +2,7 @@
 storage."""
 
 import asyncio
+import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -237,6 +238,19 @@ def test_point_api_is_gzipped(client: TestClient) -> None:
     response = client.get("/fx/point", params={"lat": LAT, "lon": LON}, headers={"Accept-Encoding": "gzip"})
     assert response.headers.get("content-encoding") == "gzip"
     assert response.json()["models"]["fine"]  # decoded by the client
+    assert SERVER_TIMING.fullmatch(response.headers["server-timing"])
+
+
+SERVER_TIMING = re.compile(r"read;dur=(\d+\.\d), build;dur=(\d+\.\d), total;dur=(\d+\.\d)")
+
+
+def test_point_api_reports_server_timing(client: TestClient) -> None:
+    response = client.get("/fx/point", params={"lat": LAT, "lon": LON})
+    match = SERVER_TIMING.fullmatch(response.headers["server-timing"])
+    assert match, response.headers["server-timing"]
+    read, build, total = (float(d) for d in match.groups())
+    assert read + build <= total + 0.2  # each rounded to 0.1 ms
+    assert "dur=" not in response.text  # not in the body
 
 
 def test_point_api_is_disabled_without_a_cache_folder(memory_storage, tmp_path: Path, monkeypatch) -> None:

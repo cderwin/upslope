@@ -468,7 +468,10 @@ checksummed once when a run is opened, then a read is one `pread` and one Blosc
 decode per inner chunk, several times faster than through zarr-python (about
 6 ms instead of 50 for HRRR). Only the layout `RunWriter` writes is read this
 way; an array stored any other way logs a warning when the run is opened and is
-read through zarr.
+read through zarr. Each response has a `Server-Timing` header,
+`read;dur=12.3, build;dur=4.5, total;dur=17.9` in milliseconds: reading the
+models and the elevation, building the response, and the whole handler (before
+JSON encoding and compression).
 
 The response (`upslope/archive/point.py`) puts every model on one hourly axis,
 grouped by variable, so a chart for a variable plots each model's series
