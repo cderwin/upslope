@@ -183,17 +183,24 @@ function closeMenu() {
   menu.value = null
 }
 
-/** Keep the menu inside the map: it opens below and right of the point, flipping where it would overflow. */
+/** Room the menu needs above the point, and from either side of the map, before it moves out of the way. */
+const MENU_HEIGHT = 120
+const MENU_HALF_WIDTH = 120
+
+/**
+ * The menu opens centred above the point, so its actions (at the bottom) sit just above where the viewer clicked.
+ * Near the top of the map it opens below instead, and near either side it shifts to stay inside the map.
+ */
 const menuStyle = computed(() => {
   const at = menu.value
   const canvas = container.value
   if (!at || !canvas) return {}
-  const flipX = at.x > canvas.clientWidth - 240
-  const flipY = at.y > canvas.clientHeight - 140
+  const below = at.y < MENU_HEIGHT
+  const x = at.x < MENU_HALF_WIDTH ? '-12%' : at.x > canvas.clientWidth - MENU_HALF_WIDTH ? '-88%' : '-50%'
   return {
     left: `${at.x}px`,
     top: `${at.y}px`,
-    transform: `translate(${flipX ? 'calc(-100% - 10px)' : '10px'}, ${flipY ? 'calc(-100% - 10px)' : '10px'})`,
+    transform: `translate(${x}, ${below ? '14px' : 'calc(-100% - 14px)'})`,
   }
 })
 
