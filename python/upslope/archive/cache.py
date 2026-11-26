@@ -21,6 +21,7 @@ Only the server reads this folder.
 
 import asyncio
 import shutil
+import time
 from collections.abc import Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -113,6 +114,19 @@ class _Current:
 
     name: str
     previous: str | None = None
+
+
+@define
+class PointTimings:
+    """How long a point forecast's phases took, in seconds.
+
+    Attributes:
+        read: Reading every model's point and the point's elevation (concurrently).
+        build: Putting them on one hourly axis (`build_point_forecast`).
+    """
+
+    read: float = 0.0
+    build: float = 0.0
 
 
 @define
@@ -249,6 +263,7 @@ class ArchiveCache:
         elevation: float | None = None,
         interpolate: bool = False,
         models: list[str] | None = None,
+        timings: PointTimings | None = None,
     ) -> PointForecast:
         """Every model's forecast at a point (see `upslope.archive.point.build_point_forecast`).
 
@@ -257,6 +272,7 @@ class ArchiveCache:
             elevation: The point's elevation in metres, instead of the DEM's.
             interpolate: Fill the hours between each model's values.
             models: Model ids to include; None for every model.
+            timings: Filled in with how long reading and building took, if given.
 
         Returns:
             The forecast; models without a run or outside their region are listed in `missing`.
@@ -279,9 +295,11 @@ class ArchiveCache:
                 return Elevation(elevation, "request")
             return None if dem is None else await asyncio.to_thread(read_elevation, dem, lat, lon)
 
+        started = time.perf_counter()
         point_elevation, read_points = await asyncio.gather(
             height(), asyncio.gather(*(read(run) for run in runs.values()))
         )
+        read_done = time.perf_counter()
         points: list[RunPoint] = []
         missing: dict[str, str] = {}
         for model, got in zip(selected, read_points, strict=True):
@@ -291,7 +309,10 @@ class ArchiveCache:
                 missing[model.id] = "no archived run" if self.ready else "loading"
             else:
                 missing[model.id] = "outside the model's region"
-        return build_point_forecast(self.config, lat, lon, points, point_elevation, interpolate, missing)
+        forecast = build_point_forecast(self.config, lat, lon, points, point_elevation, interpolate, missing)
+        if timings is not None:
+            timings.read, timings.build = read_done - started, time.perf_counter() - read_done
+        return forecast
 
 
 def _open_group(path: Path) -> "zarr.Group":
