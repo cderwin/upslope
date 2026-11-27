@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useBootstrapModal } from '@/annotation/useBootstrapModal'
+import { useTheme, type Theme } from '@/theme/useTheme'
 import { adminToken, clearToken, requestToken } from '@/admin/token'
 import { fetchStatus } from '@/forecast/api'
 import type { ModelStatus } from '@/forecast/types'
@@ -18,6 +19,7 @@ import {
 } from './settings'
 
 const open = defineModel<boolean>('open', { required: true })
+const { theme, setTheme } = useTheme()
 
 // The models to choose a default from, fetched when the dialog opens (the status is served from memory).
 const models = ref<ModelStatus[]>([])
@@ -74,7 +76,7 @@ function logIn() {
             <h6>Playback speed</h6>
             <label class="form-label small mb-1 d-flex justify-content-between" for="settings-speed">
               <span>Time per frame</span>
-              <span class="fw-semibold font-monospace">{{ seconds.toFixed(2) }} s</span>
+              <span class="fw-semibold tnum">{{ seconds.toFixed(2) }} s</span>
             </label>
             <input
               id="settings-speed"
@@ -113,6 +115,20 @@ function logIn() {
               <label class="form-check-label" for="settings-terrain">3D terrain</label>
               <div class="form-text mt-0">Ctrl-drag or right-drag the map to tilt and rotate.</div>
             </div>
+          </section>
+
+          <section>
+            <h6>Theme</h6>
+            <select
+              id="settings-theme"
+              class="form-select form-select-sm"
+              aria-label="Theme"
+              :value="theme"
+              @change="setTheme(($event.target as HTMLSelectElement).value as Theme)"
+            >
+              <option value="dark">Dark</option>
+              <option value="light">Light</option>
+            </select>
           </section>
 
           <section>

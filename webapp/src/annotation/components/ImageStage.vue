@@ -241,9 +241,10 @@ onBeforeUnmount(() => {
   position: absolute;
   z-index: 20;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.8);
-  color: #fff;
-  font: 12px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--up-overlay-bg);
+  color: var(--up-overlay-ink);
+  font: 12px/1.3 var(--up-font);
+  font-variant-numeric: tabular-nums;
   padding: 2px 6px;
   border-radius: 3px;
   white-space: nowrap;
@@ -255,7 +256,7 @@ onBeforeUnmount(() => {
   position: absolute;
   z-index: 15;
   pointer-events: none;
-  background: rgba(255, 0, 0, 0.35);
+  background: var(--up-overlay-marker-fill);
 }
 
 .crosshair-h {
@@ -285,8 +286,8 @@ onBeforeUnmount(() => {
 .marker::after {
   content: '';
   position: absolute;
-  background: #e23;
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9);
+  background: var(--up-overlay-marker);
+  box-shadow: 0 0 0 1px var(--up-overlay-label-bg);
 }
 
 .marker::before {
@@ -307,10 +308,11 @@ onBeforeUnmount(() => {
   position: absolute;
   left: 9px;
   top: -9px;
-  font: 11px/1.3 ui-monospace, SFMono-Regular, Menlo, monospace;
-  background: rgba(255, 255, 255, 0.88);
-  color: #111;
-  border: 1px solid #e23;
+  font: 11px/1.3 var(--up-font);
+  font-variant-numeric: tabular-nums;
+  background: var(--up-overlay-label-bg);
+  color: var(--up-overlay-label-ink);
+  border: 1px solid var(--up-overlay-marker);
   border-radius: 3px;
   padding: 0 3px;
   white-space: nowrap;

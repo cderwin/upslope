@@ -72,8 +72,8 @@ async function submit() {
               <tr v-for="[maptype, fit] in fits" :key="maptype">
                 <td>{{ maptype }}</td>
                 <td>{{ fit.control_points }}</td>
-                <td class="font-monospace">{{ formatMeters(fit.mean_error_m) }}</td>
-                <td class="font-monospace">{{ formatMeters(fit.fit_threshold_m) }}</td>
+                <td class="tnum">{{ formatMeters(fit.mean_error_m) }}</td>
+                <td class="tnum">{{ formatMeters(fit.fit_threshold_m) }}</td>
                 <td>
                   <span v-if="fit.error" class="badge text-bg-danger">can't fit</span>
                   <span v-else-if="fit.over_threshold" class="badge text-bg-warning">over threshold</span>

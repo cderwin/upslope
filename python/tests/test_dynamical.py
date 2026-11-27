@@ -479,7 +479,7 @@ def test_render_frame_writes_a_paletted_web_mercator_frame_and_its_values(tmp_pa
         assert dataset.crs == OUTPUT_CRS and dataset.count == 1 and dataset.nodata == NODATA_INDEX
         assert dataset.width >= 600  # upsampled from the coarse grid
         indices = dataset.read(1)
-        assert dataset.colormap(1)[int(indices[indices != NODATA_INDEX][0])][:3] == (253, 174, 97)  # 80-90 °F
+        assert dataset.colormap(1)[int(indices[indices != NODATA_INDEX][0])][:3] == (203, 35, 74)  # 70 °F and up: the ramp's last color
         # the values stay on the model's grid: far fewer cells than the upsampled image has pixels
         assert frame.values.size * 50 < dataset.width * dataset.height
     with checking(source):
@@ -584,3 +584,16 @@ def test_scale_colors_values() -> None:
     temperature = SCALES["temperature_f"]
     # not see-through: values under the first stop get its color
     assert temperature.colorize(np.array([-40.0]))[0] == 0
+
+
+def test_ramp_scales_match_the_design_palette_and_draw_continuous_legends() -> None:
+    from upslope.models.dynamical.scales import oklch
+
+    assert oklch(0.38, 0.14, 300) == "#4f2980" and oklch(0.88, 0.15, 105) == "#e6dd5a"  # the design's hex fallbacks
+    temperature = SCALES["temperature_f"]
+    assert temperature.stops[0] == (-20, "#4f2980") and temperature.stops[-1] == (70, "#cb234a")
+    assert dict(temperature.stops)[32] == "#e6dd5a" and len(temperature.stops) == 46  # every 2 °F
+    legend = temperature.legend()
+    assert legend.continuous and legend.ticks == [-20, -10, 0, 10, 20, 32, 50, 60, 70]
+    snow = SCALES["snow_in"].legend()
+    assert not snow.continuous and snow.ticks is None and [stop.value for stop in snow.stops][-1] == 48

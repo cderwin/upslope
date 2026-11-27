@@ -33,7 +33,7 @@ function submit() {
             Editing annotations needs the server's <code>ADMIN_TOKEN</code>. It is kept in this browser until you log out in Settings.
           </p>
           <label class="form-label mb-1" for="field-token">Token</label>
-          <input id="field-token" v-model="value" type="password" class="form-control font-monospace" autocomplete="off" required />
+          <input id="field-token" v-model="value" type="password" class="form-control tnum" autocomplete="off" required />
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-secondary" @click="dismissPrompt">Cancel</button>

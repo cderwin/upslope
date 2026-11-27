@@ -21,7 +21,7 @@ Run from the repo root with `just`, or from `python/` with `uv`. Never use bare
 ```sh
 just py-test                  # all backend tests (~5s, offline)
 just py-test -k annotation    # subset; args pass through to pytest
-just test                     # backend tests + webapp typecheck
+just test                     # backend tests + webapp typecheck + style lint
 cd python && uv run upslope --help
 cd python && uv add <pkg>     # add a dependency (updates pyproject.toml and uv.lock)
 ```
@@ -146,3 +146,16 @@ Vue 3 + TypeScript + Vite. Typecheck with `just web-typecheck`. The annotation
 store treats the server's response as the source of truth: every change is a
 request and the returned document replaces local state. Keep it that way rather
 than adding client-side edits.
+
+## Style rules (Upslope)
+
+See `webapp/STYLE.md`.
+
+- All colors come from CSS variables in `webapp/src/styles/tokens.css` (`--up-*`). Never hard-code hex/rgb/hsl/oklch in components, SCSS partials or chart configs.
+- Only typeface: Geist via `var(--up-font)`. No monospace fonts anywhere; use `font-variant-numeric: tabular-nums` (class `.tnum`) for aligned numbers.
+- Chart series colors come from `modelColor(model)` in `webapp/src/theme/charts.ts`, keyed by model id, never by index.
+- Map colormaps and legends come from the exporter's scales (`python/upslope/models/dynamical/scales.py`, design ramps in OKLCH); status UI from `statusColor(level)` or Bootstrap's contextual classes, which `bootstrap-theme.scss` maps onto the status tokens.
+- Prefer stock Bootstrap components; theme them via the `--bs-*` mapping in `webapp/src/styles/bootstrap-theme.scss` rather than per-component overrides.
+- Every UI change must look right in both `data-bs-theme="dark"` and `"light"`.
+- New color needs? Add a token to `tokens.css` (both themes) and document it in `webapp/STYLE.md` first.
+- `just web-lint` (run by `just test` and CI) enforces the color and font rules.

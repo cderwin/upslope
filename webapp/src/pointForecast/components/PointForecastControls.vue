@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { Check, Layers } from '@lucide/vue'
 import { WINDOWS, type ChartSpec } from '../charts'
-import { modelColor } from '../palette'
+import { modelColorVar } from '@/theme/charts'
 
 /** The point forecast's controls: which models, how far ahead, which charts, and whether to fill between steps. */
 const props = defineProps<{
   /** Every model in the forecast, in order, with its display name and why it's missing (if it is). */
   models: { id: string; name: string; missing: string | null }[]
-  dark: boolean
   /** The charts this forecast has. */
   charts: ChartSpec[]
 }>()
@@ -43,7 +42,7 @@ function toggle(set: Set<string>, id: string): Set<string> {
         @focus="highlight = model.missing || !selected.has(model.id) ? null : model.id"
         @blur="highlight = null"
       >
-        <span class="swatch" :style="{ background: modelColor(model.id, props.dark) }" aria-hidden="true"></span>
+        <span class="swatch" :style="{ background: modelColorVar(model.id) }" aria-hidden="true"></span>
         {{ model.name }}
       </button>
     </div>
@@ -99,7 +98,8 @@ function toggle(set: Set<string>, id: string): Set<string> {
 .model-chip {
   --bs-btn-padding-y: 0.15rem;
   --bs-btn-padding-x: 0.5rem;
-  --bs-btn-font-size: 0.8125rem;
+  --bs-btn-font-size: 12px;
+  --bs-btn-font-weight: 500;
   --bs-btn-color: var(--bs-secondary-color);
   --bs-btn-border-color: var(--bs-border-color);
   --bs-btn-hover-color: var(--bs-body-color);
@@ -125,8 +125,10 @@ function toggle(set: Set<string>, id: string): Set<string> {
   flex-shrink: 0;
 }
 
+/* Segmented control: 12px / 500, like the chips. */
 .btn-group .btn {
-  --bs-btn-font-size: 0.8125rem;
+  --bs-btn-font-size: 12px;
+  --bs-btn-font-weight: 500;
 }
 
 .small-menu {

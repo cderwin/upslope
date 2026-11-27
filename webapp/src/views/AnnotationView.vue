@@ -294,7 +294,7 @@ onMounted(() => {
         <div v-else class="text-body-secondary small py-4">Loading image…</div>
 
         <div class="d-flex justify-content-between mt-2 small text-body-secondary">
-          <span class="font-monospace">{{ status }}</span>
+          <span class="tnum">{{ status }}</span>
           <span>Click the image to georegister a pixel. Click a marker to edit it.</span>
         </div>
       </div>
@@ -325,7 +325,7 @@ onMounted(() => {
                 type="number"
                 min="1"
                 step="any"
-                class="form-control font-monospace"
+                class="form-control tnum"
                 placeholder="no threshold"
                 aria-label="Fit threshold in meters"
               />

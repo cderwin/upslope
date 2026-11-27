@@ -77,11 +77,16 @@ class Legend:
         units: Display units of the values, e.g. `°F`.
         stops: Colors in increasing value order; each applies from its value up to the next one's.
         decimals: Decimal places to show values with.
+        continuous: The stops are fine steps along a ramp, so the legend draws a gradient (labelled at `ticks`)
+            rather than a swatch per stop.
+        ticks: Values to label a continuous legend at; None to label every stop.
     """
 
     units: str
     stops: list[LegendStop]
     decimals: int = 0
+    continuous: bool = False
+    ticks: list[float] | None = None
 
 
 @define

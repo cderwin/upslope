@@ -14,6 +14,12 @@ export default defineConfig({
       '@': fileURLToPath(new URL('./src', import.meta.url)),
     },
   },
+  css: {
+    preprocessorOptions: {
+      // Bootstrap 5.3's Sass still uses @import and the global color functions; quiet what we can't change.
+      scss: { quietDeps: true, silenceDeprecations: ['import', 'global-builtin', 'color-functions'] },
+    },
+  },
   server: {
     port: 5173,
     open: '/map',
