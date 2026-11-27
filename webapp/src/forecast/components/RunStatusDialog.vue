@@ -177,7 +177,7 @@ function close() {
                           >
                             <div class="progress-bar" :style="{ width: `${progress(layer) * 100}%` }"></div>
                           </div>
-                          <span class="font-monospace text-nowrap">{{ hourLabel(layer) }}</span>
+                          <span class="tnum text-nowrap">{{ hourLabel(layer) }}</span>
                         </div>
                       </td>
                       <td>

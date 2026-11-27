@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted } from 'vue'
-import { Settings } from '@lucide/vue'
+import { Moon, Settings, Sun } from '@lucide/vue'
 import { RouterLink, RouterView } from 'vue-router'
 import TokenDialog from '@/admin/TokenDialog.vue'
 import { adminToken } from '@/admin/token'
@@ -8,6 +8,9 @@ import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import { forecastStatus, openRunStatus, refreshStatus, statusLabel, statusTone } from '@/forecast/status'
 import SettingsDialog from '@/settings/SettingsDialog.vue'
 import { openSettings, settingsDialog } from '@/settings/settings'
+import { useTheme } from '@/theme/useTheme'
+
+const { theme, toggle: toggleTheme } = useTheme()
 
 /** How often the navbar's status dot refreshes. */
 const STATUS_REFRESH_MS = 60_000
@@ -16,12 +19,6 @@ let statusTimer: number | undefined
 onMounted(() => {
   void refreshStatus()
   statusTimer = window.setInterval(() => void refreshStatus(), STATUS_REFRESH_MS)
-
-  // Follow the OS theme; Bootstrap 5.3 restyles itself from this attribute.
-  const dark = window.matchMedia('(prefers-color-scheme: dark)')
-  const apply = () => document.documentElement.setAttribute('data-bs-theme', dark.matches ? 'dark' : 'light')
-  apply()
-  dark.addEventListener('change', apply)
 })
 
 onBeforeUnmount(() => window.clearInterval(statusTimer))
@@ -29,7 +26,7 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
 
 <template>
   <!-- Phones get the map alone: its ⋮ menu has Settings and Model runs, and the other pages aren't needed there. -->
-  <nav class="navbar navbar-expand bg-body-tertiary border-bottom d-none d-sm-flex">
+  <nav class="navbar navbar-expand d-none d-sm-flex">
     <div class="container-fluid">
       <RouterLink class="navbar-brand" :to="{ name: 'map' }">Upslope</RouterLink>
       <ul class="navbar-nav me-auto">
@@ -55,6 +52,16 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
         @click="openRunStatus"
       >
         <span class="status-dot" :class="`bg-${statusTone}`" aria-hidden="true"></span>
+      </button>
+      <button
+        type="button"
+        class="btn btn-link nav-link px-2 d-flex align-items-center"
+        :title="theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'"
+        :aria-label="theme === 'dark' ? 'Switch to the light theme' : 'Switch to the dark theme'"
+        @click="toggleTheme"
+      >
+        <Sun v-if="theme === 'dark'" :size="18" aria-hidden="true" />
+        <Moon v-else :size="18" aria-hidden="true" />
       </button>
       <button
         type="button"

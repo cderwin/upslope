@@ -96,6 +96,9 @@ export interface Legend {
   /** Increasing; each color applies from its value up to the next one's. */
   stops: LegendStop[]
   decimals: number
+  /** The stops are fine steps along a ramp: draw a gradient, labelled at `ticks` (absent in older manifests). */
+  continuous?: boolean
+  ticks?: number[] | null
 }
 
 /**

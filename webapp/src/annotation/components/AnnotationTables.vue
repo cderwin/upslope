@@ -51,9 +51,9 @@ function formatError(meters: number | undefined): string {
               </td>
             </tr>
             <tr v-for="annotation in annotations" :key="annotation.point">
-              <td class="font-monospace">{{ annotation.pixel_x }}, {{ annotation.pixel_y }}</td>
+              <td class="tnum">{{ annotation.pixel_x }}, {{ annotation.pixel_y }}</td>
               <td>{{ points[annotation.point]?.name ?? annotation.point }}</td>
-              <td class="font-monospace small text-nowrap">{{ formatError(pointErrors[annotation.point]) }}</td>
+              <td class="tnum small text-nowrap">{{ formatError(pointErrors[annotation.point]) }}</td>
               <td class="text-end text-nowrap">
                 <button type="button" class="btn btn-sm btn-outline-secondary" :disabled="busy" @click="emit('edit', annotation.point)">
                   Edit
@@ -87,8 +87,8 @@ function formatError(meters: number | undefined): string {
             </tr>
             <tr v-for="row in pointRows" :key="row.key">
               <td>{{ row.point.name }}</td>
-              <td class="font-monospace small">{{ row.key }}</td>
-              <td class="font-monospace">{{ row.point.latitude }}, {{ row.point.longitude }}</td>
+              <td class="tnum small">{{ row.key }}</td>
+              <td class="tnum">{{ row.point.latitude }}, {{ row.point.longitude }}</td>
               <td class="text-center">{{ row.usage }}</td>
               <td class="text-end">
                 <button

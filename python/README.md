@@ -425,8 +425,12 @@ annotations.
 Layers whose colors the export chooses (rather than an upstream image with its
 own legend, like UW's) also have:
 
-- `legend`: `{"units": "°F", "stops": [{"value": 32, "color": "#ffffff"}, ...], "decimals": 0}`;
-  each color applies from its value up to the next stop's.
+- `legend`: `{"units": "°F", "stops": [{"value": 32, "color": "#ffffff"}, ...], "decimals": 0,
+  "continuous": false, "ticks": null}`; each color applies from its value up to the
+  next stop's. A scale sampled finely along a ramp (temperature, every 2 °F) is
+  `continuous`: the map draws its legend as a gradient labelled at `ticks`.
+  Temperature and snowfall use the webapp's design ramps, written in OKLCH and
+  converted to hex (`oklch_ramp` in `models/dynamical/scales.py`).
 - `values`: `{"scale": 0.1, "offset": 30, "lookup": "surface-temp/lookup-<digest>.tif", "lookup_step": 8}`,
   for layers whose variable sets `values` in the config. Each frame's `values`
   names its value file beside it (`surface-temp/2026-10-29T0600-<digest>.values.tif`):

@@ -1,0 +1,102 @@
+/*
+ * Upslope's design tokens: every color and the typeface. The only place colors are written; components, styles and
+ * chart configs use these variables (see webapp/STYLE.md). OKLCH, so tokens at the same lightness look equally heavy.
+ */
+
+:root {
+  --up-font: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Drawn over imagery (the satellite map, annotation images), so the same in both themes. */
+  --up-map-extent: oklch(0.6 0.16 45); /* burnt orange: a layer's data outline, and the clicked point's pin */
+  --up-overlay-ink: oklch(1 0 0);
+  --up-overlay-bg: oklch(0 0 0 / 0.8);
+  --up-overlay-shadow: oklch(0 0 0 / 0.4);
+  --up-overlay-label-bg: oklch(1 0 0 / 0.88);
+  --up-overlay-label-ink: oklch(0.2 0.01 265);
+  --up-overlay-marker: oklch(0.6 0.22 25);
+  --up-overlay-marker-fill: oklch(0.6 0.22 25 / 0.35);
+}
+
+:root,
+[data-bs-theme="dark"] {
+  --up-bg: oklch(0.2 0.055 266);
+  --up-nav-bg: oklch(0.18 0.05 266);
+  --up-surface: oklch(0.235 0.06 263);
+  --up-raised: oklch(0.27 0.06 260);
+  --up-line: oklch(0.34 0.05 258);
+  --up-muted: oklch(0.77 0.08 252);
+  --up-ink: oklch(0.97 0.005 250);
+  --up-accent: oklch(0.72 0.14 252);
+  --up-link: oklch(0.8 0.1 250);
+  --up-on-accent: oklch(0.18 0.05 266);
+  --up-nav-ink: var(--up-ink);
+  --up-nav-muted: var(--up-muted);
+  --up-nav-link: var(--up-link);
+  --up-night: oklch(0 0 0 / 0.2);
+  --up-series-1: oklch(0.74 0.14 252);
+  --up-series-2: oklch(0.74 0.14 45);
+  --up-series-3: oklch(0.74 0.14 175);
+  --up-series-4: oklch(0.79 0.14 85);
+  --up-series-5: oklch(0.74 0.14 345);
+  --up-series-6: oklch(0.79 0.14 145);
+  --up-series-7: oklch(0.74 0.14 295);
+  --up-series-8: oklch(0.74 0.14 20);
+  --up-series-9: oklch(0.74 0.14 215);
+  --up-series-10: oklch(0.79 0.14 115);
+  --up-good: oklch(0.78 0.15 150);
+  --up-good-bg: oklch(0.3 0.05 150);
+  --up-good-fg: oklch(0.9 0.1 150);
+  --up-watch: oklch(0.78 0.15 92);
+  --up-watch-bg: oklch(0.3 0.05 92);
+  --up-watch-fg: oklch(0.9 0.1 92);
+  --up-warning: oklch(0.78 0.15 55);
+  --up-warning-bg: oklch(0.3 0.05 55);
+  --up-warning-fg: oklch(0.9 0.1 55);
+  --up-danger: oklch(0.78 0.15 25);
+  --up-danger-bg: oklch(0.3 0.05 25);
+  --up-danger-fg: oklch(0.9 0.1 25);
+}
+
+[data-bs-theme="light"] {
+  --up-bg: oklch(0.985 0.005 250);
+  --up-nav-bg: oklch(0.24 0.06 265);
+  --up-surface: oklch(0.955 0.012 255);
+  --up-raised: oklch(1 0 0);
+  --up-line: oklch(0.88 0.02 255);
+  --up-muted: oklch(0.48 0.08 256);
+  --up-ink: oklch(0.24 0.06 265);
+  --up-accent: oklch(0.5 0.15 258);
+  --up-link: oklch(0.5 0.15 258);
+  --up-on-accent: oklch(1 0 0);
+  --up-nav-ink: oklch(0.97 0.005 250);
+  --up-nav-muted: oklch(0.8 0.07 252);
+  --up-nav-link: oklch(0.82 0.1 250);
+  --up-night: oklch(0.5 0.04 255 / 0.07);
+  --up-series-1: oklch(0.58 0.14 252);
+  --up-series-2: oklch(0.58 0.14 45);
+  --up-series-3: oklch(0.58 0.14 175);
+  --up-series-4: oklch(0.63 0.14 85);
+  --up-series-5: oklch(0.58 0.14 345);
+  --up-series-6: oklch(0.63 0.14 145);
+  --up-series-7: oklch(0.58 0.14 295);
+  --up-series-8: oklch(0.58 0.14 20);
+  --up-series-9: oklch(0.58 0.14 215);
+  --up-series-10: oklch(0.63 0.14 115);
+  --up-good: oklch(0.6 0.15 150);
+  --up-good-bg: oklch(0.94 0.045 150);
+  --up-good-fg: oklch(0.38 0.1 150);
+  --up-watch: oklch(0.6 0.15 92);
+  --up-watch-bg: oklch(0.94 0.045 92);
+  --up-watch-fg: oklch(0.38 0.1 92);
+  --up-warning: oklch(0.6 0.15 55);
+  --up-warning-bg: oklch(0.94 0.045 55);
+  --up-warning-fg: oklch(0.38 0.1 55);
+  --up-danger: oklch(0.6 0.15 25);
+  --up-danger-bg: oklch(0.94 0.045 25);
+  --up-danger-fg: oklch(0.38 0.1 25);
+}
+
+/* Numbers that line up (coordinates, times, tables, axis ticks): Geist's tabular figures, never a monospace face. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
