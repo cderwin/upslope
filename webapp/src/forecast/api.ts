@@ -1,4 +1,5 @@
 import type { ForecastLayer, ForecastStatus, ModelStatus, RunManifest, RunRef } from './types'
+import type { PointForecast } from '@/pointForecast/types'
 
 /**
  * The upslope server's forecast API, fetched at runtime and never bundled. In development, vite proxies
@@ -23,6 +24,21 @@ async function getJson<T>(url: string, what: string, signal: AbortSignal | null)
 
 export function fetchStatus(signal: AbortSignal | null = null): Promise<ForecastStatus> {
   return getJson<ForecastStatus>(`${FORECAST_BASE_URL}/status`, 'the forecast status', signal)
+}
+
+/**
+ * Every archived model's forecast at a point, with the hours between each model's values filled in.
+ * `elevation` (metres) replaces the server's elevation model, e.g. for a point the viewer knows better.
+ */
+export function fetchPointForecast(
+  lat: number,
+  lon: number,
+  elevation: number | null = null,
+  signal: AbortSignal | null = null,
+): Promise<PointForecast> {
+  const params = new URLSearchParams({ lat: String(lat), lon: String(lon), interpolate: 'true' })
+  if (elevation !== null) params.set('elevation', String(elevation))
+  return getJson<PointForecast>(`${FORECAST_BASE_URL}/point?${params}`, 'the point forecast', signal)
 }
 
 /** A run's manifest, from `base` (see `dataBaseUrl`). */

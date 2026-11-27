@@ -20,7 +20,7 @@ npm run typecheck
 | `/annotation`                     | `annotation`       | Georegistration tool, first image selected    |
 | `/annotation/:maptype/:image`     | `annotation-image` | Same tool, deep-linked to one image           |
 | `/map`                            | `map`              | Forecast map, first layer selected            |
-| `/map/:model/:layer`              | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&run=`) |
+| `/map/:model/:layer`              | `map-layer`        | Same map, deep-linked (`?hour=&opacity=&run=`); `?point=lat,lon` opens that point's forecast |
 | `/soundings/:station?`            | `soundings`        | Latest sounding from a station (default: nearest Seattle) |
 | `/about`                          | `about`            | Project description and credits               |
 | anything else                     | `not-found`        | 404                                           |
@@ -55,7 +55,16 @@ the local stack (`just up`, admin token `upslope-local-admin`) alongside
 
 The forecast status comes from the server (`/fx/status`; see `python/README.md`),
 which the dev server also proxies to `localhost:8000`. Manifests and frames load
-straight from the public bucket, at the status's `data_url`.
+straight from the public bucket, at the status's `data_url`. Point forecasts come
+from `/fx/point`, which needs the server's archive cache (`ARCHIVE_CACHE_DIR`).
+
+To develop against production's forecasts instead of the local stack, point the
+proxy there (the server has no CORS, so the browser can't call it directly); it
+only reads:
+
+```nu
+with-env {VITE_PROXY_TARGET: "https://upslope.fly.dev"} { just web-dev }
+```
 
 ## Forecast map
 
@@ -124,6 +133,21 @@ are kept for playback. The value is interpolated between the model's grid cells
 around the cursor, as the image's colors are. **Annotate this frame**, in the ⋮
 menu, appears only to admins and for layers with an annotation maptype (UW WRF).
 
+### Point forecasts
+
+A click (or tap) on the map drops a pin and opens a small menu for that point:
+its coordinates, the layer's value there, and **Point forecast**. The menu closes
+with Esc, a click elsewhere, or by moving the map. **Point forecast** adds
+`?point=lat,lon` to the URL (so the forecast can be shared, and Back closes it)
+and opens a dialog with every archived model's forecast at the point, from
+`/fx/point` (see `python/README.md`). Its header shows the point's elevation from
+the server's elevation model; typing another refetches with `elevation=`, since
+temperatures are adjusted to it. A table lists each model's run, terrain height
+and adjustment, and the models left out and why. The dialog loads on first use,
+so the map page doesn't download it. Heights and values show in the units chosen
+in Settings (imperial by default; the server sends metric,
+`src/pointForecast/units.ts`).
+
 ## Soundings
 
 `/soundings` draws a skew-T log-P diagram of a station's most recent upper-air
@@ -185,9 +209,14 @@ src/soundings/
   api.ts                       IEM stations and soundings, unit conversion
   skewt.ts                     Typed wrapper over skewt-plus
   components/                  StationPicker (searchable combobox), SkewTChart
+src/pointForecast/
+  types.ts                     /fx/point response
+  point.ts                     ?point= parsing
+  units.ts                     Display units (imperial/metric) and formatting
+  components/                  PointMenu (the map click menu), PointForecastDialog
 src/settings/
   settings.ts                  Viewer preferences (localStorage)
-  SettingsDialog.vue           Login/logout, playback speed and default model
+  SettingsDialog.vue           Login/logout, playback speed, units and default model
 src/annotation/
   types.ts                     Admin API document and dialog payload types
   api.ts                       /admin/georegistration client

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import mapboxgl from 'mapbox-gl'
 import 'mapbox-gl/dist/mapbox-gl.css'
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { displayPosition, formatValue, loadLookup, loadValues, valueAt } from '@/forecast/frameValues'
 import { preloadGeotiff } from '@/forecast/valueDecoder'
 import type { ForecastLayer, LngLat } from '@/forecast/types'
@@ -17,6 +17,13 @@ const props = defineProps<{
   opacity: number
   /** Drape everything over 3D terrain; the viewer tilts the camera themselves (ctrl-drag). */
   terrain: boolean
+  /** A point to mark (the open point forecast's), besides the clicked point while its menu is open. */
+  pin?: LngLat | null
+}>()
+
+defineSlots<{
+  /** The menu for a clicked point; `close` closes it. */
+  'point-menu'(props: { lngLat: LngLat; value: string | null; close: () => void }): unknown
 }>()
 
 const SOURCE_ID = 'forecast'
@@ -105,21 +112,29 @@ let pointer: { lngLat: LngLat; x: number; y: number } | null = null
 const hover = ref<{ x: number; y: number; text: string } | null>(null)
 let hoverRequest = 0
 
-/** Show the current frame's value under the pointer; a frame's value file loads on first use. */
+/** The current frame's value at a point, e.g. `Temperature: 28 °F`; null for layers without values or outside the
+ * data. A frame's value file loads on first use. */
+async function valueText(lngLat: LngLat): Promise<string | null> {
+  const { layer, valuesUrl } = props
+  const position = valuesUrl && layer.values && layer.lookupUrl ? displayPosition(layer, lngLat) : null
+  if (!valuesUrl || !layer.values || !layer.lookupUrl || !position) return null
+  const [lookup, values] = await Promise.all([loadLookup(layer.lookupUrl), loadValues(valuesUrl)])
+  const value = valueAt(lookup, values, layer.values, position)
+  return value === null ? null : `${layer.name}: ${formatValue(value, layer.legend)}`
+}
+
+/** Show the current frame's value under the pointer (not while a point's menu is open). */
 async function updateHover() {
   const request = ++hoverRequest
-  const { layer, valuesUrl } = props
   const at = pointer
-  const position = at && valuesUrl && layer.values && layer.lookupUrl ? displayPosition(layer, at.lngLat) : null
-  if (!at || !valuesUrl || !layer.values || !layer.lookupUrl || !position) {
+  if (!at || menu.value) {
     hover.value = null
     return
   }
   try {
-    const [lookup, values] = await Promise.all([loadLookup(layer.lookupUrl), loadValues(valuesUrl)])
+    const text = await valueText(at.lngLat)
     if (request !== hoverRequest) return // the pointer, frame or layer moved on meanwhile
-    const value = valueAt(lookup, values, layer.values, position)
-    hover.value = value === null ? null : { x: at.x, y: at.y, text: `${layer.name}: ${formatValue(value, layer.legend)}` }
+    hover.value = text === null ? null : { x: at.x, y: at.y, text }
   } catch (e) {
     if (request === hoverRequest) hover.value = null
     console.error('[ForecastMap] value file', e)
@@ -135,6 +150,102 @@ function onPointer(event: mapboxgl.MapMouseEvent) {
   pointer = { lngLat: [event.lngLat.lng, event.lngLat.lat], x: event.point.x, y: event.point.y }
   void updateHover()
 }
+
+// --- a clicked point's menu (the value there, and what to do with the point)
+
+const menu = ref<{ lngLat: LngLat; x: number; y: number; value: string | null } | null>(null)
+const menuElement = ref<HTMLElement | null>(null)
+let menuRequest = 0
+
+/** A click opens the point's menu, or closes an open one (a click elsewhere). On touch screens, which have no hover,
+ * the menu also shows the value a tap used to. */
+function onClick(event: mapboxgl.MapMouseEvent) {
+  if (menu.value) {
+    closeMenu()
+    return
+  }
+  const lngLat: LngLat = [event.lngLat.lng, event.lngLat.lat]
+  menu.value = { lngLat, x: event.point.x, y: event.point.y, value: null }
+  hoverRequest++
+  hover.value = null
+  const request = ++menuRequest
+  valueText(lngLat)
+    .then((text) => {
+      if (request === menuRequest && menu.value) menu.value.value = text
+    })
+    .catch((e) => console.error('[ForecastMap] value file', e))
+  // Keyboard users land on the menu's first item.
+  void nextTick(() => menuElement.value?.querySelector<HTMLElement>('button, a')?.focus({ preventScroll: true }))
+}
+
+function closeMenu() {
+  menuRequest++
+  menu.value = null
+}
+
+/** Room the menu needs above the point, and from either side of the map, before it moves out of the way. */
+const MENU_HEIGHT = 120
+const MENU_HALF_WIDTH = 120
+
+/**
+ * The menu opens centred above the point, so its actions (at the bottom) sit just above where the viewer clicked.
+ * Near the top of the map it opens below instead, and near either side it shifts to stay inside the map.
+ */
+const menuStyle = computed(() => {
+  const at = menu.value
+  const canvas = container.value
+  if (!at || !canvas) return {}
+  const below = at.y < MENU_HEIGHT
+  const x = at.x < MENU_HALF_WIDTH ? '-12%' : at.x > canvas.clientWidth - MENU_HALF_WIDTH ? '-88%' : '-50%'
+  return {
+    left: `${at.x}px`,
+    top: `${at.y}px`,
+    transform: `translate(${x}, ${below ? '14px' : 'calc(-100% - 14px)'})`,
+  }
+})
+
+function onKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && menu.value) {
+    closeMenu()
+    event.stopPropagation()
+  }
+}
+
+/** A press outside the map and the menu (the controls, say) closes it; presses on the map are clicks (above). */
+function onDocumentPointerDown(event: PointerEvent) {
+  const target = event.target as Node | null
+  if (!menu.value || !target) return
+  if (menuElement.value?.contains(target) || container.value?.contains(target)) return
+  closeMenu()
+}
+
+/** Moving the map (by the viewer, not a refit) leaves the menu pointing nowhere: close it. */
+function onMoveStart(event: { originalEvent?: unknown }) {
+  if (event.originalEvent && menu.value) closeMenu()
+}
+
+// The marker on the clicked point (menu open), else on `pin` (the open point forecast's point).
+const PIN_COLOR = EXTENT_COLOR
+let marker: mapboxgl.Marker | undefined
+const pinAt = computed<LngLat | null>(() => menu.value?.lngLat ?? props.pin ?? null)
+
+function updateMarker(at: LngLat | null) {
+  if (!map) return
+  if (!at) {
+    marker?.remove()
+    marker = undefined
+    return
+  }
+  if (!marker) {
+    const element = document.createElement('div')
+    element.className = 'point-pin'
+    element.style.setProperty('--pin-color', PIN_COLOR)
+    marker = new mapboxgl.Marker({ element, anchor: 'center' })
+  }
+  marker.setLngLat(at).addTo(map)
+}
+
+watch(pinAt, (at) => updateMarker(at))
 
 onMounted(() => {
   preloadGeotiff()
@@ -153,15 +264,22 @@ onMounted(() => {
   map.on('style.load', addForecastLayer)
   map.on('error', (event) => console.error('[ForecastMap]', event.error))
   map.on('mousemove', onPointer)
-  map.on('click', onPointer) // touch screens have no hover; a tap shows the value
+  map.on('click', onClick)
+  map.on('movestart', onMoveStart)
   map.on('mouseout', () => {
     pointer = null
     hoverRequest++
     hover.value = null
   })
+  updateMarker(pinAt.value)
+  window.addEventListener('keydown', onKeydown, true)
+  document.addEventListener('pointerdown', onDocumentPointerDown, true)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeydown, true)
+  document.removeEventListener('pointerdown', onDocumentPointerDown, true)
+  marker?.remove()
   map?.remove()
   map = undefined
 })
@@ -181,8 +299,21 @@ watch(
   },
 )
 
-// playback and layer changes update the value under a still cursor
-watch(() => [props.valuesUrl, props.layer] as const, () => void updateHover())
+// playback and layer changes update the value under a still cursor, and in an open menu
+watch(
+  () => [props.valuesUrl, props.layer] as const,
+  () => {
+    void updateHover()
+    const at = menu.value
+    if (!at) return
+    const request = ++menuRequest
+    valueText(at.lngLat)
+      .then((text) => {
+        if (request === menuRequest && menu.value) menu.value.value = text
+      })
+      .catch((e) => console.error('[ForecastMap] value file', e))
+  },
+)
 
 watch(
   () => props.terrain,
@@ -212,6 +343,9 @@ watch(
     >
       {{ hover.text }}
     </div>
+    <div v-if="menu" ref="menuElement" class="point-menu-popup dropdown-menu show shadow p-0" :style="menuStyle">
+      <slot name="point-menu" :lng-lat="menu.lngLat" :value="menu.value" :close="closeMenu"></slot>
+    </div>
   </div>
 </template>
 
@@ -230,5 +364,23 @@ watch(
   pointer-events: none;
   font-weight: 500;
   white-space: nowrap;
+}
+
+/* Bootstrap's .dropdown-menu, placed at the clicked point rather than under a toggle. */
+.point-menu-popup {
+  position: absolute;
+  z-index: 3;
+  margin: 0;
+}
+
+/* The marker is created outside Vue (mapboxgl.Marker), so its style can't be scoped. */
+:global(.point-pin) {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--pin-color);
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35), 0 1px 4px rgb(0 0 0 / 0.4);
+  pointer-events: none;
 }
 </style>
