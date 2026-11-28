@@ -25,3 +25,11 @@ const playing = defineModel<boolean>('playing', { required: true })
     </button>
   </div>
 </template>
+
+<style scoped>
+/* Grouped buttons overlap by 1px, so the next button's border would otherwise paint over the
+   play button's right edge. Raise the play button so its full outline shows. */
+.btn-group > .btn-outline-primary {
+  z-index: 1;
+}
+</style>
