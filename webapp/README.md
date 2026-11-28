@@ -39,6 +39,22 @@ sun/moon switches between the dark (default) and light themes.
 The look comes from design tokens: see [STYLE.md](STYLE.md) (colors, Geist,
 theming Bootstrap, and the lint rules that keep them consistent).
 
+## Icon
+
+The logo, a glaciated volcano under a stacked lenticular cap cloud, sits beside
+the "Upslope" wordmark in the navbar and is the favicon:
+
+| File | Use |
+| --- | --- |
+| `src/components/UpslopeMark.vue` | The navbar mark (inline SVG, `size` prop in px, default 28), colored from the `--up-mark-*` tokens |
+| `public/favicon.svg` | The favicon and the source for the two below; navy tile in dark mode, sky-blue tile in light mode (`prefers-color-scheme`) |
+| `public/favicon.ico` | 16, 32 and 48 px, for browsers without SVG favicons |
+| `public/apple-touch-icon.png` | 180 px, for iOS home screens |
+
+Vite copies `public/` to the root of `dist/`, and `index.html` links all three.
+To change the mark, see "Brand mark" in [STYLE.md](STYLE.md): the component and
+the SVG share their shapes, and the ICO and PNG are rendered from the SVG.
+
 On phones (narrower than Bootstrap's `sm`, 576px) there is no navbar: the map
 fills the screen, and its ⋮ menu has **Model runs** (with the status dot) and
 **Settings** instead. The other pages still work by URL.
@@ -218,6 +234,7 @@ someone else changed the draft first.
 
 ```
 src/router/                    Route table
+src/components/                UpslopeMark (the logo, in the navbar)
 src/views/                     One component per route
 src/forecast/
   types.ts                     Forecast API types (status, run manifests) and map layers

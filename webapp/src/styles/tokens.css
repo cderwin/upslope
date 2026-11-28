@@ -15,6 +15,12 @@
   --up-overlay-label-ink: oklch(0.2 0.01 265);
   --up-overlay-marker: oklch(0.6 0.22 25);
   --up-overlay-marker-fill: oklch(0.6 0.22 25 / 0.35);
+
+  /* The brand mark in the navbar, which is navy in both themes (public/favicon.svg holds these as hex). */
+  --up-mark-bg: oklch(0.2 0.055 266);
+  --up-mark-rock: oklch(0.6 0.13 255);
+  --up-mark-snow: oklch(0.97 0.005 250);
+  --up-mark-shade: oklch(0.76 0.045 255);
 }
 
 :root,

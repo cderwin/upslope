@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted } from 'vue'
 import { Moon, Settings, Sun } from '@lucide/vue'
 import { RouterLink, RouterView } from 'vue-router'
 import TokenDialog from '@/admin/TokenDialog.vue'
+import UpslopeMark from '@/components/UpslopeMark.vue'
 import { adminToken } from '@/admin/token'
 import RunStatusDialog from '@/forecast/components/RunStatusDialog.vue'
 import { forecastStatus, openRunStatus, refreshStatus, statusLabel, statusTone } from '@/forecast/status'
@@ -28,7 +29,10 @@ onBeforeUnmount(() => window.clearInterval(statusTimer))
   <!-- Phones get the map alone: its ⋮ menu has Settings and Model runs, and the other pages aren't needed there. -->
   <nav class="navbar navbar-expand d-none d-sm-flex">
     <div class="container-fluid">
-      <RouterLink class="navbar-brand" :to="{ name: 'map' }">Upslope</RouterLink>
+      <RouterLink class="navbar-brand d-flex align-items-center gap-2" :to="{ name: 'map' }">
+        <UpslopeMark :size="28" />
+        Upslope
+      </RouterLink>
       <ul class="navbar-nav me-auto">
         <li class="nav-item">
           <RouterLink class="nav-link" :to="{ name: 'map' }">Map</RouterLink>
