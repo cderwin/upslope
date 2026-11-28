@@ -25,3 +25,11 @@ const playing = defineModel<boolean>('playing', { required: true })
     </button>
   </div>
 </template>
+
+<style scoped>
+/* Grouped buttons overlap by 1px, and Bootstrap raises a hovered or focused button to z-index 1, so the next
+   button's border would otherwise paint over the play button's right edge. Keep the play button above both. */
+.btn-group > .btn-outline-primary {
+  z-index: 2;
+}
+</style>
