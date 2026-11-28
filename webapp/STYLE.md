@@ -18,6 +18,7 @@ same lightness look equally heavy), with values for both themes:
 | Charts | `--up-series-1` … `--up-series-10`, `--up-night` | One series color per model; night shading |
 | Status | `--up-{good,watch,warning,danger}` and `-bg` / `-fg` | Dots, icons and lines; tinted chip fill and its text |
 | Imagery | `--up-map-extent`, `--up-overlay-*` | Drawn over the satellite map and annotation images, so the same in both themes |
+| Brand mark | `--up-mark-bg`, `--up-mark-rock`, `--up-mark-snow`, `--up-mark-shade` | The logo's tile, mountain, snow and clouds, and cloud undersides; the same in both themes, like the navbar |
 
 Bootstrap is themed from these in `src/styles/bootstrap-theme.scss`: its runtime
 `--bs-*` variables, buttons, forms, navbar, modals, dropdowns, tables and the
@@ -39,6 +40,26 @@ first.
   `statusColor(level)`. Libraries that can't parse OKLCH (ECharts, Mapbox) get
   colors through `token()` / `toColor()`, which convert in the browser. Charts
   re-read colors when the theme changes.
+
+## Brand mark
+
+The logo is a glaciated volcano under a stacked lenticular cap cloud (the kind
+upslope flow builds over Rainier), on a rounded square tile. It appears in two
+places, drawn from the same 64×64 shapes:
+
+- **Navbar**: `src/components/UpslopeMark.vue`, beside the "Upslope" wordmark,
+  colored from the `--up-mark-*` tokens. The navbar is navy in both themes, so
+  the mark is too. It's decorative (`aria-hidden`); the wordmark is the label.
+- **Favicon**: `public/favicon.svg`. A favicon can't read the app's CSS, so it
+  holds the token colors as hex, and follows the browser's color scheme: the navy
+  tile in dark mode, a pale sky-blue tile with white snow and clouds in light
+  mode. `public/favicon.ico` (16, 32 and 48 px) and `public/apple-touch-icon.png`
+  (180 px, square: iOS rounds the corners) are rendered from it, in its dark
+  colors, for browsers and home screens that don't use SVG.
+
+Changing the mark means changing both files' shapes, the tokens and the SVG's
+hex values together, then rendering the ICO and PNG again from the SVG (any
+headless browser or `rsvg-convert`).
 
 ## Map colormaps
 
